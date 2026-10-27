@@ -53,16 +53,15 @@ pub async fn envelope(mut request: Request, next: Next) -> Response {
 }
 
 fn sanitize_framework_error(response: Response, request_id: Uuid) -> Response {
-    let status = response.status();
-    let json_content = response
-        .headers()
-        .get(http::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|content_type| content_type.starts_with("application/json"));
-
-    if json_content && status != StatusCode::UNPROCESSABLE_ENTITY {
+    if response
+        .extensions()
+        .get::<crate::error::ContractResponse>()
+        .is_some()
+    {
         return response;
     }
+
+    let status = response.status();
     if !status.is_client_error() && !status.is_server_error() {
         return response;
     }
@@ -101,8 +100,8 @@ fn sanitize_framework_error(response: Response, request_id: Uuid) -> Response {
             "The request allowance has been exceeded.",
         ),
         StatusCode::SERVICE_UNAVAILABLE => (
-            crate::error::ErrorCode::StorageUnavailable,
-            "A required service is temporarily unavailable.",
+            crate::error::ErrorCode::ServiceUnavailable,
+            "The server is temporarily unable to accept this request.",
         ),
         _ => (
             crate::error::ErrorCode::InternalError,
@@ -215,5 +214,29 @@ mod tests {
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["error"]["code"], "method_not_allowed");
         assert!(!String::from_utf8_lossy(&bytes).contains("unsupported method text"));
+    }
+
+    #[tokio::test]
+    async fn framework_json_rejection_is_replaced_with_request_id_envelope() {
+        let request_id = Uuid::new_v4();
+        let mut framework_response =
+            Response::new(Body::from(r#"{"detail":"secret framework diagnostic"}"#));
+        *framework_response.status_mut() = StatusCode::BAD_REQUEST;
+        framework_response.headers_mut().insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+
+        let response = sanitize_framework_error(framework_response, request_id);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response.headers()[http::header::CONTENT_TYPE],
+            "application/json"
+        );
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert_eq!(body["request_id"], request_id.to_string());
+        assert!(!String::from_utf8_lossy(&bytes).contains("secret framework diagnostic"));
     }
 }

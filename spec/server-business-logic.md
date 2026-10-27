@@ -499,7 +499,7 @@ Error response shape:
 | 413 | `request_too_large`. |
 | 415 | `unsupported_media_type` for a body requiring JSON. |
 | 429 | `rate_limited`; include `Retry-After`. |
-| 503 | `storage_unavailable`, `code_generation_unavailable`, or another documented dependency-unavailable code. |
+| 503 | `service_unavailable` when bounded server request capacity is exhausted; `storage_unavailable`, `code_generation_unavailable`, or another documented dependency-unavailable code. |
 | 500 | `internal_error` for unexpected failures. |
 
 Messages must not expose SQL, database connection strings, stack traces, credentials, destination/referrer URLs, or other accounts' information. Unknown and unauthorized objects use indistinguishable responses. Unexpected errors must be observable internally using sanitized error categories and request/trace IDs.
@@ -572,6 +572,7 @@ Detailed visit data belongs only in PostgreSQL and authorized analytics response
 
 - `GET /api/health/live`: 200 while the HTTP process can respond; no database or collector dependency. Return a minimal status object without configuration details.
 - `GET /api/health/ready`: 200 when initialization/schema checks have completed, a bounded PostgreSQL probe succeeds, and the instance is accepting work; otherwise 503. A draining instance is unready. Collector health and analytics backlog do not determine readiness.
+- When bounded global HTTP admission is exhausted, either health route may return the structured 503 `service_unavailable` error instead of invoking its health handler. This capacity response does not add a database/collector dependency to liveness or change the exact `{ "status": "unavailable" }` body for a completed readiness check that fails its conditions.
 - Health endpoints require no credentials and do not create visits or consume creation allowance.
 - Graceful shutdown stops accepting new work, allows bounded completion of in-flight work, and attempts bounded analytics/telemetry flushes before closing resources.
 

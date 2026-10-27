@@ -26,4 +26,7 @@ pub fn health(request_id: Uuid, available: bool) -> Response {
         HeaderValue::from_str(&request_id.to_string()).expect("UUID is a valid header value"),
     );
     response
+        .extensions_mut()
+        .insert(crate::error::ContractResponse);
+    response
 }

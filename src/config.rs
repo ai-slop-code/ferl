@@ -108,6 +108,7 @@ pub struct Config {
     pub public_origin: PublicOrigin,
     pub listen_addr: SocketAddr,
     pub http_max_in_flight: usize,
+    pub http_max_waiting: usize,
     pub anonymous_creation: bool,
     pub anonymous_create_limit: u32,
     pub account_create_limit: u32,
@@ -175,6 +176,7 @@ impl Config {
         let listen_addr = parse_value(&values, "FERL_LISTEN_ADDR", "0.0.0.0:8080")?;
         let http_max_in_flight =
             parse_bounded(&values, "FERL_HTTP_MAX_IN_FLIGHT", 256_usize, 1, 4096)?;
+        let http_max_waiting = parse_bounded(&values, "FERL_HTTP_MAX_WAITING", 256_usize, 0, 4096)?;
         let anonymous_creation = parse_bool(&values, "FERL_ANONYMOUS_CREATION", false)?;
         let anonymous_create_limit =
             parse_bounded(&values, "FERL_ANONYMOUS_CREATE_LIMIT", 5_u32, 1, 1_000_000)?;
@@ -231,6 +233,7 @@ impl Config {
             public_origin,
             listen_addr,
             http_max_in_flight,
+            http_max_waiting,
             anonymous_creation,
             anonymous_create_limit,
             account_create_limit,
@@ -316,22 +319,42 @@ fn parse_bool(
 }
 
 fn parse_public_origin(value: &str) -> Result<PublicOrigin, ConfigError> {
-    let parsed = Url::parse(value)
-        .map_err(|_| ConfigError::new("FERL_PUBLIC_BASE_URL", "must be an HTTP(S) origin"))?;
+    let invalid_origin = || {
+        ConfigError::new(
+            "FERL_PUBLIC_BASE_URL",
+            "must be an HTTP(S) origin without user info, path, query, or fragment",
+        )
+    };
+    if value
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control() || character == '\\')
+    {
+        return Err(invalid_origin());
+    }
+    let Some((scheme, remainder)) = value.split_once("://") else {
+        return Err(invalid_origin());
+    };
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return Err(invalid_origin());
+    }
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    let suffix = &remainder[authority_end..];
+    if authority.is_empty() || authority.contains('@') || !matches!(suffix, "" | "/") {
+        return Err(invalid_origin());
+    }
+
+    let parsed = Url::parse(value).map_err(|_| invalid_origin())?;
     let valid_scheme = matches!(parsed.scheme(), "http" | "https");
     if !valid_scheme
         || parsed.host_str().is_none()
-        || authority_has_user_info(value)
         || !parsed.username().is_empty()
         || parsed.password().is_some()
         || !matches!(parsed.path(), "" | "/")
         || parsed.query().is_some()
         || parsed.fragment().is_some()
     {
-        return Err(ConfigError::new(
-            "FERL_PUBLIC_BASE_URL",
-            "must be an HTTP(S) origin without user info, path, query, or fragment",
-        ));
+        return Err(invalid_origin());
     }
     Ok(PublicOrigin(parsed.origin().ascii_serialization()))
 }
@@ -551,6 +574,7 @@ mod tests {
             "0.0.0.0:8080".parse().expect("socket address")
         );
         assert_eq!(config.http_max_in_flight, 256);
+        assert_eq!(config.http_max_waiting, 256);
         assert!(!config.anonymous_creation);
         assert_eq!(config.anonymous_create_limit, 5);
         assert_eq!(config.account_create_limit, 60);
@@ -566,6 +590,11 @@ mod tests {
             "https://@example.com",
             "https://example.com/prefix",
             "https://example.com?x=1",
+            "https://example.com/.",
+            "https://example.com/%2e",
+            "https://example.com/a/..",
+            "https://example.com\\private",
+            " https://example.com",
             "ftp://example.com",
         ] {
             let mut values = valid_values();
@@ -608,6 +637,11 @@ mod tests {
         values.insert("FERL_HTTP_MAX_IN_FLIGHT".to_owned(), "0".to_owned());
         let error = Config::from_map(values).expect_err("zero HTTP concurrency must fail");
         assert_eq!(error.setting, "FERL_HTTP_MAX_IN_FLIGHT");
+
+        let mut values = valid_values();
+        values.insert("FERL_HTTP_MAX_WAITING".to_owned(), "4097".to_owned());
+        let error = Config::from_map(values).expect_err("waiting work must remain bounded");
+        assert_eq!(error.setting, "FERL_HTTP_MAX_WAITING");
 
         let mut values = valid_values();
         values.insert(

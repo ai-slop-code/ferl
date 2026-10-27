@@ -8,7 +8,7 @@ use ferl_server::{
     BUILD_VERSION,
     app::{self, AppState},
     config::{Config, ConfigError},
-    db::pool::{self, PoolBuildError},
+    db::pool::PoolBuildError,
     shutdown,
     telemetry::{
         logging,
@@ -96,14 +96,10 @@ impl ServerError {
 }
 
 async fn serve(config: Config) -> Result<(), ServerError> {
-    let pool = pool::create_pool(&config.database).map_err(|error| match error {
+    let state = AppState::from_config(&config).map_err(|error| match error {
         PoolBuildError::InvalidConnectionOptions => ServerError::DatabaseConfiguration,
     })?;
-    let state = AppState::new(
-        pool.clone(),
-        config.database.acquire_timeout,
-        config.http_max_in_flight,
-    );
+    let pool = state.pool.clone();
     let listener = TcpListener::bind(config.listen_addr)
         .await
         .map_err(|_| ServerError::ListenerBind)?;
@@ -131,18 +127,30 @@ async fn serve(config: Config) -> Result<(), ServerError> {
     tokio::select! {
         result = &mut server => {
             result.map_err(|_| ServerError::HttpServer)?;
-            close_pool_bounded(&pool, config.shutdown.total_timeout).await;
+            let pool_closed = close_pool_bounded(&pool, config.shutdown.total_timeout).await;
+            tracing::info!(
+                category = "server_stopped",
+                outcome = if pool_closed { "success" } else { "pool_close_deadline" },
+                "HTTP server stopped"
+            );
         }
         _ = shutdown::wait_for_shutdown_signal() => {
             let shutdown_started = Instant::now();
-            state.readiness.begin_draining();
-            cancellation.cancel();
-            metrics::record_operation(Operation::Shutdown, Outcome::Success);
-            let mut server_failed = false;
-            match timeout(config.shutdown.http_drain_timeout, &mut server).await {
-                Ok(Ok(())) => {}
-                Ok(Err(_)) => server_failed = true,
-                Err(_) => tracing::warn!(
+            tracing::info!(
+                category = "server_draining",
+                "server is stopping acceptance and draining HTTP requests"
+            );
+            let drain = shutdown::stop_accepting_and_drain(
+                &state.readiness,
+                &cancellation,
+                server.as_mut(),
+                config.shutdown.http_drain_timeout,
+            )
+            .await;
+            match drain {
+                shutdown::HttpDrainOutcome::Drained => {}
+                shutdown::HttpDrainOutcome::ServerFailed => {}
+                shutdown::HttpDrainOutcome::DeadlineExceeded => tracing::warn!(
                     category = "http_drain_deadline_reached",
                     "HTTP drain deadline reached; active connections will be closed"
                 ),
@@ -153,15 +161,34 @@ async fn serve(config: Config) -> Result<(), ServerError> {
                 .shutdown
                 .total_timeout
                 .saturating_sub(shutdown_started.elapsed());
-            if remaining.is_zero() {
+            let pool_closed = if remaining.is_zero() {
                 tracing::warn!(
                     category = "shutdown_deadline_reached",
                     "total shutdown deadline reached before database pool closure"
                 );
+                false
             } else {
-                close_pool_bounded(&pool, remaining).await;
-            }
-            if server_failed {
+                close_pool_bounded(&pool, remaining).await
+            };
+            let (outcome, metric_outcome) = match (drain, pool_closed) {
+                (shutdown::HttpDrainOutcome::ServerFailed, _) => {
+                    ("http_server_failed", Outcome::Failure)
+                }
+                (shutdown::HttpDrainOutcome::DeadlineExceeded, _) => {
+                    ("http_drain_deadline", Outcome::Unavailable)
+                }
+                (shutdown::HttpDrainOutcome::Drained, false) => {
+                    ("pool_close_deadline", Outcome::Unavailable)
+                }
+                (shutdown::HttpDrainOutcome::Drained, true) => ("success", Outcome::Success),
+            };
+            metrics::record_operation(Operation::Shutdown, metric_outcome);
+            tracing::info!(
+                category = "server_shutdown_complete",
+                outcome,
+                "server shutdown completed"
+            );
+            if drain == shutdown::HttpDrainOutcome::ServerFailed {
                 return Err(ServerError::HttpServer);
             }
         }
@@ -170,11 +197,14 @@ async fn serve(config: Config) -> Result<(), ServerError> {
     Ok(())
 }
 
-async fn close_pool_bounded(pool: &sqlx::PgPool, deadline: std::time::Duration) {
+async fn close_pool_bounded(pool: &sqlx::PgPool, deadline: std::time::Duration) -> bool {
     if timeout(deadline, pool.close()).await.is_err() {
         tracing::warn!(
             category = "database_pool_close_deadline_reached",
             "database pool did not close before the shutdown deadline"
         );
+        false
+    } else {
+        true
     }
 }

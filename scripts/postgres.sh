@@ -42,25 +42,57 @@ assert_volume_owned() {
     }
 }
 
+assert_container_configuration() {
+    expected_digest=${IMAGE##*@}
+    actual_digest=$(podman inspect --format '{{.ImageDigest}}' "$NAME")
+    [ "$actual_digest" = "$expected_digest" ] || {
+        echo "refusing to reuse a Stage 01 container with an unexpected image digest" >&2
+        exit 1
+    }
+    mount=$(podman inspect --format '{{range .Mounts}}{{.Name}}:{{.Destination}}{{end}}' "$NAME")
+    [ "$mount" = "$VOLUME:/var/lib/postgresql/data" ] || {
+        echo "refusing to reuse a Stage 01 container without its persistent volume" >&2
+        exit 1
+    }
+    assert_volume_owned
+    published=$(podman port "$NAME" 5432/tcp | tail -n 1)
+    [ "$published" = "127.0.0.1:$PORT" ] || {
+        echo "harness container publishes $published, not 127.0.0.1:$PORT; choose its original port or clean up and recreate it" >&2
+        exit 1
+    }
+}
+
 wait_ready() {
     attempts=0
-    while [ "$attempts" -lt 60 ]; do
-        if podman exec "$NAME" pg_isready -q -U ferl -d ferl_test; then
+    while [ "$attempts" -lt 30 ]; do
+        if podman exec "$NAME" pg_isready -q -t 1 -U ferl -d ferl_test; then
             echo "PostgreSQL container is accepting connections; host connection is verified by the Rust integration test."
             return 0
         fi
         attempts=$((attempts + 1))
         sleep 1
     done
-    echo "PostgreSQL did not become ready within 60 seconds" >&2
+    echo "PostgreSQL did not become ready within approximately 60 seconds" >&2
     return 1
 }
 
+pull_image() {
+    # TLS verification is disabled only for this Podman image pull in the
+    # owner-authorized corporate TLS-interception environment. Application
+    # database and HTTP TLS verification settings are not changed.
+    podman pull --tls-verify=false "$IMAGE"
+}
+
 case "${1:-}" in
+    pull)
+        podman info >/dev/null
+        pull_image
+        ;;
     start)
         podman info >/dev/null
         if container_exists; then
             assert_container_owned
+            assert_container_configuration
             running=$(podman inspect --format '{{ .State.Running }}' "$NAME")
             if [ "$running" != true ]; then
                 podman start "$NAME" >/dev/null
@@ -71,7 +103,10 @@ case "${1:-}" in
             else
                 podman volume create --label "$LABEL_KEY=stage01" "$VOLUME" >/dev/null
             fi
-            podman run --detach \
+            if ! podman image exists "$IMAGE"; then
+                pull_image
+            fi
+            podman run --pull=never --detach \
                 --name "$NAME" \
                 --label "$LABEL_KEY=stage01" \
                 --publish "127.0.0.1:$PORT:5432" \
@@ -88,11 +123,7 @@ case "${1:-}" in
             exit 1
         }
         assert_container_owned
-        published=$(podman port "$NAME" 5432/tcp | tail -n 1)
-        [ "$published" = "127.0.0.1:$PORT" ] || {
-            echo "harness container publishes $published, not 127.0.0.1:$PORT; choose its original port or clean up and recreate it" >&2
-            exit 1
-        }
+        assert_container_configuration
         wait_ready
         ;;
     stop)
@@ -117,7 +148,7 @@ case "${1:-}" in
         echo "Removed only Stage 01 harness-owned PostgreSQL resources."
         ;;
     *)
-        echo "usage: $0 {start|ready|stop|cleanup}" >&2
+        echo "usage: $0 {pull|start|ready|stop|cleanup}" >&2
         exit 2
         ;;
 esac

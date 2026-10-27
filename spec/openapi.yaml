@@ -446,11 +446,12 @@ paths:
       tags: [Health]
       operationId: getLiveness
       summary: Check whether the HTTP process can respond
-      description: Requires no database or collector probe. Credentials, including invalid ones, are ignored.
+      description: Requires no database or collector probe. Credentials, including invalid ones, are ignored. Bounded HTTP admission exhaustion may return a structured service_unavailable error.
       security: []
       responses:
         '200': { $ref: '#/components/responses/Healthy' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '503': { $ref: '#/components/responses/Unavailable' }
         '500': { $ref: '#/components/responses/InternalError' }
   /api/health/ready:
     get:
@@ -461,7 +462,9 @@ paths:
         Returns 200 only when initialization/schema checks are complete, a bounded
         PostgreSQL probe succeeds, and the instance accepts work. A draining instance
         is unready. Collector health and analytics backlog do not affect readiness.
-        Credentials, including invalid ones, are ignored.
+        Credentials, including invalid ones, are ignored. Bounded HTTP admission
+        exhaustion may return a structured service_unavailable error; an executed
+        readiness check that fails returns the exact Unready representation.
       security: []
       responses:
         '200': { $ref: '#/components/responses/Healthy' }
@@ -987,6 +990,7 @@ components:
                 - unsupported_media_type
                 - rate_limited
                 - storage_unavailable
+                - service_unavailable
                 - code_generation_unavailable
                 - internal_error
             message:
@@ -1158,13 +1162,19 @@ components:
           schema: { $ref: '#/components/schemas/Healthy' }
           example: { status: ok }
     Unready:
-      description: Initialization, schema, database probe, or acceptance of work is not ready.
+      description: >-
+        An executed health check found initialization, schema, database probe, or
+        acceptance of work not ready. Saturated bounded HTTP admission instead returns
+        the structured service_unavailable error.
       headers:
         X-Request-ID: { $ref: '#/components/headers/RequestId' }
         Cache-Control: { $ref: '#/components/headers/NoStore' }
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Unready' }
+          schema:
+            oneOf:
+              - { $ref: '#/components/schemas/Unready' }
+              - { $ref: '#/components/schemas/Error' }
           example: { status: unavailable }
     BadRequest:
       description: invalid_request; malformed JSON, invalid/unknown fields or filters, incompatible cursor, or invalid cross-field combination.
@@ -1247,7 +1257,7 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
     Unavailable:
-      description: storage_unavailable or code_generation_unavailable. A dependency failure is not treated as absent data or invalid credentials.
+      description: service_unavailable when bounded request capacity is exhausted; storage_unavailable or code_generation_unavailable for dependency failures. A dependency failure is not treated as absent data or invalid credentials.
       headers:
         X-Request-ID: { $ref: '#/components/headers/RequestId' }
         Cache-Control: { $ref: '#/components/headers/NoStore' }

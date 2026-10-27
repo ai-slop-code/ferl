@@ -19,6 +19,7 @@ pub enum ErrorCode {
     UnsupportedMediaType,
     RateLimited,
     StorageUnavailable,
+    ServiceUnavailable,
     CodeGenerationUnavailable,
     InternalError,
 }
@@ -41,6 +42,7 @@ impl ErrorCode {
             Self::UnsupportedMediaType => "unsupported_media_type",
             Self::RateLimited => "rate_limited",
             Self::StorageUnavailable => "storage_unavailable",
+            Self::ServiceUnavailable => "service_unavailable",
             Self::CodeGenerationUnavailable => "code_generation_unavailable",
             Self::InternalError => "internal_error",
         }
@@ -60,9 +62,9 @@ impl ErrorCode {
             Self::RequestTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
-            Self::StorageUnavailable | Self::CodeGenerationUnavailable => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
+            Self::StorageUnavailable
+            | Self::ServiceUnavailable
+            | Self::CodeGenerationUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -79,6 +81,9 @@ struct ErrorBody {
     code: &'static str,
     message: &'static str,
 }
+
+#[derive(Clone)]
+pub(crate) struct ContractResponse;
 
 pub fn response(
     request_id: Uuid,
@@ -112,6 +117,7 @@ pub fn response(
     if let Some((name, value)) = extra_header {
         response.headers_mut().insert(name, value);
     }
+    response.extensions_mut().insert(ContractResponse);
     response
 }
 
@@ -141,6 +147,10 @@ mod tests {
             (ErrorCode::RateLimited, StatusCode::TOO_MANY_REQUESTS),
             (
                 ErrorCode::StorageUnavailable,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+            (
+                ErrorCode::ServiceUnavailable,
                 StatusCode::SERVICE_UNAVAILABLE,
             ),
             (
