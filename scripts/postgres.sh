@@ -1,6 +1,30 @@
 #!/bin/sh
 set -eu
 
+if [ "${FERL_POSTGRES_LOCK_HELD:-0}" != 1 ]; then
+    command -v python3 >/dev/null 2>&1 || {
+        echo "python3 is required to coordinate PostgreSQL harness operations" >&2
+        exit 1
+    }
+    python3 - "$0" "$@" <<'PY'
+import fcntl
+import os
+import subprocess
+import sys
+
+lock_path = os.environ.get("FERL_TEST_HARNESS_LOCK_PATH")
+if not lock_path:
+    lock_path = os.path.join(os.environ.get("TMPDIR", "/tmp"), "ferl-stage01-postgres.lock")
+with open(lock_path, "a+") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    env = dict(os.environ)
+    env["FERL_POSTGRES_LOCK_HELD"] = "1"
+    result = subprocess.run(["sh", sys.argv[1], *sys.argv[2:]], env=env, check=False)
+    raise SystemExit(result.returncode)
+PY
+    exit $?
+fi
+
 NAME=ferl-stage01-postgres
 VOLUME=ferl-stage01-postgres-data
 IMAGE=docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94

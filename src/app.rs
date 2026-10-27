@@ -6,7 +6,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::{
     config::Config,
-    db::{migrate::SchemaReadiness, pool},
+    db::{
+        migrate::{self, SchemaReadiness, VerificationError},
+        pool,
+    },
     http,
 };
 
@@ -40,6 +43,26 @@ impl AppState {
             readiness: Arc::new(ReadinessState::new_accepting()),
             acquire_timeout,
             http_admission: HttpAdmission::new(http_max_in_flight, http_max_waiting),
+        }
+    }
+
+    /// Run the production schema verifier and update this instance's readiness
+    /// state from the result. There is intentionally no public method that can
+    /// mark an unverified schema compatible.
+    pub async fn verify_schema(&self) -> Result<(), VerificationError> {
+        let revision = self.readiness.schema_revision();
+        match migrate::verify_compatibility(&self.pool).await {
+            Ok(()) => {
+                if self.readiness.mark_schema_compatible_if_current(revision) {
+                    Ok(())
+                } else {
+                    Err(VerificationError::Superseded)
+                }
+            }
+            Err(error) => {
+                self.readiness.mark_schema_incompatible();
+                Err(error)
+            }
         }
     }
 }
@@ -92,11 +115,15 @@ impl ReadinessState {
         }
     }
 
-    pub fn mark_schema_compatible(&self) {
-        self.schema.mark_compatible();
+    pub(crate) fn schema_revision(&self) -> u64 {
+        self.schema.revision()
     }
 
-    pub fn mark_schema_incompatible(&self) {
+    pub(crate) fn mark_schema_compatible_if_current(&self, revision: u64) -> bool {
+        self.schema.mark_compatible_if_current(revision)
+    }
+
+    pub(crate) fn mark_schema_incompatible(&self) {
         self.schema.mark_incompatible();
     }
 
