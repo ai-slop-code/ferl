@@ -13,6 +13,8 @@ use thiserror::Error;
 use url::Url;
 use uuid::Uuid;
 
+pub use crate::domain::url::PublicOrigin;
+
 const MAX_TIMEOUT_SECS: u64 = 300;
 const MAX_MIGRATION_TIMEOUT_SECS: u64 = 3_600;
 
@@ -55,20 +57,6 @@ impl TelemetryHeaders {
 impl std::fmt::Debug for TelemetryHeaders {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("[REDACTED OTLP HEADERS]")
-    }
-}
-
-pub struct PublicOrigin(String);
-
-impl PublicOrigin {
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for PublicOrigin {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("[REDACTED PUBLIC ORIGIN]")
     }
 }
 
@@ -416,44 +404,12 @@ fn parse_bool(
 }
 
 fn parse_public_origin(value: &str) -> Result<PublicOrigin, ConfigError> {
-    let invalid_origin = || {
+    PublicOrigin::parse(value).map_err(|_| {
         ConfigError::new(
             "FERL_PUBLIC_BASE_URL",
             "must be an HTTP(S) origin without user info, path, query, or fragment",
         )
-    };
-    if value
-        .chars()
-        .any(|character| character.is_whitespace() || character.is_control() || character == '\\')
-    {
-        return Err(invalid_origin());
-    }
-    let Some((scheme, remainder)) = value.split_once("://") else {
-        return Err(invalid_origin());
-    };
-    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
-        return Err(invalid_origin());
-    }
-    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
-    let authority = &remainder[..authority_end];
-    let suffix = &remainder[authority_end..];
-    if authority.is_empty() || authority.contains('@') || !matches!(suffix, "" | "/") {
-        return Err(invalid_origin());
-    }
-
-    let parsed = Url::parse(value).map_err(|_| invalid_origin())?;
-    let valid_scheme = matches!(parsed.scheme(), "http" | "https");
-    if !valid_scheme
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || !matches!(parsed.path(), "" | "/")
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(invalid_origin());
-    }
-    Ok(PublicOrigin(parsed.origin().ascii_serialization()))
+    })
 }
 
 fn authority_has_user_info(value: &str) -> bool {
@@ -470,6 +426,12 @@ fn parse_cursor_key(value: &str) -> Result<CursorKey, ConfigError> {
     let bytes: [u8; 32] = decoded.try_into().map_err(|_| {
         ConfigError::new("FERL_CURSOR_KEY", "must be base64url for exactly 32 bytes")
     })?;
+    if URL_SAFE_NO_PAD.encode(bytes) != value {
+        return Err(ConfigError::new(
+            "FERL_CURSOR_KEY",
+            "must use canonical unpadded base64url encoding",
+        ));
+    }
     Ok(CursorKey(bytes))
 }
 
@@ -691,6 +653,8 @@ mod tests {
             "https://example.com/%2e",
             "https://example.com/a/..",
             "https://example.com\\private",
+            "https://example.com:",
+            "https://example.com:80000",
             " https://example.com",
             "ftp://example.com",
         ] {
@@ -712,6 +676,16 @@ mod tests {
         let error = Config::from_map(values).expect_err("invalid key must fail");
         assert_eq!(error.setting, "FERL_CURSOR_KEY");
         assert!(!error.to_string().contains("not-the-key"));
+
+        let mut values = valid_values();
+        values.insert(
+            "FERL_CURSOR_KEY".to_owned(),
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB".to_owned(),
+        );
+        assert!(
+            Config::from_map(values).is_err(),
+            "noncanonical base64url is rejected"
+        );
 
         let mut values = valid_values();
         values.insert(
