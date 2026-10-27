@@ -106,8 +106,8 @@ Part branch: `implementation/02-persistence`
 
 Base commit: `5bd6127d36560e51ded4f46de68efc10ea78bf5a`
 
-Verified implementation commit: recorded in the handoff-only branch commit immediately following the implementation commit; see its full hash below after commit.
-Part branch tip: to be recorded by that handoff-only commit.
+Verified implementation commit: `1a6b7bbbebc35c815a37dca478287004683cb1a1` (`feat(part-02): add persistence schema and migrations`).
+Part branch tip: a handoff-only follow-up records this verified implementation commit; its final integrated branch-tip hash will be recorded in the merge handoff.
 Integration state: awaiting the explicit local `--no-ff` merge into `main`.
 
 Implemented files and behavior:
