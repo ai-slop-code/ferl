@@ -10,7 +10,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | --- | --- | --- |
 | 01 Foundation | Complete | Full Part 01 gate and real PostgreSQL readiness/outage/recovery passed; verified branch `implementation/01-foundation` was integrated by merge commit `5bd6127d36560e51ded4f46de68efc10ea78bf5a`. |
 | 02 Persistence | Complete | Verified implementation `1a6b7bbbebc35c815a37dca478287004683cb1a1` and handoff branch tip `31c9a1e184052eca3e55ffb16160aee0c14b0f06` from `implementation/02-persistence` are integrated in the explicit local no-ff merge into `main`. |
-| 03 Domain and wire contracts | Verified (awaiting merge) | Full Part 03 gate passed on `implementation/03-domain-and-wire-contracts`, based on verified `main` `2ca9988f85818afd4f9cecb21df6be53d0a978f6`; branch commit hashes and explicit integration follow below. |
+| 03 Domain and wire contracts | Verified (awaiting merge) | Verified implementation `9f143478c657a505082911d015c8961f14df28dd` on `implementation/03-domain-and-wire-contracts`, based on verified `main` `2ca9988f85818afd4f9cecb21df6be53d0a978f6`; explicit integration remains pending. |
 | 04 Authentication and accounts | Planned | — |
 | 05 Client IP and rate limits | Planned | — |
 | 06 Link management | Planned | — |
@@ -130,7 +130,7 @@ At the Part 02 handoff, remaining responsibilities were Parts 03–11; Part 03 i
 
 ## Part 03 handoff — 2026-10-28
 
-Status: **Verified (awaiting merge)**. The Part 03 implementation and complete verification gate passed on `implementation/03-domain-and-wire-contracts`, created from the clean verified `main` base `2ca9988f85818afd4f9cecb21df6be53d0a978f6`. Configured repository-local identity: `LubosBa <30705301+LubosBa@users.noreply.github.com>`. No merge/rebase/cherry-pick was pending at the checkpoint. The source/test/docs changes are staged and reviewed; the implementation commit hash and final handoff-only branch-tip hash will be recorded immediately after their commits, before local integration.
+Status: **Verified (awaiting merge)**. Verified implementation commit: `9f143478c657a505082911d015c8961f14df28dd` (`feat(part-03): add domain and wire contracts`). Part branch: `implementation/03-domain-and-wire-contracts`. Base: verified `main` `2ca9988f85818afd4f9cecb21df6be53d0a978f6`. The repository-local identity is `LubosBa <30705301+LubosBa@users.noreply.github.com>`. The working tree/index are clean after the reviewed implementation commit. The following handoff-only commit records this verified implementation; the resulting branch-tip hash will be recorded in the pending merge completion metadata. No merge/rebase/cherry-pick was pending at the checkpoint.
 
 Sources reviewed before implementation: implementation README, agent contract, architecture, Git workflow, progress and acceptance map, complete Part 03 brief; normative business sections 3–4, 5.1, 6.2–6.7, 7, 9.1–9.3, 10, 11.2–11.5, 12, 13–13.1 and 14.2–14.3; relevant OpenAPI paths, parameters, schemas, nullability, defaults, errors, headers and security; source, dependencies, schema, harness, tests and database/configuration/development docs. No normative contract conflict was found or normative contract edited.
 
