@@ -1,11 +1,18 @@
-use std::{process::Output, time::Duration};
+use std::{
+    fs::{File, OpenOptions},
+    io,
+    process::Output,
+    time::Duration,
+};
 
+use fs2::FileExt;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::{process::Command, time::timeout};
 use url::Url;
 use uuid::Uuid;
 
 pub const CONTAINER_NAME: &str = "ferl-stage01-postgres";
+#[allow(dead_code)]
 const DATABASE_NAME: &str = "ferl_test";
 const POSTGRES_IMAGE_DIGEST: &str =
     "sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94";
@@ -15,10 +22,13 @@ pub struct IsolatedTestDatabase {
     pool: PgPool,
     admin_pool: PgPool,
     schema: String,
+    schema_database_url: String,
+    _harness_lock: File,
 }
 
 impl IsolatedTestDatabase {
     pub async fn connect_from_harness() -> Self {
+        let harness_lock = acquire_harness_lock().await;
         let database_url = std::env::var("FERL_TEST_DATABASE_URL")
             .expect("FERL_TEST_DATABASE_URL is required; run scripts/postgres.sh start");
         let container_name = std::env::var("FERL_TEST_POSTGRES_CONTAINER")
@@ -55,21 +65,15 @@ impl IsolatedTestDatabase {
         .expect("isolated schema creation finishes before its deadline")
         .expect("isolated Stage 01 test schema is created");
 
-        let search_path = schema.clone();
+        let mut isolated_url = Url::parse(&database_url).expect("validated test URL parses");
+        isolated_url
+            .query_pairs_mut()
+            .append_pair("options[search_path]", &schema);
+        let schema_database_url = isolated_url.to_string();
         let pool = PgPoolOptions::new()
-            .max_connections(2)
+            .max_connections(10)
             .acquire_timeout(Duration::from_secs(2))
-            .after_connect(move |connection, _metadata| {
-                let search_path = search_path.clone();
-                Box::pin(async move {
-                    sqlx::query("SELECT set_config('search_path', $1, false)")
-                        .bind(search_path)
-                        .execute(connection)
-                        .await?;
-                    Ok(())
-                })
-            })
-            .connect(&database_url)
+            .connect(&schema_database_url)
             .await
             .expect("isolated test pool connects to the harness database");
         let current_schema = timeout(
@@ -88,7 +92,19 @@ impl IsolatedTestDatabase {
             pool,
             admin_pool,
             schema,
+            schema_database_url,
+            _harness_lock: harness_lock,
         }
+    }
+
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
+    }
+
+    /// Connection URL whose startup search_path is the fixture-owned schema.
+    /// Use it for production `AppState` composition and CLI migration processes.
+    pub fn schema_database_url(&self) -> &str {
+        &self.schema_database_url
     }
 
     pub async fn close(self) {
@@ -98,8 +114,11 @@ impl IsolatedTestDatabase {
         // The schema name remains the locally generated fixed-prefix UUID identifier.
         timeout(
             Duration::from_secs(5),
-            sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {}", self.schema)))
-                .execute(&self.admin_pool),
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "DROP SCHEMA {} CASCADE",
+                self.schema
+            )))
+            .execute(&self.admin_pool),
         )
         .await
         .expect("isolated schema cleanup finishes before its deadline")
@@ -110,11 +129,46 @@ impl IsolatedTestDatabase {
     }
 }
 
+/// A process-wide file lock coordinates every database test and scripts that
+/// may start/stop the shared Podman container. Unlike a Rust mutex, `flock`
+/// coordinates independent test binaries and concurrent harness invocations.
+async fn acquire_harness_lock() -> File {
+    let path = std::env::var_os("FERL_TEST_HARNESS_LOCK_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("ferl-stage01-postgres.lock"));
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("the shared PostgreSQL harness lock file can be opened");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        match file.try_lock_exclusive() {
+            Ok(()) => return file,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(_) => panic!("the shared PostgreSQL harness lock can be acquired"),
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for the shared PostgreSQL harness lock"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 pub fn validate_database_url(database_url: &str) {
     let parsed = Url::parse(database_url).expect("test database URL is valid");
     assert_eq!(parsed.scheme(), "postgres");
     assert_eq!(parsed.host_str(), Some("127.0.0.1"));
     assert_eq!(parsed.path(), "/ferl_test");
+    assert!(
+        !parsed
+            .query_pairs()
+            .any(|(name, _)| { name == "options" || name.starts_with("options[") }),
+        "base test URL cannot override the fixture-owned PostgreSQL search_path"
+    );
     let configured_port = std::env::var("FERL_TEST_POSTGRES_PORT")
         .expect("FERL_TEST_POSTGRES_PORT must be set by the harness")
         .parse::<u16>()
@@ -172,6 +226,7 @@ async fn assert_harness_container() {
     );
 }
 
+#[allow(dead_code)]
 pub async fn wait_until_postgres_is_ready() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {

@@ -134,6 +134,7 @@ async fn unavailable_operator_commands_and_invalid_startup_fail_safely() {
         Command::new(env!("CARGO_BIN_EXE_ferl-server"))
             .env_clear()
             .arg("--version")
+            .kill_on_drop(true)
             .output(),
     )
     .await
@@ -142,15 +143,13 @@ async fn unavailable_operator_commands_and_invalid_startup_fail_safely() {
     assert!(version.status.success());
     assert!(String::from_utf8_lossy(&version.stdout).contains(env!("CARGO_PKG_VERSION")));
 
-    for arguments in [
-        vec!["migrate"],
-        vec!["bootstrap-admin", "--username", "operator"],
-    ] {
+    for arguments in [vec!["bootstrap-admin", "--username", "operator"]] {
         let output = tokio::time::timeout(
             Duration::from_secs(5),
             Command::new(env!("CARGO_BIN_EXE_ferl-server"))
                 .env_clear()
                 .args(arguments)
+                .kill_on_drop(true)
                 .output(),
         )
         .await
@@ -166,12 +165,29 @@ async fn unavailable_operator_commands_and_invalid_startup_fail_safely() {
         Duration::from_secs(5),
         Command::new(env!("CARGO_BIN_EXE_ferl-server"))
             .env_clear()
+            .arg("migrate")
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("migrate reports missing database configuration promptly")
+    .expect("server executable runs");
+    assert_eq!(output.status.code(), Some(2));
+    let stdout = String::from_utf8(output.stdout).expect("configuration diagnostic is UTF-8");
+    assert!(stdout.contains("FERL_DATABASE_URL"));
+    assert!(!stdout.contains("postgres://"));
+
+    let output = tokio::time::timeout(
+        Duration::from_secs(5),
+        Command::new(env!("CARGO_BIN_EXE_ferl-server"))
+            .env_clear()
             .env(
                 "FERL_DATABASE_URL",
                 "postgres://user:database-secret@localhost/ferl",
             )
             .env("FERL_PUBLIC_BASE_URL", "https://links.example.test")
             .env("FERL_CURSOR_KEY", "cursor-secret-invalid")
+            .kill_on_drop(true)
             .output(),
     )
     .await
@@ -200,6 +216,7 @@ async fn unavailable_operator_commands_and_invalid_startup_fail_safely() {
                 "FERL_CURSOR_KEY",
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             )
+            .kill_on_drop(true)
             .output(),
     )
     .await

@@ -2,11 +2,12 @@
 
 `ferl-server` reads configuration from the process environment at startup. The
 `serve` command requires `FERL_DATABASE_URL`, `FERL_PUBLIC_BASE_URL`, and
-`FERL_CURSOR_KEY`. The operator commands are deliberately unavailable until
-their implementation parts; they fail without reading or changing database
-state. Invalid values fail startup with only the setting name and a static
-reason in diagnostics. Secret values are never included in configuration debug
-output or startup logs.
+`FERL_CURSOR_KEY`. The explicit `migrate` command has a command-specific
+configuration profile: it requires only `FERL_DATABASE_URL` and applicable
+`FERL_MIGRATE_*` settings, and does not parse serving-only variables. The
+`bootstrap-admin` command remains unavailable until Part 04. Invalid values
+fail with only the setting name and a static reason in diagnostics. Secret
+values are never included in configuration debug output or logs.
 
 | Variable | Required/default | Encoding and bounds |
 | --- | --- | --- |
@@ -40,6 +41,25 @@ output or startup logs.
 | `FERL_ENVIRONMENT` | `local` | Non-empty, at most 128 UTF-8 bytes, with no control characters. |
 | `FERL_INSTANCE_ID` | Random UUID per process | Optional UUID override. Use a distinct value per instance. |
 
+## Migration command settings
+
+`ferl-server migrate` validates its applicable static settings before opening a
+database connection. These variables are ignored by `serve` and do not require
+`FERL_PUBLIC_BASE_URL`, `FERL_CURSOR_KEY`, listener, proxy, or telemetry
+configuration.
+
+| Variable | Required/default | Encoding and bounds |
+| --- | --- | --- |
+| `FERL_DATABASE_URL` | Required | Valid PostgreSQL URL; treated as a secret. Its `search_path` must match serving. |
+| `FERL_MIGRATE_CONNECT_TIMEOUT_SECS` | `10` | Integer from 1 through 3,600 seconds. |
+| `FERL_MIGRATE_LOCK_TIMEOUT_SECS` | `30` | Integer from 1 through 3,600 seconds; bounds migration advisory-lock acquisition. |
+| `FERL_MIGRATE_STATEMENT_TIMEOUT_SECS` | `120` | Integer from 1 through 3,600 seconds. |
+| `FERL_MIGRATE_TOTAL_TIMEOUT_SECS` | `600` | Integer from 1 through 3,600 seconds and at least the connection and lock timeouts. |
+| `FERL_MIGRATE_LOCK_POLL_MS` | `50` | Integer from 10 through 1,000 milliseconds. |
+
+The supported PostgreSQL/schema versions, migration lock, and exact
+incompatibility behavior are documented in [database.md](database.md).
+
 Generate a cursor key with
 `python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode())'`.
 Do not deploy the placeholder in `.env.example` or reuse a key across unrelated
@@ -55,8 +75,10 @@ Part 07.
 API request bodies have a fixed 65,536-byte maximum; this limit is not an
 environment override.
 
-Part 01 does not install or verify the persistence schema. It starts the HTTP
-process with liveness available, but readiness remains 503 until the Part 02
-migration verifier marks the schema compatible. A successful `SELECT 1` alone
-does not imply schema readiness. The server never runs migrations or bootstrap
-implicitly at startup.
+The serving process starts with liveness available and readiness false until
+the Part 02 background verifier confirms the embedded migration history and
+required schema objects. It rechecks on a bounded interval so database/schema
+recovery becomes ready without restart; readiness also requires a bounded
+database probe and acceptance of work. A successful `SELECT 1` alone does not
+imply schema readiness. Run `ferl-server migrate` explicitly before rollout;
+the server never runs migrations or bootstrap implicitly at startup.

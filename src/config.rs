@@ -14,6 +14,7 @@ use url::Url;
 use uuid::Uuid;
 
 const MAX_TIMEOUT_SECS: u64 = 300;
+const MAX_MIGRATION_TIMEOUT_SECS: u64 = 3_600;
 
 pub struct DatabaseUrl(String);
 
@@ -79,6 +80,31 @@ pub struct DatabaseConfig {
     pub acquire_timeout: Duration,
     pub statement_timeout: Duration,
     pub lock_timeout: Duration,
+}
+
+/// Configuration used only by the explicit migration command. Serving-only
+/// settings are intentionally neither required nor parsed by this profile.
+pub struct MigrationConfig {
+    pub database_url: DatabaseUrl,
+    pub connect_timeout: Duration,
+    pub lock_timeout: Duration,
+    pub statement_timeout: Duration,
+    pub total_timeout: Duration,
+    pub lock_poll_interval: Duration,
+}
+
+impl std::fmt::Debug for MigrationConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MigrationConfig")
+            .field("database_url", &"[REDACTED DATABASE URL]")
+            .field("connect_timeout", &self.connect_timeout)
+            .field("lock_timeout", &self.lock_timeout)
+            .field("statement_timeout", &self.statement_timeout)
+            .field("total_timeout", &self.total_timeout)
+            .field("lock_poll_interval", &self.lock_poll_interval)
+            .finish()
+    }
 }
 
 pub struct AnalyticsConfig {
@@ -247,6 +273,77 @@ impl Config {
             telemetry,
         })
     }
+}
+
+impl MigrationConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let mut values = BTreeMap::new();
+        for name in [
+            "FERL_DATABASE_URL",
+            "FERL_MIGRATE_CONNECT_TIMEOUT_SECS",
+            "FERL_MIGRATE_LOCK_TIMEOUT_SECS",
+            "FERL_MIGRATE_STATEMENT_TIMEOUT_SECS",
+            "FERL_MIGRATE_TOTAL_TIMEOUT_SECS",
+            "FERL_MIGRATE_LOCK_POLL_MS",
+        ] {
+            match env::var(name) {
+                Ok(value) => {
+                    values.insert(name.to_owned(), value);
+                }
+                Err(env::VarError::NotPresent) => {}
+                Err(env::VarError::NotUnicode(_)) => {
+                    return Err(ConfigError::new(name, "must be valid UTF-8"));
+                }
+            }
+        }
+        Self::from_map(values)
+    }
+
+    pub fn from_map(values: BTreeMap<String, String>) -> Result<Self, ConfigError> {
+        let url = required(&values, "FERL_DATABASE_URL")?;
+        let parsed = Url::parse(url).map_err(|_| {
+            ConfigError::new("FERL_DATABASE_URL", "must be a PostgreSQL connection URL")
+        })?;
+        if !matches!(parsed.scheme(), "postgres" | "postgresql")
+            || sqlx::postgres::PgConnectOptions::from_str(url).is_err()
+        {
+            return Err(ConfigError::new(
+                "FERL_DATABASE_URL",
+                "must be a valid PostgreSQL connection URL",
+            ));
+        }
+
+        let connect_timeout = migration_seconds(&values, "FERL_MIGRATE_CONNECT_TIMEOUT_SECS", 10)?;
+        let lock_timeout = migration_seconds(&values, "FERL_MIGRATE_LOCK_TIMEOUT_SECS", 30)?;
+        let statement_timeout =
+            migration_seconds(&values, "FERL_MIGRATE_STATEMENT_TIMEOUT_SECS", 120)?;
+        let total_timeout = migration_seconds(&values, "FERL_MIGRATE_TOTAL_TIMEOUT_SECS", 600)?;
+        if total_timeout < connect_timeout || total_timeout < lock_timeout {
+            return Err(ConfigError::new(
+                "FERL_MIGRATE_TOTAL_TIMEOUT_SECS",
+                "must be at least the connection and lock timeouts",
+            ));
+        }
+        let poll_ms = parse_bounded(&values, "FERL_MIGRATE_LOCK_POLL_MS", 50_u64, 10, 1_000)?;
+
+        Ok(Self {
+            database_url: DatabaseUrl(url.to_owned()),
+            connect_timeout,
+            lock_timeout,
+            statement_timeout,
+            total_timeout,
+            lock_poll_interval: Duration::from_millis(poll_ms),
+        })
+    }
+}
+
+fn migration_seconds(
+    values: &BTreeMap<String, String>,
+    name: &'static str,
+    default: u64,
+) -> Result<Duration, ConfigError> {
+    let value = parse_bounded(values, name, default, 1_u64, MAX_MIGRATION_TIMEOUT_SECS)?;
+    Ok(Duration::from_secs(value))
 }
 
 fn required<'a>(

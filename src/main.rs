@@ -7,7 +7,8 @@ use tokio_util::sync::CancellationToken;
 use ferl_server::{
     BUILD_VERSION,
     app::{self, AppState},
-    config::{Config, ConfigError},
+    config::{Config, ConfigError, MigrationConfig},
+    db::migrate::{self, MigrationFailure},
     db::pool::PoolBuildError,
     shutdown,
     telemetry::{
@@ -54,9 +55,43 @@ async fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
-        Command::Migrate => unavailable_operator_command("migrate"),
+        Command::Migrate => migrate().await,
         Command::BootstrapAdmin { username: _ } => unavailable_operator_command("bootstrap-admin"),
     }
+}
+
+async fn migrate() -> ExitCode {
+    let config = match MigrationConfig::from_env() {
+        Ok(config) => config,
+        Err(error) => {
+            log_config_error(&error);
+            eprintln!("migrate configuration rejected ({})", error.setting);
+            return ExitCode::from(2);
+        }
+    };
+
+    match migrate::run_migrations(&config).await {
+        Ok(()) => {
+            tracing::info!(
+                schema_version = migrate::LATEST_SCHEMA_VERSION,
+                category = "migrations_complete",
+                "PostgreSQL schema migrations completed"
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            log_migration_error(error);
+            eprintln!("migrate failed ({})", error.safe_category());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn log_migration_error(error: MigrationFailure) {
+    tracing::error!(
+        category = error.safe_category(),
+        "PostgreSQL migration command failed with a sanitized category"
+    );
 }
 
 fn unavailable_operator_command(command: &'static str) -> ExitCode {
@@ -118,6 +153,13 @@ async fn serve(config: Config) -> Result<(), ServerError> {
     );
 
     let cancellation = CancellationToken::new();
+    let mut schema_monitor = migrate::spawn_schema_monitor(
+        state.pool.clone(),
+        state.readiness.clone(),
+        cancellation.clone(),
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30),
+    );
     let mut server = Box::pin(
         axum::serve(listener, app::router(state.clone()))
             .with_graceful_shutdown(cancellation.clone().cancelled_owned())
@@ -126,6 +168,8 @@ async fn serve(config: Config) -> Result<(), ServerError> {
 
     tokio::select! {
         result = &mut server => {
+            cancellation.cancel();
+            finish_schema_monitor(&mut schema_monitor).await;
             result.map_err(|_| ServerError::HttpServer)?;
             let pool_closed = close_pool_bounded(&pool, config.shutdown.total_timeout).await;
             tracing::info!(
@@ -147,6 +191,7 @@ async fn serve(config: Config) -> Result<(), ServerError> {
                 config.shutdown.http_drain_timeout,
             )
             .await;
+            finish_schema_monitor(&mut schema_monitor).await;
             match drain {
                 shutdown::HttpDrainOutcome::Drained => {}
                 shutdown::HttpDrainOutcome::ServerFailed => {}
@@ -195,6 +240,24 @@ async fn serve(config: Config) -> Result<(), ServerError> {
     }
 
     Ok(())
+}
+
+async fn finish_schema_monitor(monitor: &mut tokio::task::JoinHandle<()>) {
+    match timeout(std::time::Duration::from_secs(2), &mut *monitor).await {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => tracing::warn!(
+            category = "schema_monitor_stopped_unexpectedly",
+            "schema monitor task did not complete normally"
+        ),
+        Err(_) => {
+            monitor.abort();
+            let _ = monitor.await;
+            tracing::warn!(
+                category = "schema_monitor_shutdown_deadline",
+                "schema monitor exceeded its shutdown bound and was cancelled"
+            );
+        }
+    }
 }
 
 async fn close_pool_bounded(pool: &sqlx::PgPool, deadline: std::time::Duration) -> bool {

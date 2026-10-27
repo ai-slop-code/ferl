@@ -9,6 +9,7 @@ including `rustfmt` and `clippy`, if it is not already available.
 
 ```sh
 cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets
 ```
@@ -59,13 +60,16 @@ restarts the harness-owned PostgreSQL container.
 
 ## Current stage boundaries
 
-`ferl-server` (or no subcommand) runs the HTTP server. `migrate` and
-`bootstrap-admin --username ...` are present in the CLI surface but exit with a
-clear unavailable-stage message and do not connect to or modify PostgreSQL.
+`ferl-server` (or no subcommand) runs the HTTP server. `migrate` applies the
+embedded, versioned schema using only database and migration settings;
+`bootstrap-admin --username ...` remains clearly unavailable until Part 04.
 The health endpoints are implemented; other paths return the structured 404
-envelope until their implementation part. Readiness is fail-closed while the
-schema remains unverified. Part 02 supplies migrations and the compatibility
-verifier without changing the HTTP health contract.
+envelope until their implementation part. Readiness is fail-closed until the
+production composition verifies migration history and required schema objects,
+then performs a bounded database probe. The verifier rechecks for database or
+schema recovery; startup never runs migrations or creates an administrator.
+See [database operations](database.md) for schema versioning, lock keys,
+isolation, and the migration procedure.
 
 Structured JSON logs go to stdout. Only allowlisted method, route template,
 status, operation/outcome category, and request correlation ID are emitted by
