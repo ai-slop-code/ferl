@@ -14,6 +14,13 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-targets
 ```
 
+The all-targets test command includes the Part 03 `domain_contracts`,
+`http_decoding`, `cursor_codec`, and `openapi_contracts` suites. The OpenAPI
+suite reads the checked-in OpenAPI 3.1 YAML with `yaml_serde` and validates
+representative fixtures against its locally resolved component schemas using
+the pinned JSON Schema Draft 2020-12 `jsonschema` crate. It does not claim
+endpoint/release conformance (Part 11).
+
 The PostgreSQL integration test is required by the ordinary test command. It
 fails with an actionable message if the harness environment is missing; it is
 not silently skipped. Run `scripts/check.sh` to start/verify the test database,

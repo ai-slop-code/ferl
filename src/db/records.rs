@@ -7,6 +7,8 @@ use ipnet::IpNet;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+pub use crate::domain::count::Count as VisitCount;
+
 #[derive(FromRow)]
 pub struct SystemStateRecord {
     pub singleton: bool,
@@ -82,59 +84,25 @@ pub struct RateChargeRecord {
     pub charged_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct VisitCount(i64);
-
-impl VisitCount {
-    pub fn from_database(value: i64) -> Result<Self, CounterConversionError> {
-        (value >= 0)
-            .then_some(Self(value))
-            .ok_or(CounterConversionError)
-    }
-
-    pub fn from_unsigned(value: u64) -> Result<Self, CounterConversionError> {
-        i64::try_from(value)
-            .map(Self)
-            .map_err(|_| CounterConversionError)
-    }
-
-    pub const fn database_value(self) -> i64 {
-        self.0
-    }
-
-    pub fn increment(self) -> Result<Self, CounterConversionError> {
-        self.0
-            .checked_add(1)
-            .map(Self)
-            .ok_or(CounterConversionError)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CounterConversionError;
-
 pub fn timestamp_as_utc(value: DateTime<FixedOffset>) -> DateTime<Utc> {
     value.with_timezone(&Utc)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CounterConversionError, VisitCount, timestamp_as_utc};
+    use super::{VisitCount, timestamp_as_utc};
     use chrono::{DateTime, TimeZone, Utc};
 
     #[test]
     fn visit_counter_conversions_reject_negative_and_overflow_values() {
         assert!(VisitCount::from_database(0).is_ok());
-        assert_eq!(VisitCount::from_database(-1), Err(CounterConversionError));
-        assert_eq!(
-            VisitCount::from_unsigned(u64::MAX),
-            Err(CounterConversionError)
-        );
-        assert_eq!(
+        assert!(VisitCount::from_database(-1).is_err());
+        assert!(VisitCount::from_unsigned(u64::MAX).is_err());
+        assert!(
             VisitCount::from_database(i64::MAX)
                 .expect("maximum database count is valid")
-                .increment(),
-            Err(CounterConversionError)
+                .increment()
+                .is_err()
         );
     }
 

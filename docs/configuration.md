@@ -20,7 +20,7 @@ values are never included in configuration debug output or logs.
 | `FERL_ANONYMOUS_CREATE_LIMIT` | `5` | Positive integer, maximum 1,000,000 attempts per rolling 60 seconds. |
 | `FERL_ACCOUNT_CREATE_LIMIT` | `60` | Positive integer, maximum 1,000,000 attempts per account per rolling 60 seconds (admins included). |
 | `FERL_TRUSTED_PROXIES` | Empty | Comma-separated IP addresses/CIDRs. Empty entries and malformed ranges are rejected; private ranges are not trusted automatically. |
-| `FERL_CURSOR_KEY` | Required | Unpadded base64url encoding of exactly 32 bytes. Keep stable across restarts and instances; do not generate an instance-local fallback. |
+| `FERL_CURSOR_KEY` | Required | Canonical unpadded base64url encoding of exactly 32 bytes. Keep stable across restarts and instances; do not generate an instance-local fallback. Part 03 cursor tokens use the authenticated `fc1<resource>.` envelope and up to 87,387 encoded bytes. |
 | `FERL_DB_POOL_MIN` | `0` | Integer from 0 through `FERL_DB_POOL_MAX`. |
 | `FERL_DB_POOL_MAX` | `10` | Integer from 1 through 128 connections per instance. |
 | `FERL_DB_CONNECT_TIMEOUT_SECS` | `5` | Integer from 1 through 300 seconds. |
@@ -64,6 +64,11 @@ Generate a cursor key with
 `python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode())'`.
 Do not deploy the placeholder in `.env.example` or reuse a key across unrelated
 deployments.
+
+Cursor key changes invalidate previously issued cursors and must be coordinated
+across instances. Part 03's exact cursor version, associated data, resource
+codes, context binding, and decoded/encoded limits are documented in
+[domain and wire contracts](domain-contracts.md).
 
 `FERL_OTEL_ENDPOINT` and the OTLP resource settings are parsed now so malformed
 configuration fails before serving. Part 01 installs safe structured stdout

@@ -12,4 +12,5 @@ export FERL_TEST_POSTGRES_PORT="$PORT"
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+# --all-targets includes Part 03 domain, decoder, cursor, and OpenAPI suites.
 cargo test --workspace --all-targets

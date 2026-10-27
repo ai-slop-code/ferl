@@ -118,6 +118,14 @@ It adds no full-width URL/header index, extension, or search-specific index.
 fields by later domain/repository operations; this migration enforces
 non-null/nullable pairing but does not implement Unicode normalization.
 
+Part 03 pins the persisted comparison transform to ICU4X 2.4.0 compiled Unicode
+18.0.0 case-folding, NFC, whitespace, and control tables. All instances must run
+the same transform when later services write/search `destination_search`,
+`title_search`, and canonical tags. A Unicode data-version change requires a
+coordinated data migration/compatibility plan; mixed search-key versions are not
+supported. Part 03 makes no schema or migration change. Application timestamps
+are truncated to PostgreSQL's microsecond precision before DTO/cursor use.
+
 ## Readiness and recovery
 
 The serving process starts with schema readiness false and does not run
