@@ -32,18 +32,18 @@ Parts are linked from [the implementation index](README.md). Earlier parts may t
 | 24 | Event UUID idempotency and atomic count/record writes | 02, 07, 11 | `visit_concurrency`, multi-process ingestion |
 | 25 | Queue/parser/write/worker failure preserves redirects | 07, 10, 11 | `analytics_failures`, observable bounded drop tests |
 | 26 | Delete pending visits without resurrection/released codes | 02, 06, 07, 11 | `visit_concurrency`, A-delete/B-queued race |
-| 27 | DB failures yield 503 in each dependent operation | 01, 04–09, 11 | Feature outage cases and `multi_instance` fault suites |
+| 27 | DB failures yield 503 in each dependent operation | 01, 04–09, 11 | Part 01 readiness subset: `tests/foundation_process.rs::executable_starts_without_database_and_stdout_excludes_secrets_and_raw_urls` and real PostgreSQL outage/recovery in `tests/foundation_postgres.rs::readiness_tracks_schema_and_recovers_after_postgres_restart` (executed against the pinned PostgreSQL container); business-operation outages remain in later suites |
 | 28 | Stale mutation rejection and allowed resolved-redirect race | 04, 06, 07, 11 | Guard synchronization and resolution/edit race tests |
 | 29 | Correlated OTLP traces/metrics/logs; sampling independence | 10 | `telemetry_signals` collector capture |
 | 30 | All telemetry excludes sensitive data; bounded dimensions | 10, 11 | `telemetry_privacy`, full error-path canary scan |
-| 31 | Collector outage, DB/schema readiness, bounded shutdown | 01, 10, 11 | `collector_failures`, `shutdown` |
+| 31 | Collector outage, DB/schema readiness, bounded shutdown | 01, 10, 11 | Part 01 process shutdown: `tests/foundation_process.rs::executable_starts_without_database_and_stdout_excludes_secrets_and_raw_urls`; active-request drain/deadline: `src/shutdown.rs::tests::active_request_drain_obeys_its_deadline_and_marks_instance_unready`; PostgreSQL schema-gate/outage/recovery: `tests/foundation_postgres.rs::readiness_tracks_schema_and_recovers_after_postgres_restart`. Collector outage/export drain remains Part 10; the test's manual schema-compatible state is not schema verification |
 | 32 | Cross-instance CRUD/auth/redirect freshness and cursors | 04, 06–09, 11 | `multi_instance::visibility_and_cursors` |
 | 33 | One account/IP allowance shared by independent processes | 05, 11 | `multi_instance::shared_rate_allowance` |
 | 34 | Cross-process code/bootstrap/admin/migration invariants | 02, 04, 06, 11 | Independent executable race groups |
 | 35 | Concurrent worker counts, dedup and cross-process deletion | 07, 11 | `multi_instance::analytics_and_deletion` |
 | 36 | Drain/remove/add instance without state transfer | 10, 11 | `multi_instance::drain_and_replace` |
-| 37 | Direct backend root/assets and separate static host boundary | 01, 07, 11 | `routing`, `proxy_routing` static fixture |
-| 38 | API prefix fallback and unauthenticated health isolation | 01, 07, 11 | `foundation`, `routing`, `proxy_routing` |
+| 37 | Direct backend root/assets and separate static host boundary | 01, 07, 11 | Part 01 direct root 404: `tests/foundation_http.rs::fallback_and_method_errors_are_json_and_head_is_bodyless`; proxy/static boundary remains `proxy_routing` |
+| 38 | API prefix fallback and unauthenticated health isolation | 01, 07, 11 | Part 01 API 404, health credential isolation, unsupported methods and health query rejection: `tests/foundation_http.rs::{health_ignores_credentials_replaces_request_id_and_sets_common_headers,fallback_and_method_errors_are_json_and_head_is_bodyless}` and `tests/foundation_process.rs::executable_starts_without_database_and_stdout_excludes_secrets_and_raw_urls`; proxy verification remains `proxy_routing` |
 | 39 | assets/health/api-sale valid, api reserved, asset subpaths | 06, 07, 11 | `link_creation`, `routing`, `proxy_routing` |
 | 40 | Missing codes/multi-segment paths never become SPA | 07, 11 | Direct and proxy raw-path fixtures |
 | 41 | Title normalization, nullable semantics, preservation, no fetch | 03, 06, 08 | `domain_contracts`, `link_management`, list DTO checks |
