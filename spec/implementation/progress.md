@@ -1,6 +1,6 @@
 # Implementation progress and agent handoff
 
-Historical baseline note: instructions were prepared before implementation began. Parts 01 and 02 have since completed and merged; Part 03 is the current implementation stage on its dedicated branch.
+Historical baseline note: instructions were prepared before implementation began. Parts 01, 02, and 03 have since completed and merged into local `main`; Part 04 is the current next stage.
 
 Status lifecycle: Planned → In progress → Verified (awaiting merge) → Complete. Use Blocked when a required implementation, verification or Git integration step cannot finish. Complete requires a committed merge into local `main`, as defined in [git-workflow.md](git-workflow.md).
 
@@ -31,7 +31,7 @@ The baseline implementation choices are in [architecture.md](architecture.md). R
 - HTTP admission now bounds both in-flight work and admitted waiters (`FERL_HTTP_MAX_IN_FLIGHT` and `FERL_HTTP_MAX_WAITING`). Excess work is rejected immediately with structured 503 `service_unavailable`; this overload code is documented in both normative contracts because their original 503 lists did not define request-capacity exhaustion. The in-flight and waiting caps are independently validated.
 - Public-origin validation checks the unnormalized input syntax before applying URL-parser normalization, so dot segments, encoded dot segments, backslashes, whitespace/control characters, user-info, paths, queries, and fragments cannot be normalized into an accepted origin. A single optional trailing slash remains accepted and normalized.
 - Framework error responses are distinguished from already-conforming application responses by an internal response extension. This lets the outer envelope sanitize JSON and plaintext framework rejections uniformly without rewriting health 503 bodies, and keeps error body/header request IDs consistent.
-- Readiness fails closed until a schema verifier marks compatibility; Part 01 does not claim `SELECT 1` is schema proof. Part 02 must install the migration verifier before the server can report ready against a real deployment schema.
+- Historical Part 01 readiness decision: readiness failed closed until schema compatibility was verified, and `SELECT 1` was not considered schema proof. Part 02 subsequently installed the real migration verifier documented in its handoff below.
 - Historical Part 01 note: its PostgreSQL readiness test manually marked the test state schema-compatible to isolate the live database probe/restart recovery; it did not prove a schema version. Part 02 later added the real verifier and migration tests, which are the current schema evidence.
 - The Podman harness uses `docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94`, loopback port `55432` by default, configurable via `FERL_POSTGRES_PORT`, label `io.ferl.harness=stage01`, and persistent volume `ferl-stage01-postgres-data`. The harness verifies the image digest, volume, loopback port, and ownership before reuse; creation uses `--pull=never` after explicit pull.
 - Historical registry blocker and resolution: the previous session's Podman VM reported `x509: certificate signed by unknown authority` because this environment's corporate proxy intercepts TLS. The owner confirmed the interception and explicitly authorized `podman pull --tls-verify=false` for image pulls only. The exact pinned pull succeeded; application PostgreSQL and HTTP TLS verification settings were not changed, and no CA/trust-store modification was made.
@@ -96,7 +96,7 @@ Acceptance evidence: Part 01 subsets of scenarios 27, 31, 37, and 38 are mapped 
 
 No Part 01 implementation or verification blocker remains. At the Part 01 checkpoint, migrations and the real schema verifier were still required before deployment readiness; Part 02 now supplies that persistence gate. Administrator bootstrap remains Part 04 and OTLP providers remain Part 10. The merge commit hash is intentionally not embedded in its own tree; obtain it from local Git history after the merge commit is created.
 
-Historical next-part note: Part 02 — Persistence followed Part 01 and is now complete/merged as recorded below. The current next part is Part 03.
+Historical next-part note: Part 02 — Persistence followed Part 01 and is now complete/merged as recorded below. Part 03 then followed and is also complete; Part 04 is next.
 
 ## Part 02 handoff — 2026-10-27
 
@@ -126,11 +126,11 @@ Verification evidence:
 - Acceptance contributions are recorded for scenarios 5, 9, 12–13, 20, 24, 26, and the migration/DB-coordination portion of 34 in `acceptance-map.md`. They distinguish database constraints/transactions from later API/bootstrap/worker behavior and independent-process release coverage.
 - Toolchain: `rustc 1.99.1` and `cargo 1.99.1`. `cargo metadata --format-version 1` resolved 302 packages and found no declared dependency `rust_version` above 1.94. An actual Rust 1.94 compiler run was not available and is not claimed.
 
-At the Part 02 handoff, remaining responsibilities were Parts 03–11; Part 03 is now underway, and Parts 04–11 remain future work. Schema v1 is still the only supported ferl migration state in this binary. No known Part 02 blocker remains.
+At the Part 02 handoff, remaining responsibilities were Parts 03–11. Part 03 has since completed; Parts 04–11 remain future work. Schema v1 is still the only supported ferl migration state in this binary. No known Part 02 blocker remains.
 
 ## Part 03 handoff — 2026-10-28
 
-Status: **Complete**. Verified implementation commit: `9f143478c657a505082911d015c8961f14df28dd` (`feat(part-03): add domain and wire contracts`). Part branch: `implementation/03-domain-and-wire-contracts`. Base: verified `main` `2ca9988f85818afd4f9cecb21df6be53d0a978f6`. Handoff-only branch tip integrated: `5d5da6142397fecfe4ae7c7a67187da00f3a2e5f` (`docs(part-03): record verified implementation commit`). Integration state: integrated by the explicit no-ff merge currently being finalized on `main`, with parents `2ca9988f85818afd4f9cecb21df6be53d0a978f6` and `5d5da6142397fecfe4ae7c7a67187da00f3a2e5f`; integration is recorded by that merge commit. Its own hash is intentionally not embedded in this tree and will be reported from Git after commit. The merge contains only this handoff completion update beyond the verified branch tree.
+Status: **Complete**. Verified implementation commit: `9f143478c657a505082911d015c8961f14df28dd` (`feat(part-03): add domain and wire contracts`). Part branch: `implementation/03-domain-and-wire-contracts`. Base: verified `main` `2ca9988f85818afd4f9cecb21df6be53d0a978f6`. Handoff-only branch tip integrated: `5d5da6142397fecfe4ae7c7a67187da00f3a2e5f` (`docs(part-03): record verified implementation commit`). Integration merge commit: `48ed2a003bf3401e5a2f359db2641baa0620e09e`, with parents `2ca9988f85818afd4f9cecb21df6be53d0a978f6` and `5d5da6142397fecfe4ae7c7a67187da00f3a2e5f`. The merge tree contained the tested implementation unchanged; its only additional content was the Part 03 completion metadata. This post-merge handoff-only update records the actual merge hash after its creation.
 
 Sources reviewed before implementation: implementation README, agent contract, architecture, Git workflow, progress and acceptance map, complete Part 03 brief; normative business sections 3–4, 5.1, 6.2–6.7, 7, 9.1–9.3, 10, 11.2–11.5, 12, 13–13.1 and 14.2–14.3; relevant OpenAPI paths, parameters, schemas, nullability, defaults, errors, headers and security; source, dependencies, schema, harness, tests and database/configuration/development docs. No normative contract conflict was found or normative contract edited.
 
