@@ -52,7 +52,7 @@ Base commit: `40b3ae713f0cd9bd2389f872d2953d29ef38f38`
 
 Implementation checkpoint commit: `195376016909d356d645b4bc16657a13a25a572d` (`wip(part-01): implement foundation pending PostgreSQL gate`).
 Resumed handoff commit: `f6aa001109f195aa7f5da512997530e0402df724` (`docs(part-01): record blocked verification checkpoint`).
-Verified implementation commit: pending the reviewed part-branch commit.
+Verified implementation commit: `2706102d06171051ebf6c8bc15305786146b2b5b` (`feat(part-01): complete foundation verification`).
 Integration state: not merged; `main` remains at `40b3ae713f0cd9bd2389f872d2953d29ef38f38`.
 
 Implemented behavior:
