@@ -45,7 +45,7 @@ Part branch: `implementation/01-foundation`
 
 Base commit: `40b3ae713f0cd9bd2389f872d2953d29ef38f38`
 
-Implementation commit: pending blocked-work checkpoint.
+Implementation checkpoint commit: `195376016909d356d645b4bc16657a13a25a572d` (`wip(part-01): implement foundation pending PostgreSQL gate`).
 Integration state: not merged; `main` remains at the reviewed specification baseline.
 
 Implemented behavior:
