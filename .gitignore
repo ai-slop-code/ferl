@@ -1,0 +1,8 @@
+/target/
+.env
+.env.*
+!.env.example
+*.log
+/test-artifacts/
+/container-data/
+/.DS_Store

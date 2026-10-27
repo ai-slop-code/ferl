@@ -1,0 +1,1279 @@
+openapi: 3.1.0
+info:
+  title: ferl server API
+  version: 1.0.0
+  description: >-
+    Contract for the Rust ferl backend. See server-business-logic.md for normative
+    authorization, normalization, byte limits, routing, concurrency, and telemetry
+    requirements. The server provides a JSON API and direct HTTP redirects.
+    The separately hosted SPA and CLI are not implemented by this contract.
+    Business API requests reject unknown fields/query parameters and repeated scalar
+    query parameters. All application responses carry a generated X-Request-ID.
+    API responses and public redirect responses use Cache-Control no-store.
+    Unsupported methods return 405 with Allow; unsupported paths return 404.
+    The /api namespace takes precedence over the public short-code route.
+servers:
+  - url: /
+    description: The deployment's configured public origin
+security:
+  - BearerAuth: []
+tags:
+  - name: Account
+    description: The authenticated account and its API key
+  - name: Administration
+    description: Admin-only account management
+  - name: Links
+    description: Short-link creation, management, and scoped discovery
+  - name: Tags
+    description: Tags derived from authorized live links
+  - name: Analytics
+    description: Authorized per-link visits and reports
+  - name: Health
+    description: Unauthenticated operational probes
+  - name: Redirects
+    description: Public short-link resolution
+x-max-request-body-bytes: 65536
+paths:
+  /api/v1/me:
+    get:
+      tags: [Account]
+      operationId: getCurrentAccount
+      summary: Read the authenticated account
+      description: Requires an enabled account's API key; a management token is insufficient.
+      responses:
+        '200': { $ref: '#/components/responses/Account' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/me/api-key:
+    post:
+      tags: [Account]
+      operationId: rotateCurrentApiKey
+      summary: Replace the authenticated account's API key
+      description: >-
+        Requires an enabled account's API key. Takes no body. Atomically invalidates
+        the previous key and returns the replacement once. Link ownership and rate
+        allowance remain attached to the same account.
+      responses:
+        '200': { $ref: '#/components/responses/ApiKeyReplaced' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/admin/accounts:
+    get:
+      tags: [Administration]
+      operationId: listAccounts
+      summary: List accounts as an admin
+      description: Admin API key required. Includes disabled accounts. Ordered newest first, then UUID descending.
+      parameters:
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { $ref: '#/components/responses/Accounts' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [Administration]
+      operationId: createAccount
+      summary: Create an enabled account and its initial API key
+      description: Admin API key required. Username must be unique among existing accounts. Returns the secret once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAccount' }
+      responses:
+        '201': { $ref: '#/components/responses/AccountCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/admin/accounts/{id}:
+    parameters:
+      - { $ref: '#/components/parameters/AccountId' }
+    get:
+      tags: [Administration]
+      operationId: getAccount
+      summary: Read an account as an admin
+      description: Admin API key required. Never returns the account's key or digest.
+      responses:
+        '200': { $ref: '#/components/responses/Account' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    patch:
+      tags: [Administration]
+      operationId: updateAccount
+      summary: Change an account's role or enabled state
+      description: >-
+        Admin API key required. Omitted fields are preserved. Disabling also suspends
+        owned redirects. The last enabled admin cannot be disabled or demoted;
+        violations return last_admin_required with no partial change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateAccount' }
+      responses:
+        '200': { $ref: '#/components/responses/Account' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    delete:
+      tags: [Administration]
+      operationId: deleteAccount
+      summary: Delete an account and its links and visits
+      description: >-
+        Admin API key required. Invalidates the key and atomically removes owned
+        links, tag associations, and visits, retaining permanent short-code
+        reservations. The last enabled admin cannot be deleted. Takes no body.
+      responses:
+        '204': { $ref: '#/components/responses/Deleted' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/admin/accounts/{id}/api-key:
+    parameters:
+      - { $ref: '#/components/parameters/AccountId' }
+    post:
+      tags: [Administration]
+      operationId: resetAccountApiKey
+      summary: Replace any account's API key as an admin
+      description: >-
+        Admin API key required. Takes no body. Returns the replacement once and
+        invalidates the prior key atomically. Resetting a disabled account's key
+        does not enable the account.
+      responses:
+        '200': { $ref: '#/components/responses/ApiKeyReplaced' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/links:
+    get:
+      tags: [Links]
+      operationId: listLinks
+      summary: Search, filter, sort, and list authorized links
+      description: >-
+        Requires an enabled account's API key. Defaults to own links even for admins.
+        All filters apply before pagination and combine with AND. Search matches any
+        of destination_url, short_code, or title. Tag any/all matching is local to the
+        tag filter. Every matching link appears once regardless of matching tag count.
+        Cursors bind normalized filters, account/scope, and ordering. Ordering uses
+        UUID as a final tie-breaker in the requested direction, and null titles always
+        sort last. Pagination is live; edits or visit increments may move items.
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/OwnerFilter' }
+        - { $ref: '#/components/parameters/LinkSearch' }
+        - { $ref: '#/components/parameters/EnabledFilter' }
+        - { $ref: '#/components/parameters/CreatedFrom' }
+        - { $ref: '#/components/parameters/CreatedTo' }
+        - { $ref: '#/components/parameters/TagFilter' }
+        - { $ref: '#/components/parameters/TagMode' }
+        - { $ref: '#/components/parameters/LinkSort' }
+        - { $ref: '#/components/parameters/SortOrder' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { $ref: '#/components/responses/Links' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    post:
+      tags: [Links]
+      operationId: createLink
+      summary: Create an independent short link
+      description: >-
+        An enabled account's API key creates an account-owned link. A request without
+        credentials can create an anonymous link only when anonymous creation is
+        enabled, and receives a management token once. A supplied invalid credential
+        never falls back to anonymous creation. Management tokens cannot create links.
+        Only accounts may supply short_code. Eligible attempts are charged before
+        body/feature validation, even if later rejected. Default rolling rates are
+        5 attempts per anonymous IP and 60 per account per 60 seconds, shared across
+        instances. Destinations are never fetched or deduplicated. Occupied, deleted,
+        and reserved custom codes return 409. Plaintext secrets never appear in reads.
+      security:
+        - BearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateLink' }
+            examples:
+              minimal:
+                value:
+                  destination_url: https://example.com/docs
+              tagged:
+                value:
+                  destination_url: https://example.com/docs?edition=2#intro
+                  short_code: rust-docs
+                  title: Rust documentation
+                  tags: [Work, rust, ' work ']
+      responses:
+        '201': { $ref: '#/components/responses/LinkCreated' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/links/{code}:
+    parameters:
+      - { $ref: '#/components/parameters/Code' }
+    get:
+      tags: [Links]
+      operationId: getLink
+      summary: Read a link within the credential's authority
+      description: >-
+        Requires the enabled owner account, an admin, or this anonymous link's
+        management token. Unknown links and links outside the credential's authority
+        both return 404. Disabled links remain readable by authorized callers.
+      responses:
+        '200': { $ref: '#/components/responses/Link' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    patch:
+      tags: [Links]
+      operationId: updateLink
+      summary: Edit destination, title, tags, or enabled state
+      description: >-
+        Requires the enabled owner account, an admin, or the matching management
+        token. Validate and commit all fields atomically. Omission preserves a field;
+        title null clears it and tags [] clears the tag set. Tags replace the entire
+        set after canonicalization and deduplication. Code and owner are immutable.
+        Destination changes preserve title/tags unless explicitly changed and never
+        rewrite historical visit destinations. Empty updates are invalid.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateLink' }
+            examples:
+              clearMetadata:
+                value: { title: null, tags: [] }
+              disable:
+                value: { enabled: false }
+      responses:
+        '200': { $ref: '#/components/responses/Link' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '413': { $ref: '#/components/responses/TooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    delete:
+      tags: [Links]
+      operationId: deleteLink
+      summary: Permanently delete one link and its visits
+      description: >-
+        Requires the enabled owner account, an admin, or the matching management
+        token. Takes no body. Deletes title, tags, token digest, and visits including
+        redirect snapshots, retaining only the permanent code reservation. Other
+        links with the same destination are unaffected. A later request using the
+        deleted link's revoked token gets 401; an otherwise-valid credential gets 404.
+      responses:
+        '204': { $ref: '#/components/responses/Deleted' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/links/{code}/management-token:
+    parameters:
+      - { $ref: '#/components/parameters/Code' }
+    post:
+      tags: [Links]
+      operationId: rotateManagementToken
+      summary: Replace an anonymous link's management token
+      description: >-
+        Requires the matching token or an admin. Takes no body. Returns the replacement
+        once and atomically revokes the previous token. Admin requests for an
+        account-owned link return 409 not_anonymous_link. Existing anonymous tokens
+        remain usable when anonymous creation is turned off.
+      responses:
+        '200': { $ref: '#/components/responses/ManagementTokenReplaced' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/links/{code}/visits:
+    parameters:
+      - { $ref: '#/components/parameters/Code' }
+    get:
+      tags: [Analytics]
+      operationId: listLinkVisits
+      summary: List a link's recorded visits
+      description: >-
+        Requires the enabled owner account, an admin, or the matching management token.
+        Ordered by occurred_at descending, then visit UUID descending. Date bounds
+        are inclusive from and exclusive to. Each record preserves the actual redirect
+        destination even if the link changed later. Collection is eventually consistent
+        with best-effort asynchronous recording; GET and HEAD redirects, including
+        bots, are recorded. Database failures return 503 rather than empty data.
+      parameters:
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { $ref: '#/components/responses/Visits' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/links/{code}/stats:
+    parameters:
+      - { $ref: '#/components/parameters/Code' }
+    get:
+      tags: [Analytics]
+      operationId: getLinkVisitStats
+      summary: Read lifetime and date-filtered visit counts
+      description: >-
+        Requires the enabled owner account, an admin, or the matching management token.
+        lifetime_visits ignores date filters; matching_visits counts the complete
+        requested interval. Counts describe persisted visits and may undercount
+        redirects. With no date bounds both counts cover all retained history.
+      parameters:
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+      responses:
+        '200': { $ref: '#/components/responses/VisitStats' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/links/{code}/stats/breakdown:
+    parameters:
+      - { $ref: '#/components/parameters/Code' }
+    get:
+      tags: [Analytics]
+      operationId: getLinkVisitBreakdown
+      summary: Group visits by one dimension
+      description: >-
+        Requires the enabled owner account, an admin, or the matching management token.
+        Apply date filters before grouping and pagination. UTC day values use
+        YYYY-MM-DD; other values are exact stored fields. Missing values form a null
+        bucket. Return groups in deterministic ascending value order, null first.
+      parameters:
+        - { $ref: '#/components/parameters/GroupBy' }
+        - { $ref: '#/components/parameters/From' }
+        - { $ref: '#/components/parameters/To' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { $ref: '#/components/responses/Breakdown' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/v1/tags:
+    get:
+      tags: [Tags]
+      operationId: listTags
+      summary: Discover tags used on authorized live links
+      description: >-
+        An enabled account's API key is required; management tokens cannot enumerate
+        tags. Defaults to own scope for all accounts. Admins may request all scope
+        and filter by owner. Counts include distinct enabled and disabled live links
+        throughout the scope, not just a page. Tags with no visible associations are
+        absent. Search applies only to tag names. Order is canonical-name UTF-8 byte
+        order ascending. No global tag create/rename/delete operations exist.
+      parameters:
+        - { $ref: '#/components/parameters/Scope' }
+        - { $ref: '#/components/parameters/OwnerFilter' }
+        - { $ref: '#/components/parameters/TagSearch' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { $ref: '#/components/responses/Tags' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/health/live:
+    get:
+      tags: [Health]
+      operationId: getLiveness
+      summary: Check whether the HTTP process can respond
+      description: Requires no database or collector probe. Credentials, including invalid ones, are ignored.
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/Healthy' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /api/health/ready:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Check initialization, schema, database, and acceptance of work
+      description: >-
+        Returns 200 only when initialization/schema checks are complete, a bounded
+        PostgreSQL probe succeeds, and the instance accepts work. A draining instance
+        is unready. Collector health and analytics backlog do not affect readiness.
+        Credentials, including invalid ones, are ignored.
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/Healthy' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '503': { $ref: '#/components/responses/Unready' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /{short_code}:
+    parameters:
+      - { $ref: '#/components/parameters/PublicCode' }
+    get:
+      tags: [Redirects]
+      operationId: followShortLink
+      summary: Redirect to an active link's stored destination
+      description: >-
+        Credentials and incoming query parameters are ignored. Match the exact single
+        segment, without trailing slash, case normalization, or percent-encoded aliases.
+        The API namespace is reserved. Missing, disabled, suspended-owner, and deleted
+        links return indistinguishable 404 responses. A resolved request issues an empty
+        302 with the stored query/fragment preserved and hands off a best-effort visit
+        event carrying that exact destination. Analytics failure does not fail the redirect.
+      security: []
+      responses:
+        '302': { $ref: '#/components/responses/Redirect' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '503': { $ref: '#/components/responses/Unavailable' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    head:
+      tags: [Redirects]
+      operationId: followShortLinkHead
+      summary: Issue a bodyless redirect and record a visit
+      description: >-
+        Same resolution, credential/query handling, and visit accounting as GET.
+        Every response to HEAD, including errors, has no body. A successful response
+        includes the same Location header as GET.
+      security: []
+      responses:
+        '302': { $ref: '#/components/responses/Redirect' }
+        '404': { $ref: '#/components/responses/HeadNotFound' }
+        '503': { $ref: '#/components/responses/HeadUnavailable' }
+        '500': { $ref: '#/components/responses/HeadInternalError' }
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Opaque ferl API key or link management token
+      description: >-
+        Account keys and per-link management tokens are distinct opaque formats,
+        not JWTs. Endpoint descriptions define the required role/scope. Invalid,
+        malformed, ambiguous, revoked, and disabled-account credentials return 401.
+        A valid credential with the wrong operation scope returns 403; a link outside
+        a valid credential's object authority is concealed with 404. Secrets are not
+        accepted in query strings or bodies. Public redirect/health routes ignore them.
+  parameters:
+    AccountId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Code:
+      name: code
+      in: path
+      required: true
+      description: Immutable short code identifying one link, not its destination URL.
+      schema: { $ref: '#/components/schemas/ShortCode' }
+    PublicCode:
+      name: short_code
+      in: path
+      required: true
+      description: Exact single-segment code. Invalid/unknown codes return 404; api is reserved for API routing.
+      schema: { $ref: '#/components/schemas/ShortCode' }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Cursor:
+      name: cursor
+      in: query
+      description: >-
+        Opaque continuation bound to resource, account/scope, normalized filters, and
+        ordering. Repeat the same filter/order context. Invalid/incompatible cursors
+        return 400. Reauthorization occurs on every page and works across instances.
+      schema: { type: string, minLength: 1 }
+    Scope:
+      name: scope
+      in: query
+      description: Defaults to own for users and admins. Only admins may request all; otherwise 403.
+      schema: { type: string, enum: [own, all], default: own }
+    OwnerFilter:
+      name: owner_id
+      in: query
+      description: >-
+        Only admins using scope=all may filter by an account UUID or anonymous.
+        Non-admin use returns 403; admin use with scope=own returns 400. A valid
+        nonexistent/deleted UUID yields an empty result and never broadens scope.
+      schema:
+        oneOf:
+          - { type: string, format: uuid }
+          - { type: string, const: anonymous }
+    LinkSearch:
+      name: q
+      in: query
+      description: >-
+        Literal case-insensitive substring in destination_url, short_code, or title.
+        Trim surrounding whitespace, require 1-256 Unicode scalar values without
+        control characters, and use full Unicode case folding plus NFC for comparison.
+        SQL wildcards, regex, stemming, and fuzzy query syntax are not supported.
+      schema: { type: string, minLength: 1 }
+    TagSearch:
+      name: q
+      in: query
+      description: >-
+        Literal case-insensitive substring in canonical tag names only. Trim surrounding
+        whitespace; require 1-256 Unicode scalar values without control characters.
+        Use full Unicode case folding and NFC. Counts still cover all scoped links.
+      schema: { type: string, minLength: 1 }
+    EnabledFilter:
+      name: enabled
+      in: query
+      description: Matches the link's own flag, not computed active status or owner suspension.
+      schema: { type: boolean }
+    CreatedFrom:
+      name: created_from
+      in: query
+      description: Inclusive created_at lower bound; convert explicit offsets to UTC. Must precede created_to when both are given.
+      schema: { type: string, format: date-time }
+    CreatedTo:
+      name: created_to
+      in: query
+      description: Exclusive created_at upper bound; convert explicit offsets to UTC. Must follow created_from when both are given.
+      schema: { type: string, format: date-time }
+    TagFilter:
+      name: tag
+      in: query
+      description: >-
+        Repeated tag values, for example tag=work&tag=rust. Canonicalize and deduplicate
+        as on creation. Commas within a value are literal, not separators. Unknown
+        tags match no association. The limit applies before deduplication.
+      style: form
+      explode: true
+      schema:
+        type: array
+        minItems: 1
+        maxItems: 20
+        items: { $ref: '#/components/schemas/TagInput' }
+    TagMode:
+      name: tag_mode
+      in: query
+      description: Match any selected tag or all selected tags. Supplying tag_mode without tag returns 400.
+      schema: { type: string, enum: [any, all], default: any }
+    LinkSort:
+      name: sort
+      in: query
+      description: >-
+        Sort field. Title comparison uses case-folded NFC UTF-8 byte ordering, nulls
+        last. Visits use the persisted counter. UUID is the final tie-breaker in the
+        requested direction. Mutable sort values may move during live pagination.
+      schema: { type: string, enum: [created_at, title, visit_count], default: created_at }
+    SortOrder:
+      name: order
+      in: query
+      schema: { type: string, enum: [asc, desc], default: desc }
+    From:
+      name: from
+      in: query
+      description: Inclusive occurred_at lower bound. Convert offsets to UTC; require from < to when both are given.
+      schema: { type: string, format: date-time }
+    To:
+      name: to
+      in: query
+      description: Exclusive occurred_at upper bound. Convert offsets to UTC; require from < to when both are given.
+      schema: { type: string, format: date-time }
+    GroupBy:
+      name: group_by
+      in: query
+      required: true
+      description: Exactly one grouping dimension. Day uses UTC dates; other dimensions use exact stored values.
+      schema:
+        type: string
+        enum: [day, method, referrer, client_ip, user_agent, device, browser, os]
+  headers:
+    RequestId:
+      description: Server-generated correlation ID. Incoming values do not replace it.
+      schema: { type: string, minLength: 1 }
+    NoStore:
+      description: Responses must not be stored in caches.
+      schema: { type: string, const: no-store }
+    Authenticate:
+      description: Bearer authentication challenge.
+      schema: { type: string, const: Bearer }
+    RetryAfter:
+      description: Positive whole seconds until enough rate charges expire to admit another attempt, assuming no intervening charges.
+      schema: { type: integer, minimum: 1 }
+    Allow:
+      description: Comma-separated supported methods. Short-link routes allow GET and HEAD.
+      schema: { type: string }
+    Location:
+      description: Exact serialized destination resolved for this redirect, preserving its query and fragment.
+      schema: { $ref: '#/components/schemas/StoredUrl' }
+  schemas:
+    Role:
+      type: string
+      enum: [admin, user]
+    Username:
+      type: string
+      minLength: 3
+      maxLength: 64
+      pattern: '^[a-z0-9_-]{3,64}$'
+    ShortCode:
+      type: string
+      minLength: 3
+      maxLength: 64
+      pattern: '^[a-z0-9-]{3,64}$'
+      description: >-
+        Generated codes use exactly 8 random lowercase letters/digits. Custom codes
+        use this broader syntax. Occupied, deleted, and reserved codes, including api,
+        are rejected with 409 on creation. Codes are immutable and never reused.
+    Timestamp:
+      type: string
+      format: date-time
+      pattern: 'Z$'
+      description: Server-generated RFC 3339 UTC timestamp.
+    Count:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9223372036854775807
+    DestinationInput:
+      type: string
+      format: iri
+      minLength: 1
+      maxLength: 8192
+      pattern: '^[hH][tT][tT][pP][sS]?://'
+      description: >-
+        Absolute HTTP(S) URL with a host, explicit authority syntax, and no user info,
+        literal ASCII whitespace/control characters, or surrounding whitespace. Both
+        submitted and serialized forms must fit 8192 UTF-8 bytes; maxLength alone
+        does not enforce the byte bound. Allow all hosts including private/localhost
+        without DNS or fetching. Persist standards-compliant serialization preserving
+        query and fragment, with normal host/IDN/escaping normalization.
+    StoredUrl:
+      type: string
+      format: uri
+      minLength: 1
+      maxLength: 8192
+      pattern: '^https?://'
+      description: Serialized absolute HTTP(S) URL; destination/snapshot values are bounded to 8192 UTF-8 bytes.
+    TitleInput:
+      type: [string, 'null']
+      minLength: 1
+      description: >-
+        Null clears/omits a title. For a string, trim surrounding Unicode whitespace;
+        the result must have 1-200 Unicode scalar values and no control characters.
+        Empty or blank values are invalid. The server does not fetch a page title.
+    Title:
+      type: [string, 'null']
+      minLength: 1
+      maxLength: 200
+      description: Trimmed caller-supplied plain-text title, or null.
+    TagInput:
+      type: string
+      minLength: 1
+      maxLength: 256
+      description: >-
+        Trim surrounding Unicode whitespace, apply locale-independent full Unicode
+        case folding, then NFC. The canonical result must have 1-64 Unicode scalar
+        values and no control characters. Internal spaces/punctuation are allowed.
+    TagsInput:
+      type: array
+      maxItems: 20
+      items: { $ref: '#/components/schemas/TagInput' }
+      description: >-
+        Input limit applies before canonicalization/deduplication. Omission on create
+        gives []; omission on PATCH preserves tags; [] clears them. Null is invalid.
+    CanonicalTag:
+      type: string
+      minLength: 1
+      maxLength: 64
+      pattern: '^[^\u0000-\u001F\u007F-\u009F]+$'
+      description: Trimmed, full Unicode case-folded, NFC-normalized tag name.
+    Tags:
+      type: array
+      maxItems: 20
+      uniqueItems: true
+      items: { $ref: '#/components/schemas/CanonicalTag' }
+      description: Unique canonical names in ascending UTF-8 byte order; [] when absent.
+    Secret:
+      type: string
+      minLength: 1
+      description: >-
+        Opaque generated secret with at least 256 random bits. Returned once after a
+        successful creation/replacement; never present in ordinary reads, logs, or
+        telemetry. Only its SHA-256 digest is persisted.
+    NextCursor:
+      type: [string, 'null']
+      minLength: 1
+      description: Opaque continuation, or null when no next page is currently available.
+    OptionalVisitHeader:
+      type: [string, 'null']
+      maxLength: 8192
+      description: >-
+        Complete valid UTF-8 header up to 8192 bytes. Missing, duplicated, invalid,
+        or oversized values are null on transport-accepted requests. The byte bound
+        is additional to the character bound. Analytics extraction never fails a redirect.
+    Account:
+      type: object
+      additionalProperties: false
+      required: [id, username, role, enabled, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        username: { $ref: '#/components/schemas/Username' }
+        role: { $ref: '#/components/schemas/Role' }
+        enabled: { type: boolean }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+    CreateAccount:
+      type: object
+      additionalProperties: false
+      required: [username]
+      properties:
+        username: { $ref: '#/components/schemas/Username' }
+        role:
+          $ref: '#/components/schemas/Role'
+          default: user
+    UpdateAccount:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        role: { $ref: '#/components/schemas/Role' }
+        enabled: { type: boolean }
+    AccountCreation:
+      type: object
+      additionalProperties: false
+      required: [account, api_key]
+      properties:
+        account: { $ref: '#/components/schemas/Account' }
+        api_key: { $ref: '#/components/schemas/Secret' }
+    ApiKeyReplacement:
+      type: object
+      additionalProperties: false
+      required: [api_key]
+      properties:
+        api_key: { $ref: '#/components/schemas/Secret' }
+    ManagementTokenReplacement:
+      type: object
+      additionalProperties: false
+      required: [management_token]
+      properties:
+        management_token: { $ref: '#/components/schemas/Secret' }
+    CreateLink:
+      type: object
+      additionalProperties: false
+      required: [destination_url]
+      properties:
+        destination_url: { $ref: '#/components/schemas/DestinationInput' }
+        short_code:
+          $ref: '#/components/schemas/ShortCode'
+          description: Only account-authenticated creators may supply this field; anonymous use is 403 after charging the attempt.
+        title: { $ref: '#/components/schemas/TitleInput' }
+        tags: { $ref: '#/components/schemas/TagsInput' }
+    UpdateLink:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        destination_url: { $ref: '#/components/schemas/DestinationInput' }
+        title: { $ref: '#/components/schemas/TitleInput' }
+        tags: { $ref: '#/components/schemas/TagsInput' }
+        enabled: { type: boolean }
+    Link:
+      type: object
+      additionalProperties: false
+      required: [id, short_code, short_url, destination_url, title, tags, owner_id, enabled, active, visit_count, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        short_code: { $ref: '#/components/schemas/ShortCode' }
+        short_url:
+          $ref: '#/components/schemas/StoredUrl'
+          description: Built from configured public origin and immutable code, never from request host headers.
+        destination_url: { $ref: '#/components/schemas/StoredUrl' }
+        title: { $ref: '#/components/schemas/Title' }
+        tags: { $ref: '#/components/schemas/Tags' }
+        owner_id:
+          type: [string, 'null']
+          format: uuid
+          description: Immutable owning account UUID, or null for an anonymous link.
+        enabled: { type: boolean }
+        active:
+          type: boolean
+          description: True only if this link is enabled and has no owner or an enabled owner.
+        visit_count:
+          $ref: '#/components/schemas/Count'
+          description: Lifetime successfully persisted visits; best-effort and eventually consistent with issued redirects.
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+    LinkCreation:
+      type: object
+      additionalProperties: false
+      required: [link]
+      properties:
+        link: { $ref: '#/components/schemas/Link' }
+        management_token: { $ref: '#/components/schemas/Secret' }
+      if:
+        properties:
+          link:
+            properties:
+              owner_id: { type: 'null' }
+      then:
+        required: [management_token]
+      else:
+        not:
+          required: [management_token]
+      description: Anonymous creation includes its token once; account-owned creation must omit it.
+    Visit:
+      type: object
+      additionalProperties: false
+      required: [id, link_id, short_code, redirect_url, occurred_at, method, client_ip, referrer, user_agent, device, browser, os]
+      properties:
+        id: { type: string, format: uuid }
+        link_id: { type: string, format: uuid }
+        short_code: { $ref: '#/components/schemas/ShortCode' }
+        redirect_url:
+          $ref: '#/components/schemas/StoredUrl'
+          description: Immutable exact Location used for this visit, captured during resolution and carried in the event, never looked up later.
+        occurred_at: { $ref: '#/components/schemas/Timestamp' }
+        method: { type: string, enum: [GET, HEAD] }
+        client_ip:
+          type: string
+          anyOf:
+            - { format: ipv4 }
+            - { format: ipv6 }
+          description: Canonical effective peer/trusted-proxy IP, with IPv4-mapped IPv6 normalized to IPv4.
+        referrer: { $ref: '#/components/schemas/OptionalVisitHeader' }
+        user_agent: { $ref: '#/components/schemas/OptionalVisitHeader' }
+        device: { type: string, enum: [desktop, mobile, tablet, other, unknown] }
+        browser: { type: string, minLength: 1, description: Browser family or unknown }
+        os: { type: string, minLength: 1, description: OS family or unknown }
+    VisitStats:
+      type: object
+      additionalProperties: false
+      required: [lifetime_visits, matching_visits]
+      properties:
+        lifetime_visits: { $ref: '#/components/schemas/Count' }
+        matching_visits: { $ref: '#/components/schemas/Count' }
+    BreakdownItem:
+      type: object
+      additionalProperties: false
+      required: [value, visits]
+      properties:
+        value: { type: [string, 'null'] }
+        visits: { $ref: '#/components/schemas/Count' }
+    TagInfo:
+      type: object
+      additionalProperties: false
+      required: [name, link_count]
+      properties:
+        name: { $ref: '#/components/schemas/CanonicalTag' }
+        link_count:
+          $ref: '#/components/schemas/Count'
+          minimum: 1
+          description: Distinct visible live links with this tag throughout the selected scope, including disabled links.
+    AccountCollection:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/Account' } }
+        next_cursor: { $ref: '#/components/schemas/NextCursor' }
+    LinkCollection:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/Link' } }
+        next_cursor: { $ref: '#/components/schemas/NextCursor' }
+    VisitCollection:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/Visit' } }
+        next_cursor: { $ref: '#/components/schemas/NextCursor' }
+    BreakdownCollection:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/BreakdownItem' } }
+        next_cursor: { $ref: '#/components/schemas/NextCursor' }
+    TagCollection:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/TagInfo' } }
+        next_cursor: { $ref: '#/components/schemas/NextCursor' }
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum:
+                - invalid_request
+                - invalid_credentials
+                - authentication_required
+                - forbidden
+                - anonymous_creation_disabled
+                - not_found
+                - method_not_allowed
+                - short_code_unavailable
+                - username_unavailable
+                - last_admin_required
+                - not_anonymous_link
+                - request_too_large
+                - unsupported_media_type
+                - rate_limited
+                - storage_unavailable
+                - code_generation_unavailable
+                - internal_error
+            message:
+              type: string
+              description: Safe explanation without SQL, stack traces, secrets, full URLs, or another account's information.
+        request_id: { type: string, minLength: 1 }
+    Healthy:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: ok }
+    Unready:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, const: unavailable }
+  responses:
+    Account:
+      description: Account representation without credentials or digests.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Account' }
+    AccountCreated:
+      description: Account committed; plaintext initial key returned once.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AccountCreation' }
+    ApiKeyReplaced:
+      description: Replacement committed; previous key revoked and plaintext replacement returned once.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiKeyReplacement' }
+    ManagementTokenReplaced:
+      description: Replacement committed; previous token revoked and replacement returned once.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ManagementTokenReplacement' }
+    Accounts:
+      description: Account page.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AccountCollection' }
+    Link:
+      description: Complete authorized link representation, including nullable title and canonical tags.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Link' }
+          example:
+            id: 1f1bf5f6-075c-4cf1-a44b-05fca986b100
+            short_code: rust-docs
+            short_url: https://s.example/rust-docs
+            destination_url: https://example.com/docs?edition=2#intro
+            title: Rust documentation
+            tags: [rust, work]
+            owner_id: 4a8ffcd5-3066-4519-a68e-060f956ab500
+            enabled: true
+            active: true
+            visit_count: 12
+            created_at: '2026-10-27T10:00:00Z'
+            updated_at: '2026-10-27T10:00:00Z'
+    LinkCreated:
+      description: Independent link committed; anonymous creations additionally receive a management token once.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/LinkCreation' }
+    Links:
+      description: Page of distinct authorized links after all filters, ordered as requested.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/LinkCollection' }
+          example: { items: [], next_cursor: null }
+    Visits:
+      description: Page of recorded visits, including immutable actual redirect destinations.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/VisitCollection' }
+          example:
+            items:
+              - id: 1d1cfe66-f9ea-4a16-aa03-d987c54df300
+                link_id: 1f1bf5f6-075c-4cf1-a44b-05fca986b100
+                short_code: rust-docs
+                redirect_url: https://example.com/docs?edition=1#intro
+                occurred_at: '2026-10-27T10:01:00Z'
+                method: HEAD
+                client_ip: 192.0.2.10
+                referrer: null
+                user_agent: null
+                device: unknown
+                browser: unknown
+                os: unknown
+            next_cursor: null
+    VisitStats:
+      description: Lifetime and interval counts from persisted visits, including all historical destinations.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/VisitStats' }
+          example: { lifetime_visits: 12, matching_visits: 4 }
+    Breakdown:
+      description: Page of groups after date filtering, with null first and ascending values.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/BreakdownCollection' }
+    Tags:
+      description: Canonical tag names and distinct visible link counts, in ascending name order.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/TagCollection' }
+          example:
+            items:
+              - { name: rust, link_count: 2 }
+              - { name: work, link_count: 3 }
+            next_cursor: null
+    Deleted:
+      description: Deletion committed. Empty response body; permanent code reservations remain where applicable.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+    Redirect:
+      description: Active short link resolved. Empty 302 body; GET and HEAD both trigger best-effort visit recording.
+      headers:
+        Location: { $ref: '#/components/headers/Location' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+    Healthy:
+      description: Probe succeeded. No credentials are required.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Healthy' }
+          example: { status: ok }
+    Unready:
+      description: Initialization, schema, database probe, or acceptance of work is not ready.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Unready' }
+          example: { status: unavailable }
+    BadRequest:
+      description: invalid_request; malformed JSON, invalid/unknown fields or filters, incompatible cursor, or invalid cross-field combination.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: authentication_required or invalid_credentials, including revoked keys/tokens and disabled accounts.
+      headers:
+        WWW-Authenticate: { $ref: '#/components/headers/Authenticate' }
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: forbidden or anonymous_creation_disabled; operation/feature/scope not permitted.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: not_found; unknown/inaccessible object, or unavailable public short link. No Location header.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    MethodNotAllowed:
+      description: method_not_allowed; applies when a method outside an endpoint's documented operations is requested.
+      headers:
+        Allow: { $ref: '#/components/headers/Allow' }
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: short_code_unavailable, username_unavailable, last_admin_required, or not_anonymous_link; no partial mutation.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error:
+              code: short_code_unavailable
+              message: The requested short code is unavailable.
+            request_id: 72ad8f48-40e4-4a78-9bac-3cd81aba6000
+    TooLarge:
+      description: request_too_large; request body exceeds 64 KiB.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnsupportedMediaType:
+      description: unsupported_media_type; a request body requiring JSON used an unsupported media type.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: rate_limited; the request adds no charge and does not extend the rate window.
+      headers:
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unavailable:
+      description: storage_unavailable or code_generation_unavailable. A dependency failure is not treated as absent data or invalid credentials.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InternalError:
+      description: internal_error; unexpected failure with a sanitized error message.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    HeadNotFound:
+      description: Unknown, disabled, suspended-owner, or deleted short link. No Location or response body.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+    HeadUnavailable:
+      description: Resolution could not query required storage. No response body.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
+    HeadInternalError:
+      description: Unexpected failure. No response body.
+      headers:
+        X-Request-ID: { $ref: '#/components/headers/RequestId' }
+        Cache-Control: { $ref: '#/components/headers/NoStore' }
