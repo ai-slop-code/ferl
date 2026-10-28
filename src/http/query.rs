@@ -117,10 +117,33 @@ impl AccountListQuery {
 
 impl LinkListQuery {
     pub fn parse(raw_query: Option<&str>) -> Result<Self, QueryError> {
+        Self::parse_inner(raw_query, None)
+    }
+
+    /// Parse a request after authentication, applying owner-filter authority
+    /// before decoding or validating its value. This preserves the specified
+    /// presence-based 403/400 precedence without a second URL decoder.
+    pub fn parse_authorized(raw_query: Option<&str>, is_admin: bool) -> Result<Self, QueryError> {
+        Self::parse_inner(raw_query, Some(is_admin))
+    }
+
+    fn parse_inner(raw_query: Option<&str>, authority: Option<bool>) -> Result<Self, QueryError> {
         let mut query = RawQuery::parse(raw_query)?;
+        let scope = parse_scope(query.scalar("scope")?.as_deref())?;
+        let owner_values = query.raw_values("owner_id");
+        if let Some(is_admin) = authority {
+            if scope == Scope::All && !is_admin {
+                return Err(QueryError::Forbidden);
+            }
+            if owner_values.is_some() && !is_admin {
+                return Err(QueryError::Forbidden);
+            }
+            if owner_values.is_some() && scope != Scope::All {
+                return Err(QueryError::InvalidRequest);
+            }
+        }
+        let owner = owner_values.map(parse_owner_values).transpose()?;
         query.ensure_allowed(&[
-            "scope",
-            "owner_id",
             "q",
             "enabled",
             "created_from",
@@ -132,9 +155,6 @@ impl LinkListQuery {
             "limit",
             "cursor",
         ])?;
-        let scope = parse_scope(query.scalar("scope")?.as_deref())?;
-        let owner_raw = query.scalar("owner_id")?;
-        let owner = owner_raw.as_deref().map(parse_owner).transpose()?;
         let search_raw = query.scalar("q")?;
         let search = search_raw
             .as_deref()
@@ -248,11 +268,31 @@ impl LinkListQuery {
 
 impl TagDiscoveryQuery {
     pub fn parse(raw_query: Option<&str>) -> Result<Self, QueryError> {
+        Self::parse_inner(raw_query, None)
+    }
+
+    /// Parse owner filters only after their presence has been authorized.
+    pub fn parse_authorized(raw_query: Option<&str>, is_admin: bool) -> Result<Self, QueryError> {
+        Self::parse_inner(raw_query, Some(is_admin))
+    }
+
+    fn parse_inner(raw_query: Option<&str>, authority: Option<bool>) -> Result<Self, QueryError> {
         let mut query = RawQuery::parse(raw_query)?;
-        query.ensure_allowed(&["scope", "owner_id", "q", "limit", "cursor"])?;
         let scope = parse_scope(query.scalar("scope")?.as_deref())?;
-        let owner_raw = query.scalar("owner_id")?;
-        let owner = owner_raw.as_deref().map(parse_owner).transpose()?;
+        let owner_values = query.raw_values("owner_id");
+        if let Some(is_admin) = authority {
+            if scope == Scope::All && !is_admin {
+                return Err(QueryError::Forbidden);
+            }
+            if owner_values.is_some() && !is_admin {
+                return Err(QueryError::Forbidden);
+            }
+            if owner_values.is_some() && scope != Scope::All {
+                return Err(QueryError::InvalidRequest);
+            }
+        }
+        let owner = owner_values.map(parse_owner_values).transpose()?;
+        query.ensure_allowed(&["q", "limit", "cursor"])?;
         let search_raw = query.scalar("q")?;
         let search = search_raw
             .as_deref()
@@ -383,8 +423,7 @@ impl RawQuery {
             }
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
             let name = decode_component(name)?;
-            let value = decode_component(value)?;
-            values.entry(name).or_default().push(value);
+            values.entry(name).or_default().push(value.to_owned());
         }
         Ok(Self(values))
     }
@@ -404,11 +443,24 @@ impl RawQuery {
         if values.len() != 1 {
             return Err(QueryError::InvalidRequest);
         }
-        Ok(values.into_iter().next())
+        values
+            .into_iter()
+            .next()
+            .map(|value| decode_component(&value))
+            .transpose()
     }
 
     fn repeated(&mut self, name: &str) -> Result<Vec<String>, QueryError> {
-        Ok(self.0.remove(name).unwrap_or_default())
+        self.0
+            .remove(name)
+            .unwrap_or_default()
+            .iter()
+            .map(|value| decode_component(value))
+            .collect()
+    }
+
+    fn raw_values(&mut self, name: &str) -> Option<Vec<String>> {
+        self.0.remove(name)
     }
 
     fn page(&mut self) -> Result<PageRequest, QueryError> {
@@ -471,12 +523,16 @@ fn parse_scope(value: Option<&str>) -> Result<Scope, QueryError> {
     }
 }
 
-fn parse_owner(value: &str) -> Result<OwnerFilter, QueryError> {
+fn parse_owner_values(values: Vec<String>) -> Result<OwnerFilter, QueryError> {
+    if values.len() != 1 {
+        return Err(QueryError::InvalidRequest);
+    }
+    let value = decode_component(values.first().ok_or(QueryError::InvalidRequest)?)?;
     if value == "anonymous" {
         return Ok(OwnerFilter::Anonymous);
     }
-    let id = Uuid::parse_str(value).map_err(|_| QueryError::InvalidRequest)?;
-    if id.to_string().eq_ignore_ascii_case(value) {
+    let id = Uuid::parse_str(&value).map_err(|_| QueryError::InvalidRequest)?;
+    if id.to_string().eq_ignore_ascii_case(&value) {
         Ok(OwnerFilter::Account(AccountId::new(id)))
     } else {
         Err(QueryError::InvalidRequest)
@@ -692,5 +748,56 @@ mod tests {
         let query = LinkListQuery::parse(Some(&format!("scope=all&owner_id={id}"))).unwrap();
         assert_eq!(query.authorize_scope(true), Ok(()));
         assert!(Tag::parse("a,b").is_ok());
+    }
+
+    #[test]
+    fn authorized_owner_presence_precedes_owner_value_decoding() {
+        for raw in [
+            "owner_id=malformed",
+            "owner_id=%GG",
+            "owner_id=%FF",
+            "owner_id=one&owner_id=two",
+        ] {
+            assert_eq!(
+                LinkListQuery::parse_authorized(Some(raw), false).err(),
+                Some(QueryError::Forbidden),
+                "non-admin owner presence is forbidden before value interpretation: {raw}"
+            );
+            assert_eq!(
+                TagDiscoveryQuery::parse_authorized(Some(raw), false).err(),
+                Some(QueryError::Forbidden),
+                "tag owner presence is forbidden before value interpretation: {raw}"
+            );
+        }
+        for parse in [
+            LinkListQuery::parse_authorized(Some("owner_id=%GG"), true).map(|_| ()),
+            TagDiscoveryQuery::parse_authorized(Some("owner_id=%GG"), true).map(|_| ()),
+        ] {
+            assert_eq!(parse, Err(QueryError::InvalidRequest));
+        }
+        assert_eq!(
+            LinkListQuery::parse_authorized(Some("owner_id=bad"), true).err(),
+            Some(QueryError::InvalidRequest),
+            "admin own-scope presence is rejected before parsing its value"
+        );
+        assert_eq!(
+            LinkListQuery::parse_authorized(Some("scope=all&owner_id=bad"), true).err(),
+            Some(QueryError::InvalidRequest)
+        );
+        assert_eq!(
+            LinkListQuery::parse_authorized(Some("scope=all&owner_id=bad&q=%GG"), false).err(),
+            Some(QueryError::Forbidden),
+            "scope authority precedes unrelated operation-specific value work"
+        );
+        assert_eq!(
+            LinkListQuery::parse_authorized(Some("owner_id=%GG&unexpected=anything"), false,).err(),
+            Some(QueryError::Forbidden),
+            "owner presence authority precedes unknown-parameter validation"
+        );
+        assert_eq!(
+            LinkListQuery::parse_authorized(Some("scope=unknown&owner_id=bad"), false).err(),
+            Some(QueryError::InvalidRequest),
+            "an invalid scope cannot be treated as an authorized filter"
+        );
     }
 }

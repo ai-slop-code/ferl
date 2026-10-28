@@ -35,7 +35,7 @@ opentelemetry_sdk = { version = "0.33.1", features = ["trace", "metrics", "logs"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "=0.10.9"
-sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "ipnet", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
+sqlx = { version = "0.9.0", default-features = false, features = ["chrono", "ipnet", "json", "macros", "migrate", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
 thiserror = "2.0"
 tokio = { version = "1.54.1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }

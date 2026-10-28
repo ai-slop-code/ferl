@@ -129,7 +129,7 @@ async fn route_and_eligibility_rejections_precede_body_reads_and_allowance_charg
                     .await
                     .unwrap();
                 assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-                assert_eq!(response.headers()["allow"], "POST");
+                assert_eq!(response.headers()["allow"], "GET, POST");
                 assert!(!polled.load(Ordering::SeqCst));
                 let headers = response.headers().clone();
                 let body = json(response).await;

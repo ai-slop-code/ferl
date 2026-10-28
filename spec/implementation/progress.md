@@ -1,6 +1,6 @@
 # Implementation progress and agent handoff
 
-Handoff summary: Parts 01–07 are complete and merged into local `main`. Part 08 — Link and tag discovery is next.
+Handoff summary: Parts 01–08 are complete and merged into local `main`. Part 09 — Analytics reports is next.
 
 Status lifecycle: Planned → In progress → Verified (awaiting merge) → Complete. Use Blocked when a required implementation, verification or Git integration step cannot finish. Complete requires a committed merge into local `main`, as defined in [git-workflow.md](git-workflow.md).
 
@@ -13,10 +13,10 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 03 Domain and wire contracts | Complete | Verified implementation `9f143478c657a505082911d015c8961f14df28dd` and handoff-only branch tip `5d5da6142397fecfe4ae7c7a67187da00f3a2e5f` from `implementation/03-domain-and-wire-contracts` are integrated by this explicit no-ff merge into `main`. |
 | 04 Authentication and accounts | Complete | Verified implementation `b740bb2d80c1bac590df52b72005efcc6bebb758` and integrated part tip `1aacfbca49b94c000cd7ab17b20a3609b4c740dd` from `implementation/04-authentication-and-accounts` are integrated by this explicit no-ff merge into `main` from base `15d9ddebdc0b15d06a0bea97883a6beaf1b1437a`. The tested implementation tree is unchanged; only this completion handoff is added in the merge commit. |
 | 05 Client IP and rate limits | Complete | Verified implementation `cda4b77866e96b498be144d6f819cd4a113a6896` and integrated part tip `6c21d8ab8a4d05f7c41166da98d8fb3d42ffd7d3` from `implementation/05-client-ip-and-rate-limits`, base `14ec982566c348f6b59e1f7a715f7eefc2ab9b19`, are integrated by this explicit local no-ff merge. Closing gate: 144 tests and 3 compile-fail doctests passed. |
-| 06 Link management | Complete | Verified implementation `264f3f35bcdab2e2f563d779fae6728e50b0c1a8` and integrated part tip `968b4eaaafae7f21723763c7fc76d2e4890ffa70` from `implementation/06-link-management`, based on `bbe53b3b439d961b88e0a56b877ad3e409411f2e`, are integrated by this explicit no-ff merge. |
+| 06 Link management | Complete | Verified implementation `264f3f30af32d4e1b8460504f7d0abed62590d6e` and integrated part tip `968b4eaaafae7f21723763c7fc76d2e4890ffa70` from `implementation/06-link-management`, based on `bbe53b3b439d961b88e0a56b877ad3e409411f2e`, are integrated by this explicit no-ff merge. |
 | 07 Redirects and visit ingestion | Complete | Verified implementation `e7d0bb8d39fa22748642a9f9488e21cb505a8598` and integrated part tip `5f9fe68d8d8c171808fb4e3db9c1dddb6306d1c7` are integrated into local `main` by the explicit no-ff Part 07 merge recorded below. |
-| 08 Link and tag discovery | Planned (next) | Not started; begins only after Part 07 is merged. |
-| 09 Analytics reports | Planned | — |
+| 08 Link and tag discovery | Complete | Verified implementation `1526f60527ac7fd9206fbbdef2b51a11b87d5af8`, integrated branch tip `fd9f4d35bda58b82a81834891d95f318fa3cc913`, based on Part 07 merge `9bcf7c0c021c994e76d0696633fe822f0a49a5e1`, is integrated by the explicit no-ff merge recorded in the Part 08 handoff below. The closing gate passed; only this completion handoff differs in the merge commit. |
+| 09 Analytics reports | Planned (next) | Part 08 is complete and merged; reports are the next implementation increment. |
 | 10 Observability and lifecycle | Planned | — |
 | 11 Release verification | Planned | — |
 
@@ -422,7 +422,7 @@ passed on `implementation/06-link-management` and are integrated into local
 - Local identity: `LubosBa <30705301+LubosBa@users.noreply.github.com>` from repository configuration.
   No global identity, remote, or push was configured.
 - Base commit: `bbe53b3b439d961b88e0a56b877ad3e409411f2e`.
-- Verified implementation commit: `264f3f35bcdab2e2f563d779fae6728e50b0c1a8`
+- Verified implementation commit: `264f3f30af32d4e1b8460504f7d0abed62590d6e`
   (`feat(part-06): implement link management`). Integrated part tip:
   `968b4eaaafae7f21723763c7fc76d2e4890ffa70` from the handoff-only follow-up
   `docs(part-06): finalize acceptance traceability`.
@@ -617,7 +617,7 @@ into local `main` by this explicit no-ff merge.
   `bbe53b3b439d961b88e0a56b877ad3e409411f2e` and
   `968b4eaaafae7f21723763c7fc76d2e4890ffa70`. The retained Part 06 branch was
   `implementation/06-link-management` at `968b4eaaafae7f21723763c7fc76d2e4890ffa70`;
-  its verified implementation was `264f3f35bcdab2e2f563d779fae6728e50b0c1a8`.
+  its verified implementation was `264f3f30af32d4e1b8460504f7d0abed62590d6e`.
   Original baseline `40b3ae713f0cd9bd2389f872d2953d29ef38f38d` is an ancestor.
 - `implementation/07-redirects-and-visit-ingestion` did not exist and was created
   from that exact main checkpoint. There were no pending merge/rebase/cherry-pick/
@@ -750,6 +750,196 @@ into local `main` by this explicit no-ff merge.
 No required Part 07 gate check remains unexecuted and no blocker remains.
 **Next: Part 08 — Link and tag discovery.** Part 09 reports, Part 10 OTLP/lifecycle
 export, and Part 11 release verification remain later work.
+
+## Part 08 handoff — 2026-10-28
+
+Status: **Complete**. The Part 08 implementation and its full verification gate
+passed on `implementation/08-link-and-tag-discovery`, then were integrated into
+local `main` by the explicit no-ff merge recorded after the reviewed
+implementation and handoff-only commits.
+
+### Git checkpoint and traceability
+
+- Repository root: `$PWD`.
+- Starting state: clean `main`/index/tree at `9bcf7c0c021c994e76d0696633fe822f0a49a5e1`,
+  the Part 07 merge with parents `6db4ede67927a24381eddb3889d4479e1b7de17a`
+  and `5f9fe68d8d8c171808fb4e3db9c1dddb6306d1c7`. The retained Part 07 branch
+  is `implementation/07-redirects-and-visit-ingestion`; its implementation is
+  `e7d0bb8d39fa22748642a9f9488e21cb505a8598`. The Part 07 merge is the current
+  main/base commit. Original baseline `40b3ae713f0cd9bd2389f872d2953d29ef38f38d`
+  is an ancestor.
+- The Part 08 branch did not exist and was created from that exact main tip.
+  No pending merge, rebase, cherry-pick, revert or sequencer state was present.
+  Local identity is `LubosBa <30705301+LubosBa@users.noreply.github.com>`; no remote or global Git
+  configuration was changed and nothing was pushed.
+- The supplied Part 06 implementation SHA `264f3f35bcdab2e2f563d779fae6728e50b0c1a8`
+  was not an object in this repository. `git log --all` and `git show` verified
+  the actual reachable implementation as
+  `264f3f30af32d4e1b8460504f7d0abed62590d6e` (parent
+  `bbe53b3b439d961b88e0a56b877ad3e409411f2e`), integrated by the expected Part
+  06 merge `6db4ede67927a24381eddb3889d4479e1b7de17a`. Historical Part 06/07
+  handoff references in this progress record and acceptance map are corrected to
+  that real hash; no commit history was rewritten.
+- Base commit: `9bcf7c0c021c994e76d0696633fe822f0a49a5e1`.
+- Verified implementation commit: `1526f60527ac7fd9206fbbdef2b51a11b87d5af8`
+  (`feat(part-08): add link and tag discovery`).
+- Integrated part tip: `fd9f4d35bda58b82a81834891d95f318fa3cc913`
+  (`docs(part-08): record verified implementation commit`), the handoff-only
+  follow-up that records the verified implementation hash.
+- Integration: explicit no-ff merge parents are
+  `9bcf7c0c021c994e76d0696633fe822f0a49a5e1` and
+  `fd9f4d35bda58b82a81834891d95f318fa3cc913`. The final progress-only completion
+  update is the only content added during that integration merge; tested source,
+  migration, lockfile, and test tree match the integrated Part 08 tip. The merge
+  commit hash is reported after commit and is intentionally not embedded in its
+  own tree.
+
+### Delivered Part 08 behavior
+
+- Registered exactly `GET /api/v1/links` and `GET /api/v1/tags` while retaining
+  `POST /api/v1/links` and all Part 06/07 operations. Link collection advertises
+  `Allow: GET, POST`; tags advertises `Allow: GET`. Neither has implicit HEAD;
+  HEAD is bodyless 405 through the existing request-ID/no-store envelope.
+  `accounts::handlers` dispatches both discovery modules through the production
+  router; no test-only route, CLI, projection, tag mutation, or reports endpoint
+  was added.
+- Both handlers authenticate a fresh enabled account before operation-query
+  work. Missing credentials return 401 `authentication_required`; supplied
+  malformed/revoked/invalid credentials return 401 `invalid_credentials` with
+  `WWW-Authenticate: Bearer`; management tokens are 403. Scope defaults to own
+  for users/admins. Admin all-scope includes anonymous links and disabled-owner
+  links. The shared `RawQuery` decoder now retains encoded values until
+  `parse_authorized` applies scope/owner-presence authority: non-admin owner
+  presence is 403 even for malformed/repeated owner values; admin owner presence
+  outside all-scope is 400 before decoding; permitted malformed values are 400.
+  This narrowly fixes the pre-existing parser-before-authority precedence defect
+  without adding a second query decoder.
+- Link listing filters the authorized PostgreSQL candidate relation before
+  keyset selection. q searches normalized destination/code/title using literal
+  substring patterns with bound values and explicit `!` escaping; `%`, `_`, `!`
+  are escaped and backslash remains literal. `enabled` is the link flag, dates
+  are inclusive-lower/exclusive-upper UTC microseconds, tag any/all uses
+  non-fan-out association predicates, and filter categories combine with AND.
+  Unknown/mixed tags behave as specified. Unknown parameters, repeated scalars,
+  invalid enums/limits/intervals and tag-mode-without-tags remain sanitized 400s.
+- A single PostgreSQL listing statement uses one snapshot for the bounded
+  candidate page, owner-enabled state and canonical ordered tags; it returns at
+  most `limit + 1` rows and converts every item with
+  `links::representation::build`. All 12 Link fields, explicit nulls, configured
+  short URL, persisted count, timestamps and owner-derived active are checked.
+  There is no per-item checkout or N+1 hydration. Database, conversion, timeout
+  and cancellation failures cannot fabricate an empty collection.
+- All six `(created_at|title|visit_count) × (asc|desc)` orders use UUID in the
+  same direction. Title predicates/orderings use explicit C collation and NULLS
+  LAST in both directions, with null encoded explicitly and no sentinel.
+  Cursors use the existing sealed codec/context/typed boundaries, include
+  normalized filters and actor/account/scope/owner, exclude limit, and use the
+  last returned row. Each page reauthenticates; key rotation preserves a cursor,
+  revoked credentials fail 401, demoted all-scope admins fail 403, recreated
+  usernames cannot inherit a cursor, and boundary deletion does not require the
+  old row. Pagination is live for mutable title/count values; no snapshot store
+  or exact traversal under movement is promised.
+- Tag discovery groups live visible associations, counts distinct link IDs over
+  the complete scope (including individually disabled/suspended-owner links),
+  filters q only on canonical tag names, returns positive counts in C/UTF-8
+  order, and paginates grouped names after complete counts. Clearing tags,
+  deleting links/accounts, and scope-specific final-association removal appear
+  immediately after commit.
+- Safe failures reuse the existing envelope and configured production pool,
+  operation/acquire/statement/lock deadlines. Real lock and pool failures return
+  sanitized 503 rather than partial/empty results. No listing/tag operation
+  charges creation allowance or emits visits. Actual production logger/process
+  tests scan query, cursor, title, tag, destination, credentials, IDs and DB URL
+  canaries after proving safe diagnostics are present.
+
+### Migration, indexes, plans and compatibility
+
+- Added append-only `migrations/0002_discovery_indexes.sql`; `0001_initial.sql`
+  and its checksum/history are unchanged. Latest ferl schema is v2; supported
+  PostgreSQL remains 17.x and the harness is the pinned 17.6 image. Production
+  readiness/compatibility verifies the new migration history and each new index
+  key definition, collation, validity/readiness and nonunique semantics.
+- Eight transactional B-trees cover global/scoped created_at, visit_count and
+  title order, with distinct ASC/DESC title indexes to keep NULLS LAST in both
+  directions. Existing `(link_id,name)` and `(name,link_id)` indexes serve tag
+  association/grouping paths. The two visit_count keys are explicitly accepted
+  write amplification on every successful Part 07 worker counter increment.
+  No full-width URL B-tree, `pg_trgm`, extension, or extension lifecycle was
+  added. Maximum 8,192-byte destination, 200-scalar title, 64-scalar tag and
+  256-scalar trimmed raw tag insertion are tested.
+- `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` runs on the production SQL builders
+  over 20,000 links/22,000 associations. Selective owner and global first and
+  continuation pages use their corresponding ordering indexes for all sorts and
+  directions. Representative warm-buffer plans reported roughly 0.23–0.35 ms
+  for keyset pages, with 51 rows at the limit+1 boundary and no buffer reads.
+  Title continuation scans preserve the explicit null boundaries. Literal
+  substring q uses the owner candidate index/bitmap then scans 4,000 authorized
+  candidates (4,000 rows filtered in the no-match fixture); no trigram/full-text
+  index is claimed. Tag-any uses the `(link_id,name)` primary key in a semi-join;
+  tag-all uses `(name,link_id)` for association counts (4,000 loops/20,000
+  buffer hits in that fixture). Broad/owner tag discovery plans scan and group
+  the complete association relation: the measured broad 20k-link fixture used
+  sequential scans, hash joins and in-memory sorts (about 42.5 ms/630 buffer
+  hits); owner scope processed the 4k-link candidate set (about 19.1 ms/635
+  hits). Broad q remains a scan. These are representative plan observations, not
+  throughput targets or a demand for index scans on tiny/broad fixtures.
+- Migration evidence includes fresh v2, repeat and concurrent CLI migration;
+  populated authentic v1→v2 preservation of account/key digests, links/titles,
+  tags, visits/counters, reservations, bootstrap and rate charges; missing/wrong
+  index rejection; and a held `links` table lock causing bounded version-2 DDL
+  timeout, full transaction rollback/no v2 history, then successful retry.
+  Normal `CREATE INDEX` was chosen so DDL and SQLx history are transactional;
+  it holds a write-blocking table lock during build. The new
+  `tests/legacy_compatibility.rs::v1_server_runs_on_v1_then_fails_closed_after_v2_upgrade_and_v2_runs_ready`
+  builds the retained v1 source: v1 serves v1, fails closed/unready after v2,
+  and v2 is ready after migration. Required rollout is stop/drain v1, migrate,
+  verify, then start v2; mixed-version rolling deployment is not supported.
+- `tests/discovery_process.rs::discovery_cursors_and_fresh_state_cross_independent_servers_and_volume_restart`
+  uses production TCP servers A/B and replacement C against the same isolated
+  schema. It exercises create/update/delete, cross-server cursors, key rotation,
+  asynchronous worker counter visibility, canaries and a named-volume restart
+  while the fixture's shared harness lock is held, without repopulating state.
+
+### Prerequisite correction and changed files
+
+- The full gate initially exposed an intermittent existing Part 04 lock-test
+  failure: sibling Tokio test tasks could observe database-scoped advisory locks
+  from other isolated schemas because `flock` alone only supplied the
+  interprocess boundary. `IsolatedTestDatabase` now owns a bounded-acquisition
+  process-local async fixture guard in addition to the existing shared `flock`;
+  no production lock/coordination protocol or assertion was changed. The full
+  account-concurrency suite and closing gate pass with that regression fix.
+- Production: `migrations/0002_discovery_indexes.sql`, `src/{accounts/handlers,db/migrate,http/query,http/request_id,lib,links/handlers,links/list_handler,links/list_repository,links/mod,links/service,pagination/context,tags/*}.rs`, `Cargo.toml` (SQLx JSON decode feature for plan evidence; no version/dependency addition), and `tests/support/{database,serving_process}.rs`.
+- Executable suites: `tests/{discovery_failures,discovery_process,discovery_values,link_filters,link_listing,link_pagination,tag_discovery,legacy_compatibility}.rs`; migration, OpenAPI and existing method-boundary tests were extended. Operator/developer docs: `docs/{configuration,creation-allowance,database,development,domain-contracts}.md`, `scripts/check.sh`, this handoff and `acceptance-map.md`.
+- `spec/server-business-logic.md`, `spec/openapi.yaml`, `migrations/0001_initial.sql`, and `Cargo.lock` are unchanged; no source/contract conflict was found. Part 09 analytics reports, Part 10 OTLP exporters, and Part 11 release/deployment machinery are not implemented or claimed.
+
+### Closing verification evidence
+
+- `podman info`, `podman machine list`, `sh scripts/postgres.sh start`, and
+  `sh scripts/postgres.sh ready` passed. Tests used `IsolatedTestDatabase` and
+  its schema URL for migrations, production pools and child processes; only the
+  label/digest-verified owned `ferl-stage01-postgres` container was restarted,
+  with `ferl-stage01-postgres-data` preserved.
+- Exact closing command: `sh scripts/check.sh`. It passed
+  `cargo fmt --all -- --check`,
+  `cargo check --workspace --all-targets --all-features`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace --all-targets`, and `cargo test --doc`.
+  Observed **200 all-target tests**: 87 library, 113 integration, binary unit
+  target 0; plus **3 compile-fail doctests**. **203 total passed, none ignored
+  or skipped.** The 113 integration tests are across 42 binaries, including all
+  new discovery suites and the retained-v1 compatibility test.
+- Toolchain: `rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)`;
+  `cargo 1.99.1 (5f94df478 2026-08-27) (Homebrew)`. `cargo metadata
+  --format-version 1 --locked` resolved 346 packages; no resolved package
+  advertises `rust_version` above 1.94.0. This is metadata only; Rust 1.94 was
+  not run and is not claimed. PostgreSQL 17.6 is the observed harness version.
+- Acceptance contributions: scenarios **3, 20, 27, 30 subset, 32, 34, 41–49,
+  and 51 actual discovery response subset**. Reports, OTLP/full-signal privacy,
+  and release-wide acceptance remain Parts 09–11.
+- No required Part 08 check remains unexecuted and no blocker remains. Part 08 is
+  complete and merged. **Part 09 — Analytics reports** is next; no report query,
+  exporter, or release/deployment machinery is claimed here.
 
 ## Per-part handoff template
 

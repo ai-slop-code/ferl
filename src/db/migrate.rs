@@ -17,7 +17,7 @@ use crate::{app::ReadinessState, config::MigrationConfig};
 /// PostgreSQL advisory lock reserved for ferl's embedded schema migrations.
 /// `FERLMIGR` (`5063543843715630930`); PostgreSQL scopes advisory locks to a DB.
 pub const MIGRATION_LOCK_KEY: i64 = 0x4645_524c_4d49_4752;
-pub const LATEST_SCHEMA_VERSION: i64 = 1;
+pub const LATEST_SCHEMA_VERSION: i64 = 2;
 pub const MINIMUM_SUPPORTED_SCHEMA_VERSION: i64 = 1;
 pub const SUPPORTED_POSTGRES_MAJOR: i32 = 17;
 const EMBEDDED_MIGRATOR: Migrator = sqlx::migrate!();
@@ -82,6 +82,7 @@ pub enum SchemaIssue {
     ColumnMismatch,
     MissingConstraint,
     MissingIndex,
+    IndexMismatch,
     MissingTrigger,
     MissingSeed,
 }
@@ -99,6 +100,7 @@ impl SchemaIssue {
             Self::ColumnMismatch => "schema_column_mismatch",
             Self::MissingConstraint => "schema_constraint_missing",
             Self::MissingIndex => "schema_index_missing",
+            Self::IndexMismatch => "schema_index_mismatch",
             Self::MissingTrigger => "schema_trigger_missing",
             Self::MissingSeed => "schema_seed_missing",
         }
@@ -621,6 +623,14 @@ async fn verify_connection(connection: &mut PgConnection) -> Result<(), Verifica
         ("links", "links_short_code_unique"),
         ("links", "links_owner_id_idx"),
         ("links", "links_management_token_digest_unique"),
+        ("links", "links_created_at_id_idx"),
+        ("links", "links_owner_created_at_id_idx"),
+        ("links", "links_visit_count_id_idx"),
+        ("links", "links_owner_visit_count_id_idx"),
+        ("links", "links_title_search_id_asc_idx"),
+        ("links", "links_title_search_id_desc_idx"),
+        ("links", "links_owner_title_search_id_asc_idx"),
+        ("links", "links_owner_title_search_id_desc_idx"),
         ("visits", "visits_link_occurred_id_idx"),
         ("link_tags", "link_tags_name_link_idx"),
         ("rate_buckets", "rate_buckets_account_identity_unique"),
@@ -645,6 +655,94 @@ async fn verify_connection(connection: &mut PgConnection) -> Result<(), Verifica
     .await
     .map_err(classify_verification_query)?;
     if index_count != index_pairs.len() as i64 {
+        return Err(VerificationError::Incompatible(SchemaIssue::MissingIndex));
+    }
+
+    let discovery_index_keys = [
+        ("links_created_at_id_idx", "(created_at, id)"),
+        (
+            "links_owner_created_at_id_idx",
+            "(owner_id, created_at, id)",
+        ),
+        ("links_visit_count_id_idx", "(visit_count, id)"),
+        (
+            "links_owner_visit_count_id_idx",
+            "(owner_id, visit_count, id)",
+        ),
+        ("links_title_search_id_asc_idx", "(title_search, id)"),
+        (
+            "links_title_search_id_desc_idx",
+            "(title_search DESC NULLS LAST, id DESC)",
+        ),
+        (
+            "links_owner_title_search_id_asc_idx",
+            "(owner_id, title_search, id)",
+        ),
+        (
+            "links_owner_title_search_id_desc_idx",
+            "(owner_id, title_search DESC NULLS LAST, id DESC)",
+        ),
+    ];
+    let discovery_index_names = discovery_index_keys
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>();
+    let installed_indexes = sqlx::query(
+        "SELECT i.relname, x.indisvalid, x.indisready, x.indisunique, \
+                x.indisprimary, x.indisexclusion, pg_get_indexdef(i.oid) AS definition \
+         FROM pg_catalog.pg_class i \
+         JOIN pg_catalog.pg_namespace n ON n.oid = i.relnamespace \
+         JOIN pg_catalog.pg_index x ON x.indexrelid = i.oid \
+         JOIN pg_catalog.pg_class t ON t.oid = x.indrelid \
+         WHERE n.nspname = $1 AND t.relname = 'links' \
+           AND i.relname = ANY($2)",
+    )
+    .bind(&schema_name)
+    .bind(discovery_index_names.as_slice())
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(classify_verification_query)?;
+    let installed_index_count = installed_indexes.len();
+    for row in installed_indexes {
+        let name: String = row
+            .try_get("relname")
+            .map_err(classify_verification_query)?;
+        let valid: bool = row
+            .try_get("indisvalid")
+            .map_err(classify_verification_query)?;
+        let ready: bool = row
+            .try_get("indisready")
+            .map_err(classify_verification_query)?;
+        let unique: bool = row
+            .try_get("indisunique")
+            .map_err(classify_verification_query)?;
+        let primary: bool = row
+            .try_get("indisprimary")
+            .map_err(classify_verification_query)?;
+        let exclusion: bool = row
+            .try_get("indisexclusion")
+            .map_err(classify_verification_query)?;
+        let definition: String = row
+            .try_get("definition")
+            .map_err(classify_verification_query)?;
+        let actual_keys = definition
+            .split_once(" USING btree ")
+            .map(|(_, keys)| keys.split_whitespace().collect::<Vec<_>>().join(" "));
+        let expected = discovery_index_keys
+            .iter()
+            .find(|(expected_name, _)| *expected_name == name)
+            .map(|(_, keys)| *keys);
+        if !valid
+            || !ready
+            || unique
+            || primary
+            || exclusion
+            || expected.is_none_or(|keys| actual_keys.as_deref() != Some(keys))
+        {
+            return Err(VerificationError::Incompatible(SchemaIssue::IndexMismatch));
+        }
+    }
+    if installed_index_count != discovery_index_keys.len() {
         return Err(VerificationError::Incompatible(SchemaIssue::MissingIndex));
     }
 

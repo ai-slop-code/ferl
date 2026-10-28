@@ -65,6 +65,11 @@ while preserving its volume. `stop` preserves data. The explicitly destructive
 Do not point test variables at a development or production database: the test
 restarts the harness-owned PostgreSQL container.
 
+Each `IsolatedTestDatabase` also uses a process-local async mutex to serialize
+sibling Tokio tests that share PostgreSQL database-scoped advisory locks. Its
+shared `flock` remains the cross-process coordination mechanism for test
+binaries and harness scripts.
+
 ## Current stage boundaries
 
 `ferl-server` (or no subcommand) runs the HTTP server. `migrate` applies the
@@ -72,10 +77,11 @@ embedded, versioned schema using only database and migration settings.
 `bootstrap-admin --username ...` uses its own bounded configuration profile,
 requires a migrated compatible schema, and emits one account-creation JSON DTO
 to stdout only after commit; its sanitized diagnostics use stderr. Startup and
-migrations never bootstrap. Part 04 registers account routes, and Part 06 adds
-single-link management routes. Part 07 adds only exact public GET/HEAD redirects
-and bounded best-effort visit ingestion. Link/tag discovery, reports and OTLP
-remain later stages.
+migrations never bootstrap. Part 04 registers account routes, Part 06 adds
+single-link management routes, Part 07 adds exact public GET/HEAD redirects and
+bounded best-effort visit ingestion, and Part 08 adds scoped link listing and
+tag discovery. Part 09 analytics reports and Part 10 OTLP/lifecycle remain later
+stages; this is not a release-readiness claim.
 Readiness is fail-closed until the production composition verifies migration
 history and required schema objects, then performs a bounded database probe.
 The verifier rechecks for database or schema recovery.
@@ -90,7 +96,16 @@ instrumentation.
 
 Part 05 adds production-composed effective-IP/creation-allowance services and TCP
 peer plumbing. Part 06 registers create/detail/PATCH/DELETE/management-token
-operations; collection listing and public redirects remain later stages.
+operations; Part 08 registers only `GET /api/v1/links` and `GET /api/v1/tags`
+in addition to the retained `POST /api/v1/links`. Link collection `Allow` is
+`GET, POST`; tag collection `Allow` is `GET`. Neither collection implies HEAD.
+Listing authenticates freshly before parsing filters, denies management tokens,
+defaults users/admins to own scope, and validates owner filter authority before
+decoding its value. Candidate filters and keyset boundaries run in one PostgreSQL
+statement with complete DTO/tag/owner hydration, checked cursors, and live
+pagination. Tag counts group distinct visible live links over the full scope.
+See [database operations](database.md) for the v2 migration, plan evidence,
+index details, and required maintenance rollout order.
 Create-link dispatch calls `CreationService::prepare(&Parts)` before query/body
 validation, consumes its private acknowledged charge by ownership, and opens a
 separate creation transaction. Account writes revalidate the retained credential
@@ -103,20 +118,24 @@ private deterministic test seam; production always uses the secure generator.
 active-link snapshot used by redirects. The public router preserves raw path
 spelling, builds `Location` from the exact resolved value, then nonblockingly
 hands an immutable event to a bounded in-memory queue. A configured worker pool
-uses the existing schema-v1 visit table to atomically insert an event and
+uses the original visit table to atomically insert an event and
 conditionally increment its link counter under the link-row lock. Retry and
 shutdown drain are bounded; UUID idempotency covers an ambiguous visit commit,
 and deletion/cascade ordering prevents resurrection. Abrupt process termination
 may lose events that remain buffered.
 
-`sh scripts/check.sh` runs all existing suites, including
+`sh scripts/check.sh` runs all suites, including
 `creation_order`, `link_creation`, `link_authorization`, `link_management`,
 `token_rotation`, `link_concurrency`, `link_failures`, `link_resolution`,
 `routing`, `redirects`, `visit_ingestion`, `analytics_failures`,
-`visit_concurrency`, and `link_process`. The process suite starts two independent production server
-executables, captures bounded stdout/stderr, and exercises shared CRUD,
+`visit_concurrency`, `link_process`, `link_listing`, `link_filters`,
+`link_pagination`, `tag_discovery`, `discovery_failures`, `discovery_values`,
+`discovery_process`, and migrations. Part 08's process test starts independent
+production server executables, captures bounded stdout/stderr, and exercises
+shared CRUD/list/discovery,
 credential/token invalidation, allowance accounting, trusted TCP peers, redirects,
-visit persistence across process/container restart, and the owned PostgreSQL-volume restart. No production test command, HTTP test route,
+cross-process cursor continuation, worker counter visibility, and the owned
+PostgreSQL-volume restart. No production test command, HTTP test route,
 npm download, or clock override is used. See
 [creation allowance](creation-allowance.md) for Part 05 charge semantics and
 the ownership-consuming Part 06 interface.

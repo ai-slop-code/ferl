@@ -49,6 +49,9 @@ async fn dispatch_inner(state: AppState, request: Request<Body>) -> Response {
     if crate::links::handlers::handles_path(request.uri().path()) {
         return crate::links::handlers::dispatch(state, request).await;
     }
+    if crate::tags::handler::handles_path(request.uri().path()) {
+        return crate::tags::handler::dispatch(state, request).await;
+    }
     let request_id = request
         .extensions()
         .get::<RequestId>()

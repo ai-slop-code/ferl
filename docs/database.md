@@ -2,13 +2,14 @@
 
 ## Supported versions and schema identity
 
-The initial supported database is PostgreSQL **17.x** (the integration gate
-uses the pinned PostgreSQL 17.6 image). The current ferl schema range is exactly
-version **1**. The binary becomes ready only when the configured database and
-current `search_path` contain the complete version-1 schema and its SQLx
-migration history. A newer/unknown migration, an older or incomplete history,
-a dirty row, a checksum mismatch, missing schema objects, or missing seed data
-is incompatible. `serve` remains live but unready; `migrate` exits nonzero and
+The supported database is PostgreSQL **17.x** (the integration gate uses the
+pinned PostgreSQL 17.6 image). The current ferl schema range is exactly version
+**2**. The binary becomes ready only when the configured database and current
+`search_path` contain the complete version-1 base schema, version-2 discovery
+indexes, and SQLx migration history with both required checksums. A newer/unknown
+migration, an older or incomplete history, a dirty row, a checksum mismatch,
+missing schema objects, or missing seed data is incompatible. `serve` remains
+live but unready; `migrate` exits nonzero and
 does not rewrite or repair an incompatible history. Deploy the binary that owns
 the required schema version or restore the schema through the normal database
 recovery process; never delete or edit `_sqlx_migrations` to force readiness.
@@ -33,7 +34,7 @@ passes to both the production `AppState` pool and the migration executable.
 ## Migration command
 
 Migrations are embedded and versioned in `migrations/`. Version 1 is
-`0001_initial.sql`; SQLx 0.9 records its checksum and status in
+`0001_initial.sql`; version 2 is `0002_discovery_indexes.sql`. SQLx 0.9 records each checksum and status in
 `_sqlx_migrations`. Run `ferl-server migrate` explicitly before rollout. It
 does not require or parse serving-only variables such as
 `FERL_PUBLIC_BASE_URL`, `FERL_CURSOR_KEY`, listener configuration, proxy trust,
@@ -111,10 +112,12 @@ Version 1 creates only these authoritative tables:
   accounting and bounded opportunistic pruning under the stable bucket lock;
   see [creation allowance](creation-allowance.md).
 
-The migration adds baseline unique digest/code and ownership indexes, visit
-ordering `(link_id, occurred_at DESC, id DESC)`, tag membership `(name,
-link_id)`, typed-bucket uniqueness, and charge `(bucket_id, charged_at)` lookup.
-It adds no full-width URL/header index, extension, or search-specific index.
+Version 1 adds baseline unique digest/code and ownership indexes, visit ordering
+`(link_id, occurred_at DESC, id DESC)`, tag membership `(name, link_id)`,
+typed-bucket uniqueness, and charge `(bucket_id, charged_at)` lookup. Version 2
+adds scoped and global link ordering paths for creation time and persisted visit
+count, plus scoped/global title-order B-trees for both directions. It adds no
+full-width destination URL/header index, extension, or trigram index.
 `destination_search` and `title_search` must be written atomically with source
 fields by later domain/repository operations; this migration enforces
 non-null/nullable pairing but does not implement Unicode normalization.
@@ -244,13 +247,89 @@ rows/counters already committed remain durable.
 An event denotes a ferl-issued 302 only; it is not evidence that the client
 received the response or reached the destination.
 
+## Part 08 discovery reads and migration rollout
+
+Version 2 is append-only; `0001_initial.sql` and its SQLx checksum are unchanged.
+`0002_discovery_indexes.sql` adds eight ordinary B-tree indexes:
+
+| Access path | Indexes |
+| --- | --- |
+| `(created_at, id)` order | global and `(owner_id, created_at, id)` |
+| `(visit_count, id)` order | global and `(owner_id, visit_count, id)` |
+| normalized title order | global/scoped, each with ASC NULLS LAST and DESC NULLS LAST keys |
+
+The two `visit_count` indexes are intentionally maintained on every successful
+Part 07 visit increment; this write amplification supports the global and
+owner-scoped orders without counting raw visit rows. Title keys index the bounded
+normalized title, not destination URLs. Existing `(link_id, name)` and
+`(name, link_id)` tag indexes support association predicates and byte-ordered
+group scans. PostgreSQL's C collation on `title_search`/`link_tags.name` is
+verified, as are all eight key definitions and the indexes' valid/ready state.
+Substring `LIKE` patterns use a bound `!` escape policy (`!`, `%`, and `_` are
+escaped); backslash is literal. With a leading wildcard and no `pg_trgm`, search
+is expected to scan the authorized candidate relation. No extension permissions,
+global extension lifecycle, or extension cleanup is required.
+
+The migration uses normal transactional `CREATE INDEX`, not `CREATE INDEX
+CONCURRENTLY`: SQLx's PostgreSQL migrator wraps version 2 DDL and its history row
+in one transaction. This preserves a clean retry and no partial-index state, but
+an index build takes a write-blocking table lock for its duration. Migration
+connect, lock, statement, and total deadlines remain bounded. If the lock or
+statement deadline expires, the transaction rolls back and the CLI returns
+failure; it does not mark the schema upgraded. The verifier then rejects missing
+or mismatched discovery indexes. Retry only after resolving the lock/contention
+cause and re-run `ferl-server migrate`.
+
+Because both binaries fail closed on migration history they do not recognize,
+this additive schema change is not an overlapping rolling upgrade: the v1 binary
+does not serve after version 2 is applied, and the v2 binary does not become
+ready before version 2 is applied. Required rollout is a maintenance sequence:
+drain/stop all v1 instances, apply migration with the v2 binary's `migrate`
+command, verify it exits successfully and the full schema verifier passes, then
+start v2 instances and wait for readiness. An index-build timeout is not a
+successful upgrade. Rollback to v1 requires restoring the pre-migration database
+state (or a deliberate forward fix); starting old binaries against v2 is not a
+rollback strategy.
+
+Real-PostgreSQL evidence is in `tests/migrations.rs` and
+`src/links/list_repository.rs::tests::production_keyset_query_plans_cover_scope_sort_filter_and_tag_paths`.
+It starts from fresh migration and from populated authentic v1 history, checks
+preservation of credentials, links, tags, visits/counters, reservations,
+bootstrap and rate charges, repeat/concurrent migration, missing/wrong index
+detection, and lock-timeout rollback/recovery. The query-plan fixture analyzes
+20,000 links and 22,000 associations using the production SQL builders and
+`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`: selective owner and global first and
+continuation pages across all sort directions, literal search, tag any/all, and
+tag discovery scope/search/group continuation. It records actual scans, indexes,
+sorts, rows, loops and buffer counts rather than requiring an index for broad
+scans. Maximum legal 8,192-byte destinations, 200-scalar titles, 64-scalar tags,
+and 256-scalar trimmed tag input remain insertable in
+`tests/discovery_values.rs`.
+
+`tests/legacy_compatibility.rs::v1_server_runs_on_v1_then_fails_closed_after_v2_upgrade_and_v2_runs_ready`
+builds the retained Part 07 v1 source in a temporary detached worktree and
+separate temporary Cargo target. Against the test-owned schema, it verifies the
+old server is ready on v1, runs the v1 migration command, upgrades with v2,
+observes the old binary's sanitized newer-schema incompatibility/unready state,
+and then verifies a new v2 server is ready and serves the list endpoint. The
+temporary worktree and target are removed by bounded cleanup. This is executable
+evidence for the stop/migrate/deploy order above, not a claim of mixed-version
+rolling compatibility.
+
+The independent-process Part 08 test also stops/restarts only the owned PostgreSQL
+container while `IsolatedTestDatabase` holds the shared harness lock; v2 schema,
+links, tags and visit counters remain available through a replacement process.
+No generic database is reset or repopulated.
+
 ## Isolated PostgreSQL tests
 
 `tests/support/database.rs::IsolatedTestDatabase::connect_from_harness()`
 validates the label-verified pinned harness, creates a UUID-named schema, and
 returns a fixture pool plus `schema_database_url()` for production-pool or
 process composition. `pool()` is explicitly fixture-scoped. `close()` closes
-pools and drops only that generated schema. The same `flock` file coordinates
-all test binaries and `scripts/postgres.sh` operations; the PostgreSQL restart
-test holds it through outage and recovery. No test points at arbitrary public
-schema data, and there is no silent skip when PostgreSQL is absent.
+pools and drops only that generated schema. A process-local async mutex serializes
+sibling Tokio test tasks because PostgreSQL advisory keys are database-scoped;
+the shared `flock` coordinates independent test binaries and
+`scripts/postgres.sh` operations. Restart tests hold both through outage and
+recovery. No test points at arbitrary public schema data, and there is no silent
+skip when PostgreSQL is absent.

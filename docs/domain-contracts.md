@@ -201,3 +201,47 @@ headers, codes, IPs, and event IDs are excluded. Graceful shutdown drains only
 within its configured bound; abrupt termination can lose buffered events.
 Persisted events represent server-issued redirects, not confirmed client receipt
 or destination navigation.
+
+## Part 08 discovery boundary
+
+The production collection handlers authenticate before parsing operation query
+values. A management token is a valid credential with the wrong operation scope
+and receives 403 without query-value work. Both collections default to own scope;
+only an admin may request all. The shared `RawQuery` decoder parses parameter
+names once and retains encoded values until scalar multiplicity and field
+authority have been checked. In particular, owner-filter presence from a
+non-admin is 403 even if its value is malformed; admin owner presence outside
+all-scope is 400 before value parsing. Permitted values then decode strictly as
+the exact `anonymous` literal or canonical UUID. Unknown parameters and repeated
+scalar values remain 400.
+
+Link-list q is full-fold/NFC-normalized with the same ICU4X 2.4.0/Unicode 18.0.0
+data as persisted destination/title comparison keys. A bound LIKE pattern uses
+`!` as its explicit escape character; `!`, `%`, and `_` are escaped and
+backslash is literal. Search fields use local OR; separate filter categories
+use AND. Any/all tags use association predicates, not a joined page relation.
+The database applies authorization, filters, keyset boundary, order, and
+`limit + 1` before returning at most 201 records. One statement snapshot also
+hydrates owner enabled state and ordered canonical tags, then the service calls
+`links::representation::build` for every checked Link DTO. It uses no per-item
+pool checkout, N+1 query, or Rust-side unbounded sort/page operation.
+
+Link and tag cursors reuse the sealed `CursorCodec`, `CursorContext::links/tags`,
+and typed boundaries. Actor UUID, scope/owner, normalized filters, sort and
+direction are bound; limit is excluded. Authentication and scope authority are
+renewed before cursor decoding on every request. Title ordering uses C
+collation, NULLS LAST in both directions, and explicit null boundaries; created
+time and persisted count boundaries retain their values plus UUID tie-breakers,
+so the previous row need not still exist. Tag discovery groups visible live
+associations and counts distinct link IDs over the complete scope before its
+name boundary; grouping counts cannot be reduced by pagination. Ordering by
+mutable title/count remains live pagination and can repeat/omit moved rows across
+requests; there is no cross-request snapshot promise or cursor store.
+
+Both query handlers use the production bounded primary pool and configured
+operation/acquire/statement/lock deadlines. SQL/pool/lock errors produce
+sanitized 503s, persisted conversion corruption produces sanitized 500s, and
+cancellation drops the in-flight query without fabricating an empty collection.
+Listing/discovery never charges creation allowance or emits visits. The shared
+outer envelope continues to assign fresh request IDs, no-store JSON errors and
+responses, Bearer challenges, and bodyless 405 HEAD responses with exact Allow.
