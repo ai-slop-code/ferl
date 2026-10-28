@@ -23,6 +23,9 @@ use super::service::{self, AccountFailure};
 const OPERATION_DEADLINE: Duration = Duration::from_secs(45);
 
 pub async fn dispatch(state: AppState, request: Request<Body>) -> Response {
+    if crate::analytics::handlers::handles_path(request.uri().path()) {
+        return crate::analytics::handlers::dispatch(state, request).await;
+    }
     let request_id = request
         .extensions()
         .get::<RequestId>()

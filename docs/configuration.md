@@ -23,6 +23,7 @@ values are never included in configuration debug output or logs.
 | `FERL_ACCOUNT_CREATE_LIMIT` | `60` | Positive integer, maximum 1,000,000 attempts per account per rolling 60 seconds (admins included). |
 | `FERL_CREATION_TIMEOUT_SECS` | `15` | Integer from 1 through 300 seconds; total authentication, eligibility, and independently committed allowance deadline. |
 | `FERL_LINK_OPERATION_TIMEOUT_SECS` | `30` | Integer from 1 through 300 seconds; bounds each link-service operation and tag-discovery operation, independent of body, pool, lock, and SQL statement bounds. |
+| `FERL_REPORT_OPERATION_TIMEOUT_SECS` | `30` | Integer from 1 through 300 seconds; bounds each complete analytics report request, including fresh authentication, authority checks, cursor handling, and report SQL. Report dispatch is outside the account API's fixed operation wrapper. |
 | `FERL_TRUSTED_PROXIES` | Empty | Comma-separated IP addresses/CIDRs. Empty entries and malformed ranges are rejected; private ranges are not trusted automatically. |
 | `FERL_CURSOR_KEY` | Required | Canonical unpadded base64url encoding of exactly 32 bytes. Keep stable across restarts and instances; do not generate an instance-local fallback. Part 03 cursor tokens use the authenticated `fc1<resource>.` envelope and up to 87,387 encoded bytes. |
 | `FERL_DB_POOL_MIN` | `0` | Integer from 0 through `FERL_DB_POOL_MAX`. |
@@ -109,6 +110,12 @@ and actual traces, metrics, and OTLP logs are delivered in Part 10. Analytics
 settings configure the bounded visit queue/workers, per-attempt and rollback
 deadlines, idempotent retry budget, and shutdown drain. Abrupt process termination
 can lose events still buffered in memory.
+
+Part 09 adds `FERL_REPORT_OPERATION_TIMEOUT_SECS`, which bounds complete report
+requests independently of the link-operation, account-wrapper, worker, pool, and
+PostgreSQL statement deadlines. See [analytics report operations](analytics-reports.md)
+for the snapshot boundary, v2/no-migration decision, and maximum-cursor transport
+requirements.
 
 API request bodies have a fixed 65,536-byte maximum; this limit is not an
 environment override.

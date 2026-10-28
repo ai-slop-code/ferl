@@ -455,7 +455,15 @@ async fn actual_link_http_contract_storage_failures_and_production_diagnostics_a
                     request(Method::GET, "/api/v1/links/a/visits", None, ""),
                 )
                 .await;
-                assert_error(unknown, StatusCode::NOT_FOUND, "not_found", "NotFound").await;
+                // Part 09 now registers this report route, so the selected
+                // protected operation challenges missing credentials.
+                assert_error(
+                    unknown,
+                    StatusCode::UNAUTHORIZED,
+                    "authentication_required",
+                    "Unauthorized",
+                )
+                .await;
 
                 // A failed new creation transaction leaves its independently
                 // acknowledged allowance but none of its reservation/link/tags.

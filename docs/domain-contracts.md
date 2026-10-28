@@ -138,8 +138,9 @@ tokens including prefix are capped at 87,387 ASCII bytes before decoding.
 Plaintext is therefore at most 65,496 bytes. A legal 8,192-byte grouping value
 may JSON-escape to 49,152 bytes (all control bytes) plus boundary/context
 metadata, which fits. `tests/cursor_codec.rs` exercises maximum-size mixed
-quote/backslash/control values; codec capacity does not claim later proxy or
-request-line deployment verification.
+quote/backslash/control values. Part 09 separately proves valid transport-captured
+8,192-byte UTF-8/quote-heavy values and cursor continuation over production TCP;
+see [analytics report operations](analytics-reports.md).
 
 ## DTO and database boundaries
 
@@ -164,13 +165,15 @@ this converter and anonymous accounting. Its private accounting `DatabaseInstant
 is distinct from request/cursor `Timestamp`: exact PostgreSQL binary microseconds
 and database interval arithmetic preserve rate-window boundaries without Chrono
 range panics or application-clock sampling.
-Link metadata uses a separate `DatabaseTimestamp` decoder for finite PostgreSQL
-binary microseconds. It rejects infinities/invalid database ranges before DTO
-conversion, then checks the narrower RFC 3339 wire range without invoking SQLx's
-Chrono binary timestamp decoder. The accounting and link timestamp types have
-separate responsibilities.
-Historical visit DTOs use the stored destination snapshot. No migration was
-needed: schema version 1 and `migrations/0001_initial.sql` are unchanged.
+Link and visit metadata use the checked `DatabaseTimestamp` decoder for finite
+PostgreSQL binary microseconds. It rejects infinities/invalid database ranges
+before DTO conversion, then checks the narrower RFC 3339 wire range without
+invoking SQLx's unchecked Chrono binary date addition. RFC 3339 output years stay
+within four digits (`0000` through `9999`). The accounting `DatabaseInstant`,
+persisted `DatabaseTimestamp`, and request/cursor `Timestamp` have separate
+responsibilities. Historical visit DTOs use the stored destination snapshot.
+Part 03 made no migration; Part 08 later advanced the current compatible schema
+to v2, and Part 09 retains v2 without a migration.
 
 ## Part 07 redirect and visit boundary
 
@@ -245,3 +248,26 @@ cancellation drops the in-flight query without fabricating an empty collection.
 Listing/discovery never charges creation allowance or emits visits. The shared
 outer envelope continues to assign fresh request IDs, no-store JSON errors and
 responses, Bearer challenges, and bodyless 405 HEAD responses with exact Allow.
+
+## Part 09 per-link analytics reports
+
+Part 09 registers only the three OpenAPI operations `listLinkVisits`,
+`getLinkVisitStats`, and `getLinkVisitBreakdown`. Raw visits return the complete
+stored event DTO (including immutable destination and occurrence snapshots) in
+`occurred_at DESC, id DESC` keyset order. Stats report persisted lifetime count
+and count every retained visit in `[from, to)` independently. Breakdowns statically
+map the eight validated dimensions, group the complete date-filtered visit set,
+and only then apply C-collated ascending/null-first keyset pagination. UTC day
+uses `(occurred_at AT TIME ZONE 'UTC')::date`; client IP ordering uses the
+canonical rendered string, not PostgreSQL `inet` order.
+
+Fresh auth and concealed per-link authority precede strict input/cursor decoding.
+The final authority check and report query use one read-only repeatable-read
+snapshot and one held connection. The operation deadline is
+`FERL_REPORT_OPERATION_TIMEOUT_SECS`; cancellations and SQL/pool faults cannot
+fabricate empty/zero success. Report cursors reuse the sealed codec/context and
+typed boundary values, exclude page size/credentials, reauthorize each page, and
+remain live across requests. Schema v2 and the existing visit-order index are
+sufficient; no migration or potentially oversized header index was added. Full
+implementation, transport, compatibility, and measured query-plan details are in
+[analytics report operations](analytics-reports.md).

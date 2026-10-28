@@ -79,9 +79,10 @@ requires a migrated compatible schema, and emits one account-creation JSON DTO
 to stdout only after commit; its sanitized diagnostics use stderr. Startup and
 migrations never bootstrap. Part 04 registers account routes, Part 06 adds
 single-link management routes, Part 07 adds exact public GET/HEAD redirects and
-bounded best-effort visit ingestion, and Part 08 adds scoped link listing and
-tag discovery. Part 09 analytics reports and Part 10 OTLP/lifecycle remain later
-stages; this is not a release-readiness claim.
+bounded best-effort visit ingestion, Part 08 adds scoped link listing and tag
+discovery, and Part 09 registers the three authorized per-link analytics reports.
+Part 10 OTLP/lifecycle and Part 11 release verification remain later stages; this
+is not a release-readiness claim.
 Readiness is fail-closed until the production composition verifies migration
 history and required schema objects, then performs a bounded database probe.
 The verifier rechecks for database or schema recovery.
@@ -124,13 +125,28 @@ shutdown drain are bounded; UUID idempotency covers an ambiguous visit commit,
 and deletion/cascade ordering prevents resurrection. Abrupt process termination
 may lose events that remain buffered.
 
+Part 09 report routes are `GET /api/v1/links/{code}/visits`, `GET
+/api/v1/links/{code}/stats`, and `GET
+/api/v1/links/{code}/stats/breakdown`; all other methods return bodyless 405 with
+`Allow: GET`. They authenticate and establish link authority before query/cursor
+decoding. Final credential/object validation and report SQL share one
+`REPEATABLE READ READ ONLY` transaction and held primary-pool connection; no row
+lock or hidden checkout is taken. `FERL_REPORT_OPERATION_TIMEOUT_SECS` bounds the
+whole report independently of the account API wrapper, worker timeouts, and
+database bounds. See [analytics report operations](analytics-reports.md) for
+snapshot/deletion semantics, cursor transport, query plans, and the v2/no-migration
+decision.
+
 `sh scripts/check.sh` runs all suites, including
 `creation_order`, `link_creation`, `link_authorization`, `link_management`,
 `token_rotation`, `link_concurrency`, `link_failures`, `link_resolution`,
 `routing`, `redirects`, `visit_ingestion`, `analytics_failures`,
 `visit_concurrency`, `link_process`, `link_listing`, `link_filters`,
 `link_pagination`, `tag_discovery`, `discovery_failures`, `discovery_values`,
-`discovery_process`, and migrations. Part 08's process test starts independent
+`discovery_process`, `visit_records`, `analytics_authorization`, `report_failures`,
+`report_process`, and migrations. Part 09 also has deterministic real-PostgreSQL
+worker-backed report and production-query-plan tests in `src/analytics/reports/tests.rs`.
+Part 08's process test starts independent
 production server executables, captures bounded stdout/stderr, and exercises
 shared CRUD/list/discovery,
 credential/token invalidation, allowance accounting, trusted TCP peers, redirects,

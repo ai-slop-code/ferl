@@ -52,7 +52,7 @@ pub struct LinkRecord {
 }
 
 /// A checked finite PostgreSQL timestamp decoded without SQLx's Chrono date
-/// addition. DTO conversion performs the narrower wire-range check later.
+/// addition. DTO conversion separately enforces the narrower RFC 3339 wire range.
 #[derive(Clone, Copy)]
 pub struct DatabaseTimestamp(i64);
 
@@ -78,13 +78,13 @@ impl Type<Postgres> for DatabaseTimestamp {
 impl<'r> Decode<'r, Postgres> for DatabaseTimestamp {
     fn decode(value: PgValueRef<'r>) -> Result<Self, BoxDynError> {
         if value.format() != PgValueFormat::Binary {
-            return Err("link timestamp requires binary decoding".into());
+            return Err("persisted timestamp requires binary decoding".into());
         }
         let micros = <i64 as Decode<Postgres>>::decode(value)?;
         // PostgreSQL datetime.h finite timestamp range (in microseconds since
         // 2000-01-01); the two extreme int64 values encode infinities.
         if !(-211_813_488_000_000_000..9_223_371_331_200_000_000).contains(&micros) {
-            return Err("link timestamp is outside PostgreSQL's finite range".into());
+            return Err("persisted timestamp is outside PostgreSQL's finite range".into());
         }
         Ok(Self(micros))
     }
@@ -101,7 +101,7 @@ pub struct VisitRecord {
     pub id: Uuid,
     pub link_id: Uuid,
     pub redirect_url: String,
-    pub occurred_at: DateTime<Utc>,
+    pub occurred_at: DatabaseTimestamp,
     pub method: String,
     pub client_ip: IpNet,
     pub referrer: Option<String>,

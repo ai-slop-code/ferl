@@ -158,6 +158,7 @@ pub struct Config {
     pub account_create_limit: u32,
     pub creation_timeout: Duration,
     pub link_operation_timeout: Duration,
+    pub report_operation_timeout: Duration,
     pub trusted_proxies: Vec<IpNet>,
     pub cursor_key: CursorKey,
     pub analytics: AnalyticsConfig,
@@ -230,6 +231,7 @@ impl Config {
             parse_bounded(&values, "FERL_ACCOUNT_CREATE_LIMIT", 60_u32, 1, 1_000_000)?;
         let creation_timeout = seconds(&values, "FERL_CREATION_TIMEOUT_SECS", 15)?;
         let link_operation_timeout = seconds(&values, "FERL_LINK_OPERATION_TIMEOUT_SECS", 30)?;
+        let report_operation_timeout = seconds(&values, "FERL_REPORT_OPERATION_TIMEOUT_SECS", 30)?;
         let cursor_key = parse_cursor_key(required(&values, "FERL_CURSOR_KEY")?)?;
         let trusted_proxies = parse_trusted_proxies(values.get("FERL_TRUSTED_PROXIES"))?;
 
@@ -295,6 +297,7 @@ impl Config {
             account_create_limit,
             creation_timeout,
             link_operation_timeout,
+            report_operation_timeout,
             trusted_proxies,
             cursor_key,
             analytics,
@@ -749,6 +752,7 @@ mod tests {
         assert_eq!(config.anonymous_create_limit, 5);
         assert_eq!(config.account_create_limit, 60);
         assert_eq!(config.link_operation_timeout, Duration::from_secs(30));
+        assert_eq!(config.report_operation_timeout, Duration::from_secs(30));
         assert_eq!(config.analytics.operation_timeout, Duration::from_secs(30));
         assert_eq!(config.analytics.rollback_timeout, Duration::from_secs(2));
         assert!(config.trusted_proxies.is_empty());
@@ -765,6 +769,28 @@ mod tests {
         );
         let error = Config::from_map(values).expect_err("zero link-operation deadline is invalid");
         assert_eq!(error.setting, "FERL_LINK_OPERATION_TIMEOUT_SECS");
+    }
+
+    #[test]
+    fn report_operation_deadline_has_its_own_validated_setting() {
+        let mut values = valid_values();
+        values.insert(
+            "FERL_REPORT_OPERATION_TIMEOUT_SECS".to_owned(),
+            "17".to_owned(),
+        );
+        let config = Config::from_map(values).expect("bounded report operation deadline is valid");
+        assert_eq!(config.report_operation_timeout, Duration::from_secs(17));
+
+        for invalid in ["0", "301"] {
+            let mut values = valid_values();
+            values.insert(
+                "FERL_REPORT_OPERATION_TIMEOUT_SECS".to_owned(),
+                invalid.to_owned(),
+            );
+            let error =
+                Config::from_map(values).expect_err("report deadline is independently bounded");
+            assert_eq!(error.setting, "FERL_REPORT_OPERATION_TIMEOUT_SECS");
+        }
     }
 
     #[test]

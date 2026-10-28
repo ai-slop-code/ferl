@@ -147,9 +147,15 @@ async fn route_and_eligibility_rejections_precede_body_reads_and_allowance_charg
                     .body(body)
                     .unwrap();
                 let response = ServiceExt::oneshot(enabled.clone(), unknown).await.unwrap();
-                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+                // Part 09 registers this formerly unimplemented report route:
+                // method/path selection succeeds before missing-credential auth.
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                assert_eq!(response.headers()["www-authenticate"], "Bearer");
                 assert!(!polled.load(Ordering::SeqCst));
-                let _ = json(response).await;
+                assert_eq!(
+                    json(response).await["error"]["code"],
+                    "authentication_required"
+                );
 
                 assert_eq!(
                     sqlx::query_scalar::<_, i64>("SELECT count(*) FROM rate_charges")
@@ -157,7 +163,7 @@ async fn route_and_eligibility_rejections_precede_body_reads_and_allowance_charg
                         .await
                         .unwrap(),
                     0,
-                    "eligibility, unknown route and wrong method do not charge"
+                    "eligibility, report authentication rejection and wrong method do not charge"
                 );
                 assert_eq!(
                     sqlx::query_scalar::<_, i64>("SELECT count(*) FROM links")

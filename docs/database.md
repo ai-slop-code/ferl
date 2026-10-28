@@ -321,6 +321,38 @@ container while `IsolatedTestDatabase` holds the shared harness lock; v2 schema,
 links, tags and visit counters remain available through a replacement process.
 No generic database is reset or repopulated.
 
+## Part 09 analytics reports (schema v2 retained)
+
+Part 09 adds no schema change. The existing
+`visits_link_occurred_id_idx (link_id, occurred_at DESC, id DESC)` supports
+inclusive/exclusive per-link visit filtering and `(occurred_at, id)` continuation.
+Summary reads the persisted `links.visit_count` and a matching-visit `count(*)`
+in one statement. Breakdown SQL uses static UTC-day, method, referrer, canonical
+rendered-IP, raw-user-agent, device, browser, and OS expressions, materializes
+complete filtered group counts, then applies explicit C-collated value pagination.
+No 8,192-byte referrer/user-agent B-tree is added. Existing schema-v2 integrity
+checks, index definitions, and the Part 08 migration/legacy-binary compatibility
+tests remain unchanged.
+
+Each report preflights authority for error precedence, then uses one held primary
+pool connection for a `REPEATABLE READ READ ONLY` transaction that revalidates
+the credential and link authority before reading report data. It takes no row
+lock. Deletion before this final snapshot is 404; deletion after it may allow
+the in-flight response to finish from the prior consistent snapshot. Subsequent
+requests perform fresh authentication and authorization. The one-connection
+composition is part of report tests. Operation, acquire, and statement deadlines
+remain independently bounded; cancellation drops the transaction and the
+failure/reuse tests prove the bounded pool is usable afterward.
+
+Production `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` evidence for raw first and
+continuation pages, narrow/broad summaries, and all eight breakdown first and
+continuation pages is recorded by
+`src/analytics/reports/tests.rs::production_report_query_builders_emit_analyze_buffer_plans_for_representative_data`.
+The plans include multiple links/owners and high-cardinality/null-heavy headers;
+they do not force sequential-scan settings. Small/broad aggregates can correctly
+use sequential scans. See [analytics report operations](analytics-reports.md)
+for the measured plan observations, cursor transport, and deployment behavior.
+
 ## Isolated PostgreSQL tests
 
 `tests/support/database.rs::IsolatedTestDatabase::connect_from_harness()`

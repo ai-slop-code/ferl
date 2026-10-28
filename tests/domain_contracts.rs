@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, str::FromStr};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use ferl_server::{
     db::records::{AccountRecord, DatabaseTimestamp, LinkRecord, VisitRecord},
     domain::{
@@ -248,19 +248,25 @@ fn account_and_link_dtos_expose_exact_fields_and_required_nulls() {
 
 #[test]
 fn visit_and_report_conversions_keep_snapshot_nulls_counts_and_bare_ip() {
-    let record = VisitRecord {
+    let make_record = |occurred_at, client_ip| VisitRecord {
         id: Uuid::from_u128(20),
         link_id: Uuid::from_u128(10),
         redirect_url: "https://example.test/old?x=1#top".to_owned(),
-        occurred_at: utc("2026-10-28T12:00:00.999999999+02:00"),
+        occurred_at,
         method: "HEAD".to_owned(),
-        client_ip: ipnet::IpNet::from_str("192.0.2.10/32").unwrap(),
+        client_ip,
         referrer: None,
         user_agent: None,
         device: "unknown".to_owned(),
         browser: "unknown".to_owned(),
         os: "unknown".to_owned(),
     };
+    let occurred_at = DatabaseTimestamp::from_utc(utc("2026-10-28T12:00:00.999999999+02:00"))
+        .expect("finite test timestamp is in PostgreSQL range");
+    let record = make_record(
+        occurred_at,
+        ipnet::IpNet::from_str("192.0.2.10/32").unwrap(),
+    );
     let visit = serde_json::to_value(VisitDto::from_record(&record, "rust-docs").unwrap()).unwrap();
     assert_eq!(visit["redirect_url"], "https://example.test/old?x=1#top");
     assert_eq!(visit["client_ip"], "192.0.2.10");
@@ -287,12 +293,25 @@ fn visit_and_report_conversions_keep_snapshot_nulls_counts_and_bare_ip() {
         .map(str::to_owned)
         .collect()
     );
+    let wire_out_of_range = DatabaseTimestamp::from_utc(
+        Utc.with_ymd_and_hms(10_000, 1, 1, 0, 0, 0)
+            .single()
+            .expect("Chrono can represent a finite PostgreSQL-range timestamp"),
+    )
+    .expect("year 10000 is still inside PostgreSQL's finite range");
     assert!(
         VisitDto::from_record(
-            &VisitRecord {
-                client_ip: ipnet::IpNet::from_str("192.0.2.0/24").unwrap(),
-                ..record
-            },
+            &make_record(
+                wire_out_of_range,
+                ipnet::IpNet::from_str("192.0.2.10/32").unwrap()
+            ),
+            "rust-docs"
+        )
+        .is_err()
+    );
+    assert!(
+        VisitDto::from_record(
+            &make_record(occurred_at, ipnet::IpNet::from_str("192.0.2.0/24").unwrap()),
             "rust-docs"
         )
         .is_err()
@@ -325,7 +344,19 @@ fn time_intervals_are_utc_microsecond_normalized_and_checked() {
     let lower = Timestamp::parse_rfc3339("2026-10-28T12:00:00.123456789+02:00").unwrap();
     let upper = Timestamp::parse_rfc3339("2026-10-28T10:00:01Z").unwrap();
     assert_eq!(lower.to_wire(), "2026-10-28T10:00:00.123456Z");
+    assert_eq!(
+        Timestamp::parse_rfc3339("0000-01-01T00:00:00Z")
+            .unwrap()
+            .to_wire(),
+        "0000-01-01T00:00:00.000000Z",
+        "four-digit year zero is valid under the locked RFC 3339 format checker"
+    );
     assert!(TimeInterval::new(Some(lower), Some(upper)).is_ok());
     assert!(TimeInterval::new(Some(upper), Some(lower)).is_err());
+    let outside_rfc3339 = Utc
+        .with_ymd_and_hms(10_000, 1, 1, 0, 0, 0)
+        .single()
+        .expect("Chrono supports this timestamp");
+    assert!(Timestamp::from_unix_micros(outside_rfc3339.timestamp_micros()).is_err());
     assert!(DestinationUrl::parse("https://internal.example/").is_ok());
 }
