@@ -73,6 +73,9 @@ async fn dispatch_inner(state: AppState, request: Request<Body>) -> Response {
     let principal = match authenticate(&state.pool, &parts.headers, state.acquire_timeout).await {
         Ok(Some(principal)) => principal,
         Ok(None) => {
+            crate::telemetry::metrics::record_auth_failure(
+                crate::telemetry::metrics::AuthFailureCategory::MissingCredential,
+            );
             return error::response(
                 request_id,
                 ErrorCode::AuthenticationRequired,
@@ -368,6 +371,18 @@ fn authentication_error(request_id: Uuid, failure: AuthFailure) -> Response {
 }
 
 fn service_error(request_id: Uuid, failure: AccountFailure) -> Response {
+    match failure {
+        AccountFailure::AuthenticationRequired => crate::telemetry::metrics::record_auth_failure(
+            crate::telemetry::metrics::AuthFailureCategory::MissingCredential,
+        ),
+        AccountFailure::InvalidCredentials => crate::telemetry::metrics::record_auth_failure(
+            crate::telemetry::metrics::AuthFailureCategory::InvalidCredential,
+        ),
+        AccountFailure::Forbidden => crate::telemetry::metrics::record_auth_failure(
+            crate::telemetry::metrics::AuthFailureCategory::ForbiddenScope,
+        ),
+        _ => {}
+    }
     let (code, message) = match failure {
         AccountFailure::AuthenticationRequired => (
             ErrorCode::AuthenticationRequired,
@@ -411,6 +426,9 @@ fn service_error(request_id: Uuid, failure: AccountFailure) -> Response {
 }
 
 fn forbidden(request_id: Uuid) -> Response {
+    crate::telemetry::metrics::record_auth_failure(
+        crate::telemetry::metrics::AuthFailureCategory::ForbiddenScope,
+    );
     error::response(
         request_id,
         ErrorCode::Forbidden,

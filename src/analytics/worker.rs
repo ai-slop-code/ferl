@@ -66,8 +66,14 @@ impl AnalyticsWorkers {
             failed
         };
         match timeout_at(deadline_at, join_all).await {
-            Ok(false) => WorkerStopOutcome::Drained,
-            Ok(true) => WorkerStopOutcome::WorkerFailed,
+            Ok(false) => {
+                self.queue.finish_queue();
+                WorkerStopOutcome::Drained
+            }
+            Ok(true) => {
+                self.queue.finish_queue();
+                WorkerStopOutcome::WorkerFailed
+            }
             Err(_) => {
                 self.tasks.abort_all();
                 let remaining = deadline_at.saturating_duration_since(Instant::now());
@@ -81,6 +87,7 @@ impl AnalyticsWorkers {
                     category = "analytics_drain_deadline",
                     "analytics worker drain exceeded its deadline; remaining buffered visits were dropped"
                 );
+                self.queue.finish_queue();
                 WorkerStopOutcome::DeadlineExceeded
             }
         }
@@ -100,6 +107,7 @@ pub(super) async fn worker_loop(
     receiver: Arc<Mutex<tokio::sync::mpsc::Receiver<VisitEvent>>>,
     cancellation: CancellationToken,
     config: AnalyticsConfig,
+    queue: VisitQueue,
 ) {
     loop {
         let next_event = {
@@ -111,11 +119,12 @@ pub(super) async fn worker_loop(
             }
         };
         if let Some(event) = next_event {
+            queue.record_dequeue();
             process_event(&pool, &event, config).await;
             continue;
         }
         if cancellation.is_cancelled() {
-            drain_queue(&pool, &receiver, config).await;
+            drain_queue(&pool, &receiver, config, &queue).await;
         }
         return;
     }
@@ -125,17 +134,22 @@ async fn drain_queue(
     pool: &PgPool,
     receiver: &Arc<Mutex<tokio::sync::mpsc::Receiver<VisitEvent>>>,
     config: AnalyticsConfig,
+    queue: &VisitQueue,
 ) {
     loop {
         let event = receiver.lock().await.try_recv();
         match event {
-            Ok(event) => process_event(pool, &event, config).await,
+            Ok(event) => {
+                queue.record_dequeue();
+                process_event(pool, &event, config).await;
+            }
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
             | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => return,
         }
     }
 }
 
+#[tracing::instrument(skip_all, name = "analytics.process_visit")]
 async fn process_event(pool: &PgPool, event: &VisitEvent, config: AnalyticsConfig) {
     let classification = match user_agent::classify(event.user_agent()) {
         ParseOutcome::Parsed(classification) => classification,
@@ -172,6 +186,7 @@ async fn process_event(pool: &PgPool, event: &VisitEvent, config: AnalyticsConfi
             }
         }
         if attempt < config.retry_budget {
+            metrics::record_analytics(metrics::AnalyticsOutcome::RetryAttempt, None);
             let backoff = retry_backoff(attempt);
             tracing::warn!(
                 category = last_category,

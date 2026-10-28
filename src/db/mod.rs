@@ -9,7 +9,10 @@ use std::time::Duration;
 use sqlx::{PgPool, Row};
 use tokio::time::timeout;
 
-use crate::app::ReadinessState;
+use crate::{
+    app::ReadinessState,
+    telemetry::metrics::{DbOperation, DbTimer},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProbeResult {
@@ -26,6 +29,7 @@ pub async fn check_readiness(
         return ProbeResult::Unavailable;
     }
 
+    let mut timer = DbTimer::new(DbOperation::ReadinessProbe);
     let result = timeout(acquire_timeout, async {
         sqlx::query("SELECT 1 AS ferl_probe")
             .fetch_one(pool)
@@ -35,8 +39,14 @@ pub async fn check_readiness(
     .await;
 
     match result {
-        Ok(Ok(true)) => final_state_after_successful_probe(state),
-        _ => final_state_after_failed_probe(state),
+        Ok(Ok(true)) => {
+            timer.success();
+            final_state_after_successful_probe(state)
+        }
+        _ => {
+            timer.failure();
+            final_state_after_failed_probe(state)
+        }
     }
 }
 

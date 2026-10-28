@@ -1,6 +1,6 @@
 # Implementation progress and agent handoff
 
-Handoff summary: Parts 01–08 are complete and merged into local `main`. Part 09 — Analytics reports is next.
+Handoff summary: Parts 01–10 are complete and merged into local `main`. Part 11 — Release verification is next and remains separate.
 
 Status lifecycle: Planned → In progress → Verified (awaiting merge) → Complete. Use Blocked when a required implementation, verification or Git integration step cannot finish. Complete requires a committed merge into local `main`, as defined in [git-workflow.md](git-workflow.md).
 
@@ -17,7 +17,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 07 Redirects and visit ingestion | Complete | Verified implementation `e7d0bb8d39fa22748642a9f9488e21cb505a8598` and integrated part tip `5f9fe68d8d8c171808fb4e3db9c1dddb6306d1c7` are integrated into local `main` by the explicit no-ff Part 07 merge recorded below. |
 | 08 Link and tag discovery | Complete | Verified implementation `1526f60527ac7fd9206fbbdef2b51a11b87d5af8`, integrated branch tip `fd9f4d35bda58b82a81834891d95f318fa3cc913`, based on Part 07 merge `9bcf7c0c021c994e76d0696633fe822f0a49a5e1`, is integrated by the explicit no-ff merge recorded in the Part 08 handoff below. The closing gate passed; only this completion handoff differs in the merge commit. |
 | 09 Analytics reports | Complete | Verified implementation `178e297` and handoff-only part tip `f08b805` from `implementation/09-analytics-reports`, based on Part 08 merge `12c10c234c492dcbdf554a3cc6e1321d83474361`, are integrated by the explicit no-ff merge recorded below. |
-| 10 Observability and lifecycle | Planned | — |
+| 10 Observability and lifecycle | Complete | Verified implementation `1d84f0a` and handoff-only branch tip `3f21bb4` are integrated from `implementation/10-observability-and-lifecycle` by the explicit no-ff merge from base `6153b768`; see the Part 10 handoff below. |
 | 11 Release verification | Planned | — |
 
 ## Recorded decisions
@@ -37,6 +37,8 @@ The baseline implementation choices are in [architecture.md](architecture.md). R
 - Historical registry blocker and resolution: the previous session's Podman VM reported `x509: certificate signed by unknown authority` because this environment's corporate proxy intercepts TLS. The owner confirmed the interception and explicitly authorized `podman pull --tls-verify=false` for image pulls only. The exact pinned pull succeeded; application PostgreSQL and HTTP TLS verification settings were not changed, and no CA/trust-store modification was made.
 - Historical Part 01 command decision: `migrate` and `bootstrap-admin` were then intentionally unavailable. Part 02 implemented the explicit migration command; bootstrap was assigned to Part 04 and had not been implemented at the Part 01 checkpoint. `serve` validates the database URL, public origin, cursor key, runtime bounds, and telemetry settings.
 - Telemetry endpoint, headers, timeouts, resources, and sampling settings are parsed/redacted now. Part 01 emits safe structured stdout and typed operation/outcome events; actual OTLP providers/export and collector-outage verification remain Part 10.
+- Part 10 keeps the resolved OpenTelemetry 0.33.1 API/SDK/OTLP family and tracing-opentelemetry 0.34.0. It uses async Tokio SDK batch processors (with the pinned SDK's explicit experimental features) and a manual-reader metric export task because the OTLP reqwest exporters are async; an empty-resource builder prevents SDK detectors. The unrestricted tracing appender is deliberately not used: a field-allowlisted LogRecord bridge and separate fixed-category SDK diagnostic layer preserve the privacy boundary.
+- Part 10 configuration precedence is standard OTEL over FERL compatibility values; signal-specific OTEL exporter variables and arbitrary resource detectors/attributes are rejected. `FERL_INSTANCE_ID` now fails validation because the resource instance ID must be generated per process run. No business prose/OpenAPI conflict was found; no normative business or OpenAPI passage was changed.
 
 Part 02 persistence decisions:
 
@@ -1048,6 +1050,116 @@ Execution checklist:
 - `main` was an ancestor of the implementation commit before integration. No
   history was rewritten, no remote was configured, and nothing was pushed. Local
   Git identity remains `LubosBa <30705301+LubosBa@users.noreply.github.com>`.
+
+## Part 10 execution checklist — 2026-10-29
+
+Status: **Complete**. The production implementation and closing gate were
+verified on `implementation/10-observability-and-lifecycle` and are integrated
+into local `main` by the explicit no-ff merge recorded below.
+The branch is based on the verified Part 09 merge
+`6153b7684383d066697f473731755c103c870484`. The repository-local identity is
+`LubosBa <30705301+LubosBa@users.noreply.github.com>`. The work began from clean `main`/index/tree;
+there are no remotes, and no history rewrite or push is part of this workflow.
+Verified implementation commit: `1d84f0aacf21bfcf82465463e3c1c623a23cb7f2`
+(`feat(part-10): add OTLP observability and bounded lifecycle`). This full hash
+is recorded by the handoff-only follow-up commit. Integrated part tip:
+`3f21bb4118bbf334a5741ebd9a8f2326a53d72fe` (`docs(part-10): record verified
+implementation handoff`). The explicit no-ff merge has parents
+`6153b7684383d066697f473731755c103c870484` and
+`3f21bb4118bbf334a5741ebd9a8f2326a53d72fe`. Before adding completion metadata,
+the staged merge tree exactly matched the reviewed part tip; only this Part 10
+completion handoff differs in the merge commit. The merge hash is intentionally
+not embedded in its own tree and is reported from local history after commit.
+The verified base includes schema v2. Part 10 adds no migration and leaves
+`migrations/0001_initial.sql`, `migrations/0002_discovery_indexes.sql`, the
+normative business specification, OpenAPI, and `Cargo.lock` unchanged.
+
+### Delivered behavior and decisions
+
+- `src/telemetry/providers.rs` owns actual OTLP/HTTP-protobuf trace, metric, and
+  LogRecord providers. It uses the resolved OpenTelemetry 0.33.1 API/SDK/OTLP
+  family and `tracing-opentelemetry` 0.34.0, async Tokio trace/log batch
+  processors, and a manual-reader metric task. Providers are process-owned; no
+  global SDK providers or detector-derived resource attributes are installed.
+- Resource attributes use one explicit allowlist and generated per-run
+  `service.instance.id`; standard OTEL settings take precedence over FERL
+  compatibility settings. Signal-specific exporter settings, arbitrary resource
+  attributes, and `FERL_INSTANCE_ID` overrides are rejected. No-endpoint mode
+  remains stdout-only and makes no implicit localhost export attempt.
+- `src/telemetry/logging.rs` retains structured stdout and adds an explicit
+  field-allowlisted OTLP LogRecord bridge. Trace/span attributes, log fields,
+  resource keys, metric dimensions, and exporter diagnostics are bounded and
+  sanitized. A separate six-slot, rate-limited diagnostic path writes fixed
+  categories to stdout only; raw exporter errors/configuration are not visited.
+  W3C traceparent is validated for parent-based sampling/correlation; accepted
+  tracestate is discarded and baggage is ignored.
+- `src/telemetry/metrics.rs` defines bounded HTTP, redirect, creation, auth,
+  database, analytics queue/event, and telemetry-log metrics, including
+  cancellation-safe request/DB timers. Analytics queue accounting is updated
+  under serialized ownership and reset/counts pending drops at shutdown.
+- Shutdown uses one absolute total deadline across readiness withdrawal, HTTP
+  drain and outstanding-handler cancellation, schema monitor, analytics drain,
+  pool closure, and telemetry export. During withdrawal the listener continues
+  polling health routes. Export attempts are serial, bounded, and have retries
+  disabled; provider flushing is skipped when its precomputed budget cannot fit.
+- The pinned Collector harness in `deploy/collector/otelcol.yaml` and
+  `scripts/collector.sh` captures all three OTLP signals to bounded JSON files.
+  `tests/telemetry_signals.rs` exercises the production executable over TCP with
+  the real PostgreSQL and Collector fixtures, including privacy canaries,
+  sampling/context, outage/recovery, queue pressure, replacement, readiness
+  withdrawal, and stalled-receiver shutdown behavior.
+
+Changed files: `.env.example`, `Cargo.toml`, `docs/{configuration,development,
+observability,operations}.md`, `scripts/{check,collector}.sh`,
+`deploy/collector/otelcol.yaml`, `spec/implementation/{acceptance-map,progress}.md`,
+`src/{accounts/handlers,accounts/service,analytics/handlers,analytics/queue,
+analytics/report_repository,analytics/repository,analytics/worker,app,
+auth/bearer,auth/guard,config,db/mod,http/request_id,http/router,links/handlers,
+links/service,main,rate_limit/service,redirects,shutdown,telemetry/logging,
+telemetry/metrics,telemetry/mod,telemetry/providers}.rs`,
+`tests/support/serving_process.rs`, and `tests/telemetry_signals.rs`.
+
+### Verification evidence
+
+- Tooling: `rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)`,
+  `cargo 1.99.1 (5f94df478 2026-08-27) (Homebrew)`, and Podman 6.1.4. The real
+  database fixture reports PostgreSQL 17.6. The Collector is
+  `docker.io/otel/opentelemetry-collector-contrib@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b`;
+  its image reports version 0.164.0.
+- `sh scripts/check.sh` — passed on the final implementation. It ran
+  `cargo fmt --all -- --check`,
+  `cargo check --workspace --all-targets --all-features`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace --all-targets`, and `cargo test --doc`. The full gate
+  reported **218 all-target tests** (including the binary target with 0 tests)
+  and **3 doctests** passed; none failed or were ignored. It used the real pinned
+  PostgreSQL and Collector fixtures.
+- Fresh lifecycle rerun:
+  `FERL_TEST_DATABASE_URL=postgres://ferl:ferl@127.0.0.1:55432/ferl_test FERL_TEST_POSTGRES_CONTAINER=ferl-stage01-postgres FERL_TEST_POSTGRES_PORT=55432 FERL_TEST_OTEL_ENDPOINT=http://127.0.0.1:43180 FERL_TEST_OTEL_CAPTURE_DIR=$PWD/target/collector-captures/default FERL_COLLECTOR_RUN_ID=default FERL_COLLECTOR_PORT=43180 cargo test --test telemetry_signals -- --nocapture`
+  — passed (1 production-process test; 40.28s). Measured graceful exits in
+  milliseconds: A 1,019; B 1,012; replacement C 1,013; root-sampling-zero D
+  1,015; no-endpoint 1,007; database-outage 1,014; readiness-withdrawal E 4,020;
+  stalled HTTP + stalled exporter 15,780. Readiness withdrawal was observed at
+  4ms and listener removal at 2,022ms. The stalled case exited below its
+  configured 60s total deadline; other measured exits were below 10s.
+- The production test verifies actual captured traces, metrics, and LogRecords;
+  W3C sampled/unsampled/invalid context and root-ratio-zero behavior; resource,
+  span, log and metric allowlists; absence of injected secrets/URLs/IPs/query,
+  cursor, title/tag, user-agent, baggage, and trace-state canaries; collector
+  refusal/restart; a real PostgreSQL stop/recovery; readiness 503 while liveness
+  remains available; and request cancellation/metric cleanup under slow export.
+- `git diff --check main` passed. Full tracked/untracked inventory was reviewed;
+  `git diff --exit-code main -- spec/server-business-logic.md spec/openapi.yaml
+  migrations/0001_initial.sql Cargo.lock` passed. No Part 10 implementation
+  change alters schema v2 or the business/OpenAPI contracts.
+- Acceptance contributions are mapped to concrete evidence for scenarios
+  **25, 29–31, 36, and 50** in `acceptance-map.md`. The independent release audit,
+  rollout/proxy checks, packaging, and release-wide OpenAPI verification remain
+  Part 11 and are not claimed here.
+
+No required Part 10 check remains unexecuted and no blocker remains. Part 10 is
+complete and merged. Part 11 — Release verification is next; its independent
+release audit remains unexecuted and no release-readiness claim is made.
 
 ## Per-part handoff template
 

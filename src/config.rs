@@ -133,14 +133,18 @@ pub struct AnalyticsConfig {
 }
 
 pub struct ShutdownConfig {
+    pub readiness_withdrawal_timeout: Duration,
     pub http_drain_timeout: Duration,
     pub total_timeout: Duration,
 }
 
 pub struct TelemetryConfig {
+    pub service_name: String,
     pub endpoint: Option<Url>,
     pub headers: TelemetryHeaders,
     pub export_timeout: Duration,
+    pub queue_capacity: usize,
+    pub batch_size: usize,
     pub trace_sample_ratio: f64,
     pub resource_attributes: BTreeMap<String, String>,
     pub environment: String,
@@ -193,11 +197,34 @@ impl ConfigError {
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
         let mut values = BTreeMap::new();
+        const OTEL_SETTINGS: &[&str] = &[
+            "OTEL_SERVICE_NAME",
+            "OTEL_RESOURCE_ATTRIBUTES",
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_HEADERS",
+            "OTEL_EXPORTER_OTLP_TIMEOUT",
+            "OTEL_EXPORTER_OTLP_PROTOCOL",
+            "OTEL_EXPORTER_OTLP_COMPRESSION",
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+            "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+            "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+            "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+            "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT",
+            "OTEL_EXPORTER_OTLP_LOGS_TIMEOUT",
+            "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+            "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+            "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+            "OTEL_TRACES_SAMPLER",
+            "OTEL_TRACES_SAMPLER_ARG",
+        ];
         for (name, value) in env::vars_os() {
             let Ok(name) = name.into_string() else {
                 continue;
             };
-            if !name.starts_with("FERL_") {
+            if !name.starts_with("FERL_") && !OTEL_SETTINGS.contains(&name.as_str()) {
                 continue;
             }
             let value = value.into_string().map_err(|_| {
@@ -275,6 +302,8 @@ impl Config {
             ));
         }
 
+        let readiness_withdrawal_secs =
+            parse_bounded(&values, "FERL_READINESS_WITHDRAWAL_SECS", 1_u64, 0, 10)?;
         let http_drain_timeout = seconds(&values, "FERL_HTTP_DRAIN_TIMEOUT_SECS", 30)?;
         let total_timeout = seconds(&values, "FERL_SHUTDOWN_TIMEOUT_SECS", 45)?;
         if total_timeout < http_drain_timeout {
@@ -302,6 +331,7 @@ impl Config {
             cursor_key,
             analytics,
             shutdown: ShutdownConfig {
+                readiness_withdrawal_timeout: Duration::from_secs(readiness_withdrawal_secs),
                 http_drain_timeout,
                 total_timeout,
             },
@@ -579,9 +609,20 @@ fn parse_trusted_proxies(value: Option<&String>) -> Result<Vec<IpNet>, ConfigErr
 }
 
 fn parse_telemetry(values: &BTreeMap<String, String>) -> Result<TelemetryConfig, ConfigError> {
-    let endpoint = match values.get("FERL_OTEL_ENDPOINT") {
+    reject_instance_id_override(values)?;
+    reject_signal_specific_otel_settings(values)?;
+
+    let service_name =
+        selected(values, "FERL_OTEL_SERVICE_NAME", "OTEL_SERVICE_NAME").unwrap_or("ferl");
+    validate_resource_value("OTEL_SERVICE_NAME", service_name)?;
+
+    // Standard OTEL settings take precedence over their FERL compatibility
+    // equivalents. This is intentionally resolved here rather than left to SDK
+    // environment readers, which could bypass our validation policy.
+    let endpoint_value = selected(values, "FERL_OTEL_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT");
+    let endpoint = match endpoint_value {
         None => None,
-        Some(value) if value.is_empty() => None,
+        Some("") => None,
         Some(value) => {
             let parsed = Url::parse(value)
                 .map_err(|_| ConfigError::new("FERL_OTEL_ENDPOINT", "must be an HTTP(S) URL"))?;
@@ -590,6 +631,9 @@ fn parse_telemetry(values: &BTreeMap<String, String>) -> Result<TelemetryConfig,
                 || authority_has_user_info(value)
                 || !parsed.username().is_empty()
                 || parsed.password().is_some()
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+                || authority_has_empty_port(value)
             {
                 return Err(ConfigError::new(
                     "FERL_OTEL_ENDPOINT",
@@ -599,91 +643,269 @@ fn parse_telemetry(values: &BTreeMap<String, String>) -> Result<TelemetryConfig,
             Some(parsed)
         }
     };
-    let headers = parse_telemetry_headers(values.get("FERL_OTEL_HEADERS"))?;
-    let export_timeout = seconds(values, "FERL_OTEL_TIMEOUT_SECS", 5)?;
-    let trace_sample_ratio = match values.get("FERL_OTEL_TRACE_SAMPLE_RATIO") {
+    let headers = parse_telemetry_headers(
+        values.get("FERL_OTEL_HEADERS"),
+        values.get("OTEL_EXPORTER_OTLP_HEADERS"),
+    )?;
+    let export_timeout = match values.get("OTEL_EXPORTER_OTLP_TIMEOUT") {
+        Some(value) => {
+            let millis = value
+                .parse::<u64>()
+                .ok()
+                .filter(|millis| (1..=300_000).contains(millis));
+            Duration::from_millis(millis.ok_or(ConfigError::new(
+                "OTEL_EXPORTER_OTLP_TIMEOUT",
+                "must be an integer from 1 through 300000 milliseconds",
+            ))?)
+        }
+        None => seconds(values, "FERL_OTEL_TIMEOUT_SECS", 5)?,
+    };
+    let queue_capacity = parse_bounded(values, "FERL_OTEL_QUEUE_CAPACITY", 1_024_usize, 1, 65_536)?;
+    let batch_size = parse_bounded(values, "FERL_OTEL_BATCH_SIZE", 128_usize, 1, queue_capacity)?;
+
+    if let Some(protocol) = values.get("OTEL_EXPORTER_OTLP_PROTOCOL")
+        && protocol != "http/protobuf"
+    {
+        return Err(ConfigError::new(
+            "OTEL_EXPORTER_OTLP_PROTOCOL",
+            "only http/protobuf is supported",
+        ));
+    }
+
+    if let Some(sampler) = values.get("OTEL_TRACES_SAMPLER")
+        && sampler != "parentbased_traceidratio"
+    {
+        return Err(ConfigError::new(
+            "OTEL_TRACES_SAMPLER",
+            "must be parentbased_traceidratio",
+        ));
+    }
+
+    let ratio = values
+        .get("OTEL_TRACES_SAMPLER_ARG")
+        .or_else(|| values.get("FERL_OTEL_TRACE_SAMPLE_RATIO"));
+    let trace_sample_ratio = match ratio {
         None => 1.0,
         Some(value) => value
             .parse::<f64>()
             .ok()
             .filter(|ratio| ratio.is_finite() && (0.0..=1.0).contains(ratio))
             .ok_or(ConfigError::new(
-                "FERL_OTEL_TRACE_SAMPLE_RATIO",
+                if values.contains_key("OTEL_TRACES_SAMPLER_ARG") {
+                    "OTEL_TRACES_SAMPLER_ARG"
+                } else {
+                    "FERL_OTEL_TRACE_SAMPLE_RATIO"
+                },
                 "must be a finite number from 0 through 1",
             ))?,
     };
-    let resource_attributes =
-        parse_resource_attributes(values.get("FERL_OTEL_RESOURCE_ATTRIBUTES"))?;
+    let mut resource_attributes = parse_resource_attributes(
+        values.get("FERL_OTEL_RESOURCE_ATTRIBUTES"),
+        "FERL_OTEL_RESOURCE_ATTRIBUTES",
+    )?;
+    for (key, value) in parse_resource_attributes(
+        values.get("OTEL_RESOURCE_ATTRIBUTES"),
+        "OTEL_RESOURCE_ATTRIBUTES",
+    )? {
+        resource_attributes.insert(key, value);
+    }
     let environment = values
         .get("FERL_ENVIRONMENT")
-        .cloned()
-        .unwrap_or_else(|| "local".to_owned());
-    if environment.is_empty()
-        || environment.len() > 128
-        || environment.chars().any(char::is_control)
-    {
-        return Err(ConfigError::new(
-            "FERL_ENVIRONMENT",
-            "must be non-empty, at most 128 bytes, and contain no control characters",
-        ));
-    }
-    let instance_id = match values.get("FERL_INSTANCE_ID") {
-        None => Uuid::new_v4(),
-        Some(value) => Uuid::parse_str(value)
-            .map_err(|_| ConfigError::new("FERL_INSTANCE_ID", "must be a UUID"))?,
-    };
+        .map(String::as_str)
+        .unwrap_or("local");
+    validate_resource_value("FERL_ENVIRONMENT", environment)?;
+    resource_attributes
+        .entry("deployment.environment.name".to_owned())
+        .or_insert_with(|| environment.to_owned());
+    let instance_id = Uuid::new_v4();
 
     Ok(TelemetryConfig {
+        service_name: service_name.to_owned(),
         endpoint,
         headers,
         export_timeout,
+        queue_capacity,
+        batch_size,
         trace_sample_ratio,
         resource_attributes,
-        environment,
+        environment: environment.to_owned(),
         instance_id,
     })
 }
 
-fn parse_telemetry_headers(value: Option<&String>) -> Result<TelemetryHeaders, ConfigError> {
-    let Some(value) = value else {
-        return Ok(TelemetryHeaders(Vec::new()));
-    };
-    if value.is_empty() {
-        return Ok(TelemetryHeaders(Vec::new()));
+fn selected<'a>(
+    values: &'a BTreeMap<String, String>,
+    ferl_name: &str,
+    otel_name: &str,
+) -> Option<&'a str> {
+    values
+        .get(otel_name)
+        .or_else(|| values.get(ferl_name))
+        .map(String::as_str)
+}
+
+fn reject_instance_id_override(values: &BTreeMap<String, String>) -> Result<(), ConfigError> {
+    if values.contains_key("FERL_INSTANCE_ID") {
+        return Err(ConfigError::new(
+            "FERL_INSTANCE_ID",
+            "instance identity is generated uniquely for each process run",
+        ));
     }
-    let mut headers = Vec::new();
-    for pair in value.split(',') {
-        let Some((name, content)) = pair.split_once('=') else {
+    Ok(())
+}
+
+fn reject_signal_specific_otel_settings(
+    values: &BTreeMap<String, String>,
+) -> Result<(), ConfigError> {
+    if values.contains_key("OTEL_EXPORTER_OTLP_COMPRESSION") {
+        return Err(ConfigError::new(
+            "OTEL_EXPORTER_OTLP_COMPRESSION",
+            "compression settings are not supported by this service configuration",
+        ));
+    }
+    for name in [
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+        "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+        "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_LOGS_TIMEOUT",
+        "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+        "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+        "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+        "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION",
+        "OTEL_EXPORTER_OTLP_METRICS_COMPRESSION",
+        "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION",
+    ] {
+        if values.contains_key(name) {
             return Err(ConfigError::new(
-                "FERL_OTEL_HEADERS",
-                "must contain comma-separated name=value pairs",
-            ));
-        };
-        if name.is_empty() || content.is_empty() {
-            return Err(ConfigError::new(
-                "FERL_OTEL_HEADERS",
-                "must contain comma-separated name=value pairs",
+                match name {
+                    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
+                    | "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
+                    | "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT" => "OTEL_EXPORTER_OTLP_ENDPOINT",
+                    "OTEL_EXPORTER_OTLP_TRACES_HEADERS"
+                    | "OTEL_EXPORTER_OTLP_METRICS_HEADERS"
+                    | "OTEL_EXPORTER_OTLP_LOGS_HEADERS" => "OTEL_EXPORTER_OTLP_HEADERS",
+                    "OTEL_EXPORTER_OTLP_TRACES_TIMEOUT"
+                    | "OTEL_EXPORTER_OTLP_METRICS_TIMEOUT"
+                    | "OTEL_EXPORTER_OTLP_LOGS_TIMEOUT" => "OTEL_EXPORTER_OTLP_TIMEOUT",
+                    "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION"
+                    | "OTEL_EXPORTER_OTLP_METRICS_COMPRESSION"
+                    | "OTEL_EXPORTER_OTLP_LOGS_COMPRESSION" => "OTEL_EXPORTER_OTLP_COMPRESSION",
+                    _ => "OTEL_EXPORTER_OTLP_PROTOCOL",
+                },
+                "signal-specific exporter settings are not supported; use the shared OTEL setting",
             ));
         }
-        let name = HeaderName::from_str(name).map_err(|_| {
-            ConfigError::new(
-                "FERL_OTEL_HEADERS",
-                "contains an invalid header name or value",
-            )
-        })?;
-        let content = HeaderValue::from_str(content).map_err(|_| {
-            ConfigError::new(
-                "FERL_OTEL_HEADERS",
-                "contains an invalid header name or value",
-            )
-        })?;
-        headers.push((name, content));
     }
+    Ok(())
+}
+
+fn authority_has_empty_port(value: &str) -> bool {
+    let Some(authority) = value
+        .split_once("://")
+        .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or_default())
+    else {
+        return false;
+    };
+    authority.ends_with(':') || authority.ends_with("]:")
+}
+
+fn validate_resource_value(setting: &'static str, value: &str) -> Result<(), ConfigError> {
+    if value.is_empty()
+        || value.len() > 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
+        return Err(ConfigError::new(
+            setting,
+            "must be 1-64 ASCII letters, digits, dot, underscore, or hyphen",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_telemetry_headers(
+    ferl_value: Option<&String>,
+    otel_value: Option<&String>,
+) -> Result<TelemetryHeaders, ConfigError> {
+    let mut headers = std::collections::HashMap::new();
+    let (value, setting, decode) = if let Some(value) = otel_value {
+        (Some(value), "OTEL_EXPORTER_OTLP_HEADERS", true)
+    } else {
+        (ferl_value, "FERL_OTEL_HEADERS", false)
+    };
+    if let Some(value) = value {
+        for pair in value.split(',').filter(|_| !value.is_empty()) {
+            let Some((name, content)) = pair.split_once('=') else {
+                return Err(ConfigError::new(
+                    setting,
+                    "must contain comma-separated name=value pairs",
+                ));
+            };
+            if name.is_empty() || content.is_empty() {
+                return Err(ConfigError::new(
+                    setting,
+                    "must contain comma-separated name=value pairs",
+                ));
+            }
+            let name = HeaderName::from_str(name).map_err(|_| {
+                ConfigError::new(setting, "contains an invalid header name or value")
+            })?;
+            let content = if decode {
+                decode_otlp_header_value(content).ok_or(ConfigError::new(
+                    setting,
+                    "contains invalid URL-encoded header syntax",
+                ))?
+            } else {
+                content.to_owned()
+            };
+            let content = HeaderValue::from_str(&content).map_err(|_| {
+                ConfigError::new(setting, "contains an invalid header name or value")
+            })?;
+            // HeaderName has case-insensitive equality and canonical formatting.
+            headers.insert(name, content);
+        }
+    }
+    let mut headers: Vec<_> = headers.into_iter().collect();
+    headers.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
     Ok(TelemetryHeaders(headers))
+}
+
+fn decode_otlp_header_value(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = *bytes.get(index + 1)?;
+            let low = *bytes.get(index + 2)?;
+            decoded.push((hex_nibble(high)? << 4) | hex_nibble(low)?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn parse_resource_attributes(
     value: Option<&String>,
+    setting: &'static str,
 ) -> Result<BTreeMap<String, String>, ConfigError> {
     let mut attributes = BTreeMap::new();
     let Some(value) = value else {
@@ -695,7 +917,7 @@ fn parse_resource_attributes(
     for pair in value.split(',') {
         let Some((key, content)) = pair.split_once('=') else {
             return Err(ConfigError::new(
-                "FERL_OTEL_RESOURCE_ATTRIBUTES",
+                setting,
                 "must contain comma-separated key=value pairs",
             ));
         };
@@ -704,13 +926,21 @@ fn parse_resource_attributes(
             || !key
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            || !matches!(
+                key,
+                "deployment.environment.name"
+                    | "deployment.name"
+                    | "service.namespace"
+                    | "cloud.region"
+            )
+            || validate_resource_value(setting, content).is_err()
             || attributes
                 .insert(key.to_owned(), content.to_owned())
                 .is_some()
         {
             return Err(ConfigError::new(
-                "FERL_OTEL_RESOURCE_ATTRIBUTES",
-                "contains an invalid or duplicate key/value pair",
+                setting,
+                "contains an unsupported, invalid, duplicate, or unsafe resource attribute",
             ));
         }
     }
@@ -758,6 +988,9 @@ mod tests {
         assert!(config.trusted_proxies.is_empty());
         assert_eq!(config.database.pool_max_connections, 10);
         assert_eq!(config.telemetry.trace_sample_ratio, 1.0);
+        assert_eq!(config.telemetry.service_name, "ferl");
+        assert_eq!(config.telemetry.queue_capacity, 1_024);
+        assert_eq!(config.telemetry.batch_size, 128);
     }
 
     #[test]
@@ -909,13 +1142,16 @@ mod tests {
         values.insert("FERL_OTEL_TRACE_SAMPLE_RATIO".to_owned(), "0.25".to_owned());
         values.insert(
             "FERL_OTEL_RESOURCE_ATTRIBUTES".to_owned(),
-            "deployment=local,team=backend".to_owned(),
+            "deployment.name=local,service.namespace=backend".to_owned(),
         );
         let config = Config::from_map(values.clone()).expect("valid telemetry configuration");
         assert_eq!(config.telemetry.trace_sample_ratio, 0.25);
         assert_eq!(config.telemetry.headers.entries_for_exporter().len(), 1);
         assert!(!format!("{:?}", config.telemetry.headers).contains("collector-secret"));
-        assert_eq!(config.telemetry.resource_attributes["deployment"], "local");
+        assert_eq!(
+            config.telemetry.resource_attributes["deployment.name"],
+            "local"
+        );
 
         values.insert("FERL_OTEL_TRACE_SAMPLE_RATIO".to_owned(), "1.01".to_owned());
         let error = Config::from_map(values).expect_err("sampling ratio above one is invalid");
@@ -929,6 +1165,143 @@ mod tests {
         );
         let error = Config::from_map(values).expect_err("endpoint user info is invalid");
         assert_eq!(error.setting, "FERL_OTEL_ENDPOINT");
+    }
+
+    #[test]
+    fn standard_otel_settings_override_ferl_compatibility_and_instance_ids_are_per_run() {
+        let mut values = valid_values();
+        values.insert(
+            "FERL_OTEL_ENDPOINT".to_owned(),
+            "http://legacy-collector:4318/legacy".to_owned(),
+        );
+        values.insert(
+            "OTEL_EXPORTER_OTLP_ENDPOINT".to_owned(),
+            "http://standard-collector:4318/base".to_owned(),
+        );
+        values.insert("FERL_OTEL_TIMEOUT_SECS".to_owned(), "3".to_owned());
+        values.insert("OTEL_EXPORTER_OTLP_TIMEOUT".to_owned(), "2200".to_owned());
+        values.insert("FERL_OTEL_TRACE_SAMPLE_RATIO".to_owned(), "0.25".to_owned());
+        values.insert(
+            "OTEL_TRACES_SAMPLER".to_owned(),
+            "parentbased_traceidratio".to_owned(),
+        );
+        values.insert("OTEL_TRACES_SAMPLER_ARG".to_owned(), "0.75".to_owned());
+        values.insert(
+            "FERL_OTEL_SERVICE_NAME".to_owned(),
+            "legacy-service".to_owned(),
+        );
+        values.insert("OTEL_SERVICE_NAME".to_owned(), "ferl-edge".to_owned());
+        values.insert(
+            "FERL_OTEL_HEADERS".to_owned(),
+            "authorization=legacy-secret".to_owned(),
+        );
+        values.insert(
+            "OTEL_EXPORTER_OTLP_HEADERS".to_owned(),
+            "authorization=standard%2Dsecret,x-scope=team-a".to_owned(),
+        );
+        values.insert(
+            "FERL_OTEL_RESOURCE_ATTRIBUTES".to_owned(),
+            "deployment.name=legacy".to_owned(),
+        );
+        values.insert(
+            "OTEL_RESOURCE_ATTRIBUTES".to_owned(),
+            "deployment.name=production,cloud.region=eu-west".to_owned(),
+        );
+
+        let first = Config::from_map(values.clone()).expect("both setting families validate");
+        let second = Config::from_map(values).expect("new process configuration validates");
+        assert_eq!(first.telemetry.service_name, "ferl-edge");
+        assert_eq!(
+            first.telemetry.endpoint.as_ref().unwrap().host_str(),
+            Some("standard-collector")
+        );
+        assert_eq!(first.telemetry.export_timeout, Duration::from_millis(2200));
+        assert_eq!(first.telemetry.trace_sample_ratio, 0.75);
+        assert_eq!(
+            first.telemetry.resource_attributes["deployment.name"],
+            "production"
+        );
+        assert_eq!(
+            first.telemetry.resource_attributes["cloud.region"],
+            "eu-west"
+        );
+        let headers = first.telemetry.headers.entries_for_exporter();
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers[0].1.to_str().unwrap(), "standard-secret");
+        assert_ne!(first.telemetry.instance_id, second.telemetry.instance_id);
+        let debug = format!("{:?}", first.telemetry.headers);
+        assert!(!debug.contains("standard-secret"));
+        assert!(!debug.contains("legacy-secret"));
+
+        let mut values = valid_values();
+        values.insert("FERL_INSTANCE_ID".to_owned(), Uuid::new_v4().to_string());
+        assert_eq!(
+            Config::from_map(values)
+                .expect_err("caller-selected IDs violate per-process identity")
+                .setting,
+            "FERL_INSTANCE_ID"
+        );
+    }
+
+    #[test]
+    fn rejects_unsafe_resource_keys_and_signal_specific_sdk_environment_bypass() {
+        let mut values = valid_values();
+        values.insert(
+            "OTEL_RESOURCE_ATTRIBUTES".to_owned(),
+            "host.name=host-canary".to_owned(),
+        );
+        assert_eq!(
+            Config::from_map(values)
+                .expect_err("default host detectors/resource data are not accepted")
+                .setting,
+            "OTEL_RESOURCE_ATTRIBUTES"
+        );
+
+        let mut values = valid_values();
+        values.insert(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT".to_owned(),
+            "http://unexpected-collector:4318".to_owned(),
+        );
+        assert_eq!(
+            Config::from_map(values)
+                .expect_err("signal-specific env must not bypass shared endpoint validation")
+                .setting,
+            "OTEL_EXPORTER_OTLP_ENDPOINT"
+        );
+
+        let mut values = valid_values();
+        values.insert(
+            "OTEL_EXPORTER_OTLP_COMPRESSION".to_owned(),
+            "gzip".to_owned(),
+        );
+        assert_eq!(
+            Config::from_map(values)
+                .expect_err("unsupported exporter compression must not bypass shared settings")
+                .setting,
+            "OTEL_EXPORTER_OTLP_COMPRESSION"
+        );
+
+        let mut values = valid_values();
+        values.insert("FERL_OTEL_QUEUE_CAPACITY".to_owned(), "4".to_owned());
+        values.insert("FERL_OTEL_BATCH_SIZE".to_owned(), "5".to_owned());
+        assert_eq!(
+            Config::from_map(values)
+                .expect_err("batch size must fit the bounded export queue")
+                .setting,
+            "FERL_OTEL_BATCH_SIZE"
+        );
+
+        let mut values = valid_values();
+        values.insert(
+            "OTEL_EXPORTER_OTLP_HEADERS".to_owned(),
+            "authorization=bad%2Gvalue".to_owned(),
+        );
+        assert_eq!(
+            Config::from_map(values)
+                .expect_err("malformed standard percent-encoding is rejected")
+                .setting,
+            "OTEL_EXPORTER_OTLP_HEADERS"
+        );
     }
 
     #[test]

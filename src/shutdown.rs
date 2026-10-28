@@ -1,6 +1,9 @@
 use std::{future::Future, io, pin::Pin, time::Duration};
 
-use tokio::{signal, time::timeout};
+use tokio::{
+    signal,
+    time::{sleep, timeout},
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -15,13 +18,25 @@ pub enum HttpDrainOutcome {
     ServerFailed,
 }
 
-pub async fn stop_accepting_and_drain(
+/// Mark readiness unavailable while continuing to poll the server future so
+/// health probes remain observable before acceptance is stopped.
+pub async fn withdraw_readiness(
     readiness: &ReadinessState,
+    server: Pin<&mut (dyn Future<Output = Result<(), io::Error>> + Send)>,
+    withdrawal: Duration,
+) -> Option<Result<(), io::Error>> {
+    readiness.begin_draining();
+    tokio::select! {
+        result = server => Some(result),
+        _ = sleep(withdrawal) => None,
+    }
+}
+
+pub async fn stop_accepting_and_drain(
     cancellation: &CancellationToken,
     server: Pin<&mut (dyn Future<Output = Result<(), io::Error>> + Send)>,
     drain_timeout: Duration,
 ) -> HttpDrainOutcome {
-    readiness.begin_draining();
     cancellation.cancel();
     match timeout(drain_timeout, server).await {
         Ok(Ok(())) => HttpDrainOutcome::Drained,
@@ -140,13 +155,10 @@ mod tests {
 
         let readiness = ReadinessState::new_accepting();
         assert!(readiness.is_accepting_work());
-        let result = stop_accepting_and_drain(
-            &readiness,
-            &cancellation,
-            server.as_mut(),
-            Duration::from_millis(50),
-        )
-        .await;
+        readiness.begin_draining();
+        let result =
+            stop_accepting_and_drain(&cancellation, server.as_mut(), Duration::from_millis(50))
+                .await;
         assert_eq!(result, HttpDrainOutcome::DeadlineExceeded);
         assert!(!readiness.is_accepting_work());
 

@@ -64,6 +64,13 @@ impl AppState {
             .start_workers(self.pool.clone(), self.analytics_config)
     }
 
+    /// Cancel any HTTP handler futures still active after the graceful drain
+    /// budget. Their envelopes return the existing sanitized 503 shape and
+    /// cancellation-safe in-flight guards release their instruments.
+    pub async fn cancel_admitted_http(&self, deadline: Duration) -> bool {
+        self.http_admission.cancel_and_wait(deadline).await
+    }
+
     /// Run the production schema verifier and update this instance's readiness
     /// state from the result. There is intentionally no public method that can
     /// mark an unverified schema compatible.
@@ -89,6 +96,8 @@ impl AppState {
 pub(crate) struct HttpAdmission {
     admitted: Arc<Semaphore>,
     in_flight: Arc<Semaphore>,
+    force_cancel: tokio_util::sync::CancellationToken,
+    max_in_flight: usize,
 }
 
 impl HttpAdmission {
@@ -98,7 +107,27 @@ impl HttpAdmission {
         Self {
             admitted: Arc::new(Semaphore::new(max_in_flight + max_waiting)),
             in_flight: Arc::new(Semaphore::new(max_in_flight)),
+            force_cancel: tokio_util::sync::CancellationToken::new(),
+            max_in_flight,
         }
+    }
+
+    pub(crate) fn force_cancel_token(&self) -> tokio_util::sync::CancellationToken {
+        self.force_cancel.clone()
+    }
+
+    async fn cancel_and_wait(&self, deadline: Duration) -> bool {
+        self.force_cancel.cancel();
+        let all_slots = match u32::try_from(self.max_in_flight) {
+            Ok(all_slots) => all_slots,
+            Err(_) => return false,
+        };
+        tokio::time::timeout(
+            deadline,
+            self.in_flight.clone().acquire_many_owned(all_slots),
+        )
+        .await
+        .is_ok_and(|permit| permit.is_ok())
     }
 
     pub(crate) fn try_admit(&self) -> Option<OwnedSemaphorePermit> {

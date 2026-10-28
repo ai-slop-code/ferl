@@ -10,6 +10,7 @@ use crate::{
         ids::{AccountId, LinkId},
         secret::{CredentialClass, CredentialHeader, SecretDigest},
     },
+    telemetry::metrics::{self, AuthFailureCategory, DbOperation, DbTimer},
 };
 
 use super::{AccountPrincipal, AccountRole, ManagementPrincipal, Principal};
@@ -24,6 +25,7 @@ pub enum AuthFailure {
 
 /// Parse the one Authorization field and resolve its complete-secret digest on
 /// every call. No role, enabled state, token, or principal is cached.
+#[tracing::instrument(skip_all, name = "credential.authenticate")]
 pub async fn authenticate(
     pool: &PgPool,
     headers: &HeaderMap,
@@ -31,19 +33,45 @@ pub async fn authenticate(
 ) -> Result<Option<Principal>, AuthFailure> {
     let credential = match CredentialHeader::parse(headers) {
         CredentialHeader::Missing => return Ok(None),
-        CredentialHeader::SuppliedInvalid => return Err(AuthFailure::Invalid),
+        CredentialHeader::SuppliedInvalid => {
+            metrics::record_auth_failure(AuthFailureCategory::InvalidCredential);
+            return Err(AuthFailure::Invalid);
+        }
         CredentialHeader::Parsed(credential) => credential,
     };
     let digest = credential.digest().clone();
+    let mut db_timer = DbTimer::new(DbOperation::CredentialLookup);
     let query = async {
         match credential.class() {
             CredentialClass::AccountKey => lookup_account(pool, &digest).await,
             CredentialClass::ManagementToken => lookup_management_token(pool, &digest).await,
         }
     };
-    match timeout(deadline, query).await {
+    let result = match timeout(deadline, query).await {
         Ok(result) => result,
         Err(_) => Err(AuthFailure::StorageUnavailable),
+    };
+    match result {
+        Ok(principal) => {
+            db_timer.success();
+            Ok(principal)
+        }
+        Err(failure) => {
+            if matches!(failure, AuthFailure::Invalid) {
+                // A successful lookup that found no matching credential is an
+                // authentication rejection, not a database availability fault.
+                db_timer.success();
+            } else {
+                db_timer.failure();
+            }
+            metrics::record_auth_failure(match failure {
+                AuthFailure::Invalid => AuthFailureCategory::InvalidCredential,
+                AuthFailure::StorageUnavailable => AuthFailureCategory::StorageUnavailable,
+                AuthFailure::Internal => AuthFailureCategory::Internal,
+                AuthFailure::Missing => AuthFailureCategory::MissingCredential,
+            });
+            Err(failure)
+        }
     }
 }
 

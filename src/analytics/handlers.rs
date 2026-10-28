@@ -318,6 +318,11 @@ fn json_response(value: &impl serde::Serialize, request_id: Uuid) -> Response {
 }
 
 fn report_error(request_id: Uuid, failure: ReportFailure) -> Response {
+    if matches!(failure, ReportFailure::InvalidCredentials) {
+        crate::telemetry::metrics::record_auth_failure(
+            crate::telemetry::metrics::AuthFailureCategory::InvalidCredential,
+        );
+    }
     let (code, message, category) = match failure {
         ReportFailure::InvalidCredentials => (
             ErrorCode::InvalidCredentials,

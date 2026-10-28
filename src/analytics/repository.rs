@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use sqlx::{PgPool, Postgres, Transaction};
 
-use crate::db::error::{DatabaseFailure, OperationStage, classify};
+use crate::{
+    db::error::{DatabaseFailure, OperationStage, classify},
+    telemetry::metrics::{DbOperation, DbTimer},
+};
 
 use super::{event::VisitEvent, user_agent::Classification};
 
@@ -20,6 +23,23 @@ pub(crate) struct PersistFailure {
 }
 
 pub(crate) async fn persist_once(
+    pool: &PgPool,
+    event: &VisitEvent,
+    classification: &Classification,
+    rollback_timeout: Duration,
+) -> Result<PersistOutcome, PersistFailure> {
+    let mut timer = DbTimer::new(DbOperation::AnalyticsPersist);
+    let result = persist_once_inner(pool, event, classification, rollback_timeout).await;
+    if result.is_ok() {
+        timer.success();
+    } else {
+        timer.failure();
+    }
+    result
+}
+
+#[tracing::instrument(skip_all, name = "db.analytics.persist_visit")]
+async fn persist_once_inner(
     pool: &PgPool,
     event: &VisitEvent,
     classification: &Classification,

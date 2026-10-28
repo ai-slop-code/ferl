@@ -14,6 +14,7 @@ use crate::{
     domain::time::TimeInterval,
     http::query::GroupBy,
     pagination::{breakdown_boundary::BreakdownBoundary, visit_boundary::VisitBoundary},
+    telemetry::metrics::{DbOperation, DbTimer},
 };
 
 use super::{report_query, reports::ReportFailure};
@@ -62,15 +63,30 @@ pub(crate) struct BreakdownRecord {
 }
 
 /// A precedence-only check. It returns an immutable target ID and no report data.
+#[tracing::instrument(skip_all, name = "db.report.authorize")]
 pub(crate) async fn authorize(
     pool: &PgPool,
     principal: &Principal,
     code: &str,
 ) -> Result<LinkId, ReportFailure> {
-    let row = authority(pool, principal, code).await.map_err(map_sql)?;
-    authorized_target(row, principal)
+    let mut timer = DbTimer::new(DbOperation::ReportQuery);
+    let result = async {
+        let row = authority(pool, principal, code).await.map_err(map_sql)?;
+        authorized_target(row, principal)
+    }
+    .await;
+    if matches!(
+        &result,
+        Ok(_) | Err(ReportFailure::InvalidCredentials | ReportFailure::NotFound)
+    ) {
+        timer.success();
+    } else {
+        timer.failure();
+    }
+    result
 }
 
+#[tracing::instrument(skip_all, name = "db.report.visits")]
 pub(crate) async fn visits(
     pool: &PgPool,
     principal: &Principal,
@@ -79,30 +95,65 @@ pub(crate) async fn visits(
     boundary: Option<&VisitBoundary>,
     limit_plus_one: i64,
 ) -> Result<Vec<VisitRecord>, ReportFailure> {
-    let (mut transaction, link_id) = begin_authorized_snapshot(pool, principal, code).await?;
+    let mut timer = DbTimer::new(DbOperation::ReportQuery);
+    let (mut transaction, link_id) = match begin_authorized_snapshot(pool, principal, code).await {
+        Ok(snapshot) => snapshot,
+        Err(failure) => {
+            if matches!(
+                failure,
+                ReportFailure::InvalidCredentials | ReportFailure::NotFound
+            ) {
+                timer.success();
+            }
+            return Err(failure);
+        }
+    };
     let rows = report_query::visits(link_id.as_uuid(), interval, boundary, limit_plus_one, false)
         .build_query_as::<VisitRecord>()
         .fetch_all(&mut *transaction)
         .await
         .map_err(map_sql)?;
     commit(transaction).await?;
+    timer.success();
     Ok(rows)
 }
 
+#[tracing::instrument(skip_all, name = "db.report.summary")]
 pub(crate) async fn summary(
     pool: &PgPool,
     principal: &Principal,
     code: &str,
     interval: TimeInterval,
 ) -> Result<SummaryRecord, ReportFailure> {
-    let (mut transaction, link_id) = begin_authorized_snapshot(pool, principal, code).await?;
+    let mut timer = DbTimer::new(DbOperation::ReportQuery);
+    let (mut transaction, link_id) = match begin_authorized_snapshot(pool, principal, code).await {
+        Ok(snapshot) => snapshot,
+        Err(failure) => {
+            if matches!(
+                failure,
+                ReportFailure::InvalidCredentials | ReportFailure::NotFound
+            ) {
+                timer.success();
+            }
+            return Err(failure);
+        }
+    };
     let record = report_query::summary(link_id.as_uuid(), interval, false)
         .build_query_as::<SummaryRecord>()
         .fetch_optional(&mut *transaction)
         .await
         .map_err(map_sql)?
-        .ok_or(ReportFailure::NotFound)?;
+        .ok_or(ReportFailure::NotFound);
+    let record = match record {
+        Ok(record) => record,
+        Err(ReportFailure::NotFound) => {
+            timer.success();
+            return Err(ReportFailure::NotFound);
+        }
+        Err(failure) => return Err(failure),
+    };
     commit(transaction).await?;
+    timer.success();
     Ok(record)
 }
 
@@ -156,6 +207,7 @@ pub(crate) async fn explain_breakdown(
     Ok(plan.0)
 }
 
+#[tracing::instrument(skip_all, name = "db.report.breakdown")]
 pub(crate) async fn breakdown(
     pool: &PgPool,
     principal: &Principal,
@@ -165,7 +217,19 @@ pub(crate) async fn breakdown(
     boundary: Option<&BreakdownBoundary>,
     limit_plus_one: i64,
 ) -> Result<Vec<BreakdownRecord>, ReportFailure> {
-    let (mut transaction, link_id) = begin_authorized_snapshot(pool, principal, code).await?;
+    let mut timer = DbTimer::new(DbOperation::ReportQuery);
+    let (mut transaction, link_id) = match begin_authorized_snapshot(pool, principal, code).await {
+        Ok(snapshot) => snapshot,
+        Err(failure) => {
+            if matches!(
+                failure,
+                ReportFailure::InvalidCredentials | ReportFailure::NotFound
+            ) {
+                timer.success();
+            }
+            return Err(failure);
+        }
+    };
     let rows = report_query::breakdown(
         link_id.as_uuid(),
         interval,
@@ -179,6 +243,7 @@ pub(crate) async fn breakdown(
     .await
     .map_err(map_sql)?;
     commit(transaction).await?;
+    timer.success();
     Ok(rows)
 }
 
