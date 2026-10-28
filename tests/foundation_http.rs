@@ -65,7 +65,6 @@ async fn fallback_and_method_errors_are_json_and_head_is_bodyless() {
         "/api",
         "/api/",
         "/api/v1/unknown",
-        "/api-sale",
         "/api/health/live/extra",
     ] {
         let response = call(app.clone(), Method::GET, path).await;
@@ -80,6 +79,16 @@ async fn fallback_and_method_errors_are_json_and_head_is_bodyless() {
         assert_eq!(body["error"]["code"], "not_found");
         assert_eq!(body["request_id"], header_id);
     }
+
+    // `/api-sale` is not owned by the reserved `/api` segment. It is a
+    // syntactically valid public code, so unavailable resolution storage is
+    // reported as 503 rather than the pre-Part-07 generic fallback 404.
+    let response = call(app.clone(), Method::GET, "/api-sale").await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!response.headers().contains_key("location"));
+    let body: serde_json::Value =
+        serde_json::from_slice(&response_body(response).await).expect("storage error is JSON");
+    assert_eq!(body["error"]["code"], "storage_unavailable");
 
     let response = call(app.clone(), Method::POST, "/api/health/live").await;
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);

@@ -45,6 +45,7 @@ tracing-opentelemetry = "0.34.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2.5"
 uuid = { version = "1.18", features = ["serde", "v4"] }
+woothee = "=0.13.0"
 
 [dev-dependencies]
 fs2 = "0.4.3"

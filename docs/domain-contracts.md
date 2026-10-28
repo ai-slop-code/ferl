@@ -171,3 +171,33 @@ Chrono binary timestamp decoder. The accounting and link timestamp types have
 separate responsibilities.
 Historical visit DTOs use the stored destination snapshot. No migration was
 needed: schema version 1 and `migrations/0001_initial.sql` are unchanged.
+
+## Part 07 redirect and visit boundary
+
+The public router dispatches from the original URI path, gives `/api` and
+`/api/*` whole-segment ownership, reserves `/assets/*`, and only resolves an
+exact valid single-segment lowercase code. It does not decode or normalize code
+spellings. GET and HEAD are selected explicitly; a successful response is an
+empty 302 with the checked stored serialization in `Location`, no-store, and no
+use of the incoming query or credentials. Resolution calls the Part 06 fresh
+single-statement active resolver; unavailable links and storage failures remain
+distinct.
+
+After constructing a successful response, capture creates one private,
+non-serializable event from that same immutable link snapshot, server UTC
+microsecond time, request method, transport-owned effective peer/proxy address,
+and each optional header only when exactly one complete UTF-8 value is no more
+than 8,192 bytes. The event enters a bounded `try_send` queue; neither the
+request nor response path waits for worker capacity, UA parsing, retries, or
+PostgreSQL. Worker retries retain the original UUID and snapshot. Local
+`woothee` 0.13.0 rules map UA families without external fetch/enrichment;
+missing/unrecognized values remain unknown while valid raw input is retained.
+Event contents have no `Debug` or serialization implementation.
+
+The visit queue/worker is process-local and best effort. Enqueue, parse,
+persist, duplicate, deletion-drop, and failure diagnostics use only bounded
+outcome values and queue depth; destinations, request query, credentials, raw
+headers, codes, IPs, and event IDs are excluded. Graceful shutdown drains only
+within its configured bound; abrupt termination can lose buffered events.
+Persisted events represent server-issued redirects, not confirmed client receipt
+or destination navigation.

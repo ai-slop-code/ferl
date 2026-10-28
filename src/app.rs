@@ -23,6 +23,9 @@ pub struct AppState {
     pub creation: crate::rate_limit::CreationService,
     pub links: crate::links::LinkService,
     pub client_ip: crate::client_ip::ClientIpResolver,
+    pub(crate) analytics: crate::analytics::VisitQueue,
+    analytics_config: crate::config::AnalyticsConfig,
+    pub(crate) link_operation_timeout: Duration,
     pub(crate) cursor_codec: CursorCodec,
     pub(crate) http_admission: HttpAdmission,
 }
@@ -30,10 +33,14 @@ pub struct AppState {
 impl AppState {
     pub fn from_config(config: &Config) -> Result<Self, pool::PoolBuildError> {
         let pool = pool::create_pool(&config.database)?;
+        let analytics = crate::analytics::VisitQueue::new(config.analytics.queue_capacity);
         Ok(Self {
             creation: crate::rate_limit::CreationService::from_config(pool.clone(), config),
             links: crate::links::LinkService::from_config(pool.clone(), config),
             client_ip: crate::client_ip::ClientIpResolver::new(&config.trusted_proxies),
+            analytics,
+            analytics_config: config.analytics,
+            link_operation_timeout: config.link_operation_timeout,
             pool,
             readiness: Arc::new(ReadinessState::new_accepting()),
             acquire_timeout: config.database.acquire_timeout,
@@ -41,6 +48,16 @@ impl AppState {
             cursor_codec: CursorCodec::new(config.cursor_key.copy_bytes()),
             http_admission: HttpAdmission::new(config.http_max_in_flight, config.http_max_waiting),
         })
+    }
+
+    /// Start the instance-local bounded analytics workers exactly once. The
+    /// returned guard owns their tasks and must be drained before closing the
+    /// shared database pool.
+    pub fn start_analytics_workers(
+        &self,
+    ) -> Result<crate::analytics::AnalyticsWorkers, crate::analytics::WorkerStartError> {
+        self.analytics
+            .start_workers(self.pool.clone(), self.analytics_config)
     }
 
     /// Run the production schema verifier and update this instance's readiness

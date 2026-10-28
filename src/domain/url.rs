@@ -8,6 +8,7 @@ use super::{ValidationError, invalid, short_code::ShortCode};
 pub const MAX_URL_BYTES: usize = 8_192;
 
 pub struct DestinationUrl(String);
+#[derive(Clone)]
 pub struct StoredUrl(String);
 #[derive(Clone)]
 pub struct PublicOrigin(String);

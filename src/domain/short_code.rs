@@ -9,7 +9,7 @@ const ALPHABET: &[u8; 36] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 const ACCEPTED_RANDOM_BYTE_MAX: u8 = 252; // 252 is the largest multiple of 36 below 256.
 const MAX_REJECTIONS_PER_CHARACTER: usize = 128;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(transparent)]
 pub struct ShortCode(String);
 

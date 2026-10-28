@@ -101,8 +101,8 @@ async fn executable_starts_without_database_and_stdout_excludes_secrets_and_raw_
 
     let private_path = private_path_result.expect("fallback responds");
     assert!(
-        private_path.starts_with("HTTP/1.1 404"),
-        "unexpected fallback response: {private_path}"
+        private_path.starts_with("HTTP/1.1 503"),
+        "valid public code with unavailable resolution storage returns 503: {private_path}"
     );
     assert_eq!(header(&private_path, "cache-control"), Some("no-store"));
     let fallback_body = private_path
@@ -111,6 +111,7 @@ async fn executable_starts_without_database_and_stdout_excludes_secrets_and_raw_
         .1;
     let fallback_json: serde_json::Value =
         serde_json::from_str(fallback_body).expect("fallback response is JSON");
+    assert_eq!(fallback_json["error"]["code"], "storage_unavailable");
     assert_eq!(
         fallback_json["request_id"],
         header(&private_path, "x-request-id").expect("request ID header")
@@ -122,7 +123,7 @@ async fn executable_starts_without_database_and_stdout_excludes_secrets_and_raw_
     assert!(stdout.contains("server_started"));
     assert!(stdout.contains("server_draining"));
     assert!(stdout.contains("server_shutdown_complete"));
-    assert!(stdout.contains("/{unmatched}"));
+    assert!(stdout.contains("/{short_code}"));
     assert!(!stdout.contains(DATABASE_SECRET));
     assert!(!stdout.contains(PRIVATE_PATH));
     assert!(!stdout.contains(PRIVATE_QUERY));

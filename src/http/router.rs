@@ -2,7 +2,7 @@ use axum::{
     Router,
     extract::{DefaultBodyLimit, Request, State},
     middleware::{self, Next},
-    routing::any,
+    routing::{MethodFilter, any, on},
 };
 use http::Method;
 use uuid::Uuid;
@@ -23,8 +23,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health/live", any(liveness))
         .route("/api/health/ready", any(readiness))
         .route("/api", any(account_api_dispatch))
-        .route("/{*path}", any(account_api_dispatch))
-        .fallback(not_found)
+        .route("/api/{*path}", any(account_api_dispatch))
+        .route(
+            "/{short_code}",
+            on(MethodFilter::GET, public_follow)
+                .on(MethodFilter::HEAD, public_follow)
+                .fallback(public_follow),
+        )
+        .fallback(path_dispatch)
         .with_state(state)
         .layer(DefaultBodyLimit::max(MAX_API_REQUEST_BODY_BYTES))
         .layer(middleware::from_fn_with_state(admission, admit_requests))
@@ -36,6 +42,25 @@ async fn account_api_dispatch(
     request: Request,
 ) -> axum::response::Response {
     crate::accounts::handlers::dispatch(state, request).await
+}
+
+async fn path_dispatch(
+    State(state): State<AppState>,
+    request: Request,
+) -> axum::response::Response {
+    let path = request.uri().path();
+    if path == "/api" || path.starts_with("/api/") {
+        crate::accounts::handlers::dispatch(state, request).await
+    } else {
+        crate::redirects::dispatch(state, request).await
+    }
+}
+
+async fn public_follow(
+    State(state): State<AppState>,
+    request: Request,
+) -> axum::response::Response {
+    crate::redirects::dispatch(state, request).await
 }
 
 async fn admit_requests(
@@ -97,19 +122,6 @@ async fn readiness(State(state): State<AppState>, request: Request) -> axum::res
         );
     }
     response::health(request_id, ready)
-}
-
-async fn not_found(request: Request) -> axum::response::Response {
-    let request_id = request
-        .extensions()
-        .get::<request_id::RequestId>()
-        .map_or_else(Uuid::new_v4, |request_id| request_id.0);
-    error::response(
-        request_id,
-        ErrorCode::NotFound,
-        "The requested resource was not found.",
-        None,
-    )
 }
 
 fn method_not_allowed(request_id: Uuid, allow: &'static str) -> axum::response::Response {

@@ -122,10 +122,13 @@ impl std::fmt::Debug for MigrationConfig {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct AnalyticsConfig {
     pub queue_capacity: usize,
     pub worker_concurrency: usize,
     pub retry_budget: u32,
+    pub operation_timeout: Duration,
+    pub rollback_timeout: Duration,
     pub drain_timeout: Duration,
 }
 
@@ -259,8 +262,16 @@ impl Config {
             )?,
             worker_concurrency: parse_bounded(&values, "FERL_ANALYTICS_WORKERS", 4_usize, 1, 64)?,
             retry_budget: parse_bounded(&values, "FERL_ANALYTICS_RETRY_BUDGET", 3_u32, 1, 10)?,
+            operation_timeout: seconds(&values, "FERL_ANALYTICS_OPERATION_TIMEOUT_SECS", 30)?,
+            rollback_timeout: seconds(&values, "FERL_ANALYTICS_ROLLBACK_TIMEOUT_SECS", 2)?,
             drain_timeout: seconds(&values, "FERL_ANALYTICS_DRAIN_TIMEOUT_SECS", 5)?,
         };
+        if analytics.rollback_timeout >= analytics.operation_timeout {
+            return Err(ConfigError::new(
+                "FERL_ANALYTICS_ROLLBACK_TIMEOUT_SECS",
+                "must be less than FERL_ANALYTICS_OPERATION_TIMEOUT_SECS",
+            ));
+        }
 
         let http_drain_timeout = seconds(&values, "FERL_HTTP_DRAIN_TIMEOUT_SECS", 30)?;
         let total_timeout = seconds(&values, "FERL_SHUTDOWN_TIMEOUT_SECS", 45)?;
@@ -738,6 +749,8 @@ mod tests {
         assert_eq!(config.anonymous_create_limit, 5);
         assert_eq!(config.account_create_limit, 60);
         assert_eq!(config.link_operation_timeout, Duration::from_secs(30));
+        assert_eq!(config.analytics.operation_timeout, Duration::from_secs(30));
+        assert_eq!(config.analytics.rollback_timeout, Duration::from_secs(2));
         assert!(config.trusted_proxies.is_empty());
         assert_eq!(config.database.pool_max_connections, 10);
         assert_eq!(config.telemetry.trace_sample_ratio, 1.0);
@@ -752,6 +765,27 @@ mod tests {
         );
         let error = Config::from_map(values).expect_err("zero link-operation deadline is invalid");
         assert_eq!(error.setting, "FERL_LINK_OPERATION_TIMEOUT_SECS");
+    }
+
+    #[test]
+    fn analytics_operation_and_rollback_bounds_are_independent_and_ordered() {
+        let mut values = valid_values();
+        values.insert(
+            "FERL_ANALYTICS_OPERATION_TIMEOUT_SECS".to_owned(),
+            "1".to_owned(),
+        );
+        values.insert(
+            "FERL_ANALYTICS_ROLLBACK_TIMEOUT_SECS".to_owned(),
+            "2".to_owned(),
+        );
+        let error = Config::from_map(values)
+            .expect_err("rollback must fit inside the worker operation bound");
+        assert_eq!(error.setting, "FERL_ANALYTICS_ROLLBACK_TIMEOUT_SECS");
+
+        let mut values = valid_values();
+        values.insert("FERL_ANALYTICS_WORKERS".to_owned(), "65".to_owned());
+        let error = Config::from_map(values).expect_err("worker concurrency is bounded");
+        assert_eq!(error.setting, "FERL_ANALYTICS_WORKERS");
     }
 
     #[test]

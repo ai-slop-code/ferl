@@ -1,6 +1,6 @@
 # Implementation progress and agent handoff
 
-Historical baseline note: instructions were prepared before implementation began. Parts 01–05 are complete and merged into local `main`; Part 06 is the current implementation stage.
+Handoff summary: Parts 01–07 are complete and merged into local `main`. Part 08 — Link and tag discovery is next.
 
 Status lifecycle: Planned → In progress → Verified (awaiting merge) → Complete. Use Blocked when a required implementation, verification or Git integration step cannot finish. Complete requires a committed merge into local `main`, as defined in [git-workflow.md](git-workflow.md).
 
@@ -14,8 +14,8 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 04 Authentication and accounts | Complete | Verified implementation `b740bb2d80c1bac590df52b72005efcc6bebb758` and integrated part tip `1aacfbca49b94c000cd7ab17b20a3609b4c740dd` from `implementation/04-authentication-and-accounts` are integrated by this explicit no-ff merge into `main` from base `15d9ddebdc0b15d06a0bea97883a6beaf1b1437a`. The tested implementation tree is unchanged; only this completion handoff is added in the merge commit. |
 | 05 Client IP and rate limits | Complete | Verified implementation `cda4b77866e96b498be144d6f819cd4a113a6896` and integrated part tip `6c21d8ab8a4d05f7c41166da98d8fb3d42ffd7d3` from `implementation/05-client-ip-and-rate-limits`, base `14ec982566c348f6b59e1f7a715f7eefc2ab9b19`, are integrated by this explicit local no-ff merge. Closing gate: 144 tests and 3 compile-fail doctests passed. |
 | 06 Link management | Complete | Verified implementation `264f3f35bcdab2e2f563d779fae6728e50b0c1a8` and integrated part tip `968b4eaaafae7f21723763c7fc76d2e4890ffa70` from `implementation/06-link-management`, based on `bbe53b3b439d961b88e0a56b877ad3e409411f2e`, are integrated by this explicit no-ff merge. |
-| 07 Redirects and visit ingestion | Planned | — |
-| 08 Link and tag discovery | Planned | — |
+| 07 Redirects and visit ingestion | Complete | Verified implementation `e7d0bb8d39fa22748642a9f9488e21cb505a8598` and integrated part tip `5f9fe68d8d8c171808fb4e3db9c1dddb6306d1c7` are integrated into local `main` by the explicit no-ff Part 07 merge recorded below. |
+| 08 Link and tag discovery | Planned (next) | Not started; begins only after Part 07 is merged. |
 | 09 Analytics reports | Planned | — |
 | 10 Observability and lifecycle | Planned | — |
 | 11 Release verification | Planned | — |
@@ -599,10 +599,157 @@ deployment feature was added.
   **30/51**, as mapped in `acceptance-map.md`. Later discovery, redirect/visit,
   analytics, OTLP, and full release conformance are explicitly not claimed.
 
-No required Part 06 check remains unexecuted and no blocker remains. **Next:
-Part 07 — Redirects and visit ingestion**, which may consume the documented
-representation builder and resolver but must still implement its own routes,
-redirect, event, queue, worker, and deletion-race behavior.
+No required Part 06 check remains unexecuted and no blocker remains. Part 07
+followed on its own branch and is complete as recorded below. **Next: Part 08 —
+Link and tag discovery.**
+
+## Part 07 handoff — 2026-10-28
+
+Status: **Complete**. The Part 07 implementation and full verification gate
+passed on `implementation/07-redirects-and-visit-ingestion` and are integrated
+into local `main` by this explicit no-ff merge.
+
+### Git checkpoint and traceability
+
+- Repository root: `$PWD`.
+- Initial checkpoint: clean `main`/index/tree at the expected Part 06 merge
+  `6db4ede67927a24381eddb3889d4479e1b7de17a`, with parents
+  `bbe53b3b439d961b88e0a56b877ad3e409411f2e` and
+  `968b4eaaafae7f21723763c7fc76d2e4890ffa70`. The retained Part 06 branch was
+  `implementation/06-link-management` at `968b4eaaafae7f21723763c7fc76d2e4890ffa70`;
+  its verified implementation was `264f3f35bcdab2e2f563d779fae6728e50b0c1a8`.
+  Original baseline `40b3ae713f0cd9bd2389f872d2953d29ef38f38d` is an ancestor.
+- `implementation/07-redirects-and-visit-ingestion` did not exist and was created
+  from that exact main checkpoint. There were no pending merge/rebase/cherry-pick/
+  revert/sequencer operations. Local identity is
+  `LubosBa <30705301+LubosBa@users.noreply.github.com>`; no global identity, remote, or push was set.
+- Base commit: `6db4ede67927a24381eddb3889d4479e1b7de17a`.
+- Verified implementation commit: `e7d0bb8d39fa22748642a9f9488e21cb505a8598`
+  (`feat(part-07): add redirects and visit ingestion`).
+- Integrated part-tip commit: `5f9fe68d8d8c171808fb4e3db9c1dddb6306d1c7`
+  (`docs(part-07): record verified implementation commit`), a handoff-only
+  follow-up that records the verified implementation hash.
+- Integration: explicit no-ff merge parents are
+  `6db4ede67927a24381eddb3889d4479e1b7de17a` and
+  `5f9fe68d8d8c171808fb4e3db9c1dddb6306d1c7`. The tested source/build tree is
+  unchanged; the merge added only this completion metadata. Its resulting hash
+  is reported after creation and is intentionally not embedded in its own tree.
+
+### Delivered Part 07 behavior
+
+- `http::router` reserves `/api` and `/api/*` before short codes, sends direct
+  `/assets/*`, root, extra segments and invalid spellings to 404, and registers
+  only explicit GET and HEAD handlers on the single-segment path. The method
+  router has a custom fallback that returns 405/`Allow: GET, HEAD`; it does not
+  install Axum's GET-to-HEAD behavior. Dispatch validates the original URI path
+  and never percent-decodes, case-folds, trims, or slash-normalizes a code.
+  `/assets`, `/health`, and `/api-sale` remain candidate codes; `/api` is
+  reserved as a whole segment.
+- Public follows ignore Authorization and the incoming query. They call the
+  Part 06 `links::resolve_active_link` once with the configured operation
+  deadline, obtaining a fresh one-statement primary-pool link/owner snapshot.
+  A successfully built response is an empty 302 with the exact checked stored
+  serialization in `Location`; no query merge, URL rewriting, network access,
+  DNS, destination fetch, or reachability check occurs. Unknown/disabled/
+  suspended/deleted are the same 404 with no Location/visit; storage unavailability
+  is 503 and persisted conversion corruption is 500, not a fabricated 404.
+- Only after 302 construction does the route create an event with the same
+  immutable destination snapshot, UUID, server UTC microsecond occurrence time,
+  original GET/HEAD method, and `ClientIpResolver`'s canonical transport-owned
+  peer/proxy address. A missing `ConnectInfo` is a safe analytics integration
+  drop, never an invented IP, and cannot replace the redirect. Referer and
+  User-Agent are independently captured only as one complete valid UTF-8 value
+  no larger than 8,192 bytes; invalid, missing, duplicated, and oversized values
+  are null without truncation or redirect rejection.
+- `VisitQueue::try_enqueue` uses the configured bounded Tokio channel without
+  awaiting capacity. The configured 1–64 worker pool parses with local bundled
+  Woothee 0.13.0 rules and persists into schema-v1 PostgreSQL; no report/list/
+  discovery endpoint was registered. Missing or unrecognized UA data yields
+  unknown device/browser/OS while valid raw UA remains stored. Events have no
+  Debug/serialization surface.
+- Each persistence transaction uses one pool connection and the established
+  lock order's live link row → visit child row: verify immutable ID/code under
+  `FOR UPDATE`, insert the stable UUID with `ON CONFLICT DO NOTHING`, and
+  increment the nonnegative counter only for a newly inserted event, in the same
+  transaction. Overflow, insert/counter errors, cancellation, and rollback
+  cannot leave a partial event/count; visit writes never change `updated_at`.
+  There is no account-authority gate because analytics changes neither account
+  authority nor link metadata. Deletion-first leaves no link and drops the event;
+  worker-first commits while holding the row lock, then deletion waits and
+  cascades its event/counter. Disabled state after issuance does not invalidate
+  an already-issued event.
+- Retries are bounded by `FERL_ANALYTICS_RETRY_BUDGET` after the initial attempt,
+  per-attempt `FERL_ANALYTICS_OPERATION_TIMEOUT_SECS`, independent DB acquire/
+  statement/lock limits, 25ms exponential backoff capped at 1s, and
+  `FERL_ANALYTICS_ROLLBACK_TIMEOUT_SECS`. Transient failures and even unknown
+  COMMIT acknowledgement retry only with the same event UUID/time/snapshot;
+  the unique insert makes a durable prior commit a no-op on retry. Unlike create
+  operations, this narrow internal visit retry is idempotent. No HTTP request
+  waits for persistence. The bounded in-memory queue is best effort; abrupt
+  process termination can lose unflushed events.
+- `AppState::start_analytics_workers` is the one-time composition seam.
+  `main::serve` starts the bounded pool; `shutdown::stop_accepting_and_drain`
+  first completes bounded HTTP drain, then `shutdown::drain_analytics` closes
+  enqueue admission and drains only until the independent analytics/total
+  shutdown bound before closing the shared pool. Timeouts cancel workers; queue
+  backlog does not control readiness. Only safe bounded outcomes and queue depth
+  are emitted through the telemetry facade/logger, not codes, URLs, IDs, IPs,
+  credentials, query strings, or captured headers.
+
+### Files, configuration, migration, and contract review
+
+- Added `src/analytics/{mod,event,queue,repository,user_agent,worker}.rs`,
+  `src/redirects.rs`, `tests/{routing,redirects,visit_ingestion,analytics_failures,visit_concurrency}.rs`,
+  and `tests/support/{redirects,analytics_commit_proxy}.rs`.
+- Updated `src/{app,config,lib,main,shutdown}.rs`,
+  `src/domain/{short_code,url}.rs`, `src/http/{request_id,router}.rs`,
+  `src/telemetry/metrics.rs`, `Cargo.toml`, `Cargo.lock`, `.env.example`,
+  `scripts/check.sh`, `tests/{foundation_http,foundation_process,link_creation,link_process,openapi_contracts}.rs`,
+  `tests/support/serving_process.rs`, `docs/{configuration,database,development,domain-contracts}.md`,
+  this progress record, and `acceptance-map.md`.
+- New serving configuration: `FERL_ANALYTICS_OPERATION_TIMEOUT_SECS` defaults
+  to 30s and `FERL_ANALYTICS_ROLLBACK_TIMEOUT_SECS` to 2s; rollback must be less
+  than the operation bound. Existing validated analytics settings now consumed
+  by production are capacity 2,048 (1–65,536), workers 4 (1–64), retry budget 3
+  (1–10), and drain 5s (1–300). Backoff is fixed/bounded in code. The event
+  queue is process-local; there is no durable queue or new command/test route.
+- No schema change/migration: schema v1, PostgreSQL 17.x/17.6 support, and
+  `migrations/0001_initial.sql` are unchanged. Normative
+  `spec/server-business-logic.md` and `spec/openapi.yaml` are unchanged. No
+  contract conflict was found. Scenario 51 evidence is only the implemented
+  redirect/HEAD/error subset; it does not claim release-wide conformance.
+
+### Closing verification evidence
+
+- `podman info`, `podman machine list`, `sh scripts/postgres.sh start`, and
+  `sh scripts/postgres.sh ready` passed before the gate. The existing pinned
+  PostgreSQL 17.6 `ferl-stage01-postgres` / persistent
+  `ferl-stage01-postgres-data` harness was reused; `ready` was rechecked after
+  the full gate. Independent process tests restart only this owned container
+  while holding the fixture's shared interprocess lock.
+- `sh scripts/check.sh` passed all five prescribed commands:
+  `cargo fmt --all -- --check`,
+  `cargo check --workspace --all-targets --all-features`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace --all-targets`, and `cargo test --doc`. Results:
+  **183 tests and 3 compile-fail doctests passed**, with none ignored/skipped:
+  84 library tests, binary target 0, and 99 integration tests across the existing
+  suites plus the five new Part 07 suites. Exact Part 07 process/route/worker
+  evidence is listed in `acceptance-map.md`.
+- The gate used `rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)` and
+  `cargo 1.99.1 (5f94df478 2026-08-27) (Homebrew)`. Locked metadata resolved
+  346 packages with no advertised dependency MSRV above package MSRV 1.94.
+  Rust 1.94 was not run and is not claimed. `git diff --check` and shell syntax
+  validation are also part of final review.
+- Acceptance contributions: scenarios **7, 13–15, 19, 21–22, 24–28, 35, 37–40,
+  and 50**, plus actual route/header/error/schema portions of **51**. Part 11
+  still owns complete cross-process pending-queue deletion/release audit and
+  release-wide OpenAPI/proxy conformance. Part 09 owns authorized reports;
+  Part 10 owns OTLP exporters/full signal privacy and exporter drain.
+
+No required Part 07 gate check remains unexecuted and no blocker remains.
+**Next: Part 08 — Link and tag discovery.** Part 09 reports, Part 10 OTLP/lifecycle
+export, and Part 11 release verification remain later work.
 
 ## Per-part handoff template
 

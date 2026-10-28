@@ -6,6 +6,9 @@ mod account_support;
 mod database_support;
 #[path = "support/openapi.rs"]
 mod openapi_validation;
+#[path = "support/redirects.rs"]
+#[allow(dead_code)]
+mod redirect_support;
 
 use std::collections::BTreeSet;
 
@@ -228,6 +231,251 @@ async fn actual_bootstrap_dto_and_account_http_responses_match_openapi_component
     assert!(!validates("AccountCollection", &too_many));
     assert!(!created.to_string().contains(&key));
     database.close().await;
+}
+
+#[tokio::test]
+async fn actual_redirect_head_and_failure_responses_match_openapi_components() {
+    use account_support::{migrated_database, seed_anonymous_link};
+    use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+    use ferl_server::app;
+    use http_body_util::BodyExt;
+    use openapi_validation::{validates_headers, validates_response};
+    use redirect_support::{call, request, state};
+    use std::{net::SocketAddr, time::Duration};
+    use tokio::time::timeout;
+
+    let database = migrated_database().await;
+    database
+        .verify(|database| {
+            Box::pin(async move {
+                seed_anonymous_link(database.pool(), "openapi-redirect").await;
+                let app_state = state(database.schema_database_url(), &[]);
+                app_state.verify_schema().await.unwrap();
+                let app = app::router(app_state.clone());
+                let peer = SocketAddr::from(([192, 0, 2, 91], 45091));
+
+                let get = call(
+                    app.clone(),
+                    request(Method::GET, "/openapi-redirect?credential=ignored", peer),
+                )
+                .await;
+                assert_eq!(get.status(), StatusCode::FOUND);
+                assert_eq!(
+                    get.headers()[header::LOCATION],
+                    "https://destination.example.test/path"
+                );
+                assert!(validates_headers("Redirect", get.headers()));
+                assert!(valid_request_id_header(get.headers()));
+                assert!(
+                    get.into_body()
+                        .collect()
+                        .await
+                        .unwrap()
+                        .to_bytes()
+                        .is_empty()
+                );
+
+                let head = call(
+                    app.clone(),
+                    request(Method::HEAD, "/openapi-redirect", peer),
+                )
+                .await;
+                assert_eq!(head.status(), StatusCode::FOUND);
+                assert!(validates_response("Redirect", head.headers(), None, true));
+                assert!(valid_request_id_header(head.headers()));
+                let head_headers = head.headers().clone();
+                assert!(!validates_response(
+                    "Redirect",
+                    &head_headers,
+                    Some(&json!({})),
+                    true
+                ));
+                assert!(
+                    head.into_body()
+                        .collect()
+                        .await
+                        .unwrap()
+                        .to_bytes()
+                        .is_empty()
+                );
+
+                let mut invalid_redirect_headers = HeaderMap::new();
+                invalid_redirect_headers
+                    .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+                invalid_redirect_headers
+                    .insert(header::LOCATION, HeaderValue::from_static("not-a-url"));
+                invalid_redirect_headers
+                    .insert("x-request-id", HeaderValue::from_static("not-a-uuid"));
+                assert!(!validates_headers("Redirect", &invalid_redirect_headers));
+                let mut invalid_request_id = head_headers.clone();
+                invalid_request_id.insert("x-request-id", HeaderValue::from_static("not-a-uuid"));
+                assert!(validates_headers("Redirect", &invalid_request_id));
+                assert!(!valid_request_id_header(&invalid_request_id));
+                let mut invalid_redirect_headers = head_headers.clone();
+                invalid_redirect_headers.remove(header::LOCATION);
+                assert!(!validates_headers("Redirect", &invalid_redirect_headers));
+                let mut invalid_redirect_headers = head_headers.clone();
+                invalid_redirect_headers
+                    .insert(header::CACHE_CONTROL, HeaderValue::from_static("public"));
+                assert!(!validates_headers("Redirect", &invalid_redirect_headers));
+
+                let miss = call(app.clone(), request(Method::GET, "/openapi-missing", peer)).await;
+                assert_eq!(miss.status(), StatusCode::NOT_FOUND);
+                assert!(!miss.headers().contains_key(header::LOCATION));
+                let miss_id = miss.headers()["x-request-id"].to_str().unwrap().to_owned();
+                let miss_headers = miss.headers().clone();
+                let miss_body: Value =
+                    serde_json::from_slice(&miss.into_body().collect().await.unwrap().to_bytes())
+                        .unwrap();
+                assert!(validates_response(
+                    "NotFound",
+                    &miss_headers,
+                    Some(&miss_body),
+                    false
+                ));
+                assert!(valid_request_id_header(&miss_headers));
+                assert_eq!(miss_body["request_id"], miss_id);
+                let mut malformed_error = miss_body.clone();
+                malformed_error["unexpected"] = json!("invalid control");
+                assert!(!validates("Error", &malformed_error));
+                assert!(!validates_response(
+                    "NotFound",
+                    &miss_headers,
+                    Some(&malformed_error),
+                    false
+                ));
+
+                let head_miss =
+                    call(app.clone(), request(Method::HEAD, "/openapi-missing", peer)).await;
+                assert_eq!(head_miss.status(), StatusCode::NOT_FOUND);
+                assert!(!head_miss.headers().contains_key(header::LOCATION));
+                assert!(validates_headers("HeadNotFound", head_miss.headers()));
+                assert!(
+                    head_miss
+                        .into_body()
+                        .collect()
+                        .await
+                        .unwrap()
+                        .to_bytes()
+                        .is_empty()
+                );
+                let mut invalid_error_headers = miss_headers.clone();
+                invalid_error_headers.insert("x-request-id", HeaderValue::from_static("bad-id"));
+                assert!(validates_headers("NotFound", &invalid_error_headers));
+                assert!(!valid_request_id_header(&invalid_error_headers));
+
+                let method = call(
+                    app.clone(),
+                    request(Method::POST, "/openapi-redirect", peer),
+                )
+                .await;
+                assert_eq!(method.status(), StatusCode::METHOD_NOT_ALLOWED);
+                assert_eq!(method.headers()[header::ALLOW], "GET, HEAD");
+                assert!(validates_short_link_allow(method.headers()));
+                assert!(valid_request_id_header(method.headers()));
+                let method_id = method.headers()["x-request-id"]
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                let method_headers = method.headers().clone();
+                let method_body: Value =
+                    serde_json::from_slice(&method.into_body().collect().await.unwrap().to_bytes())
+                        .unwrap();
+                assert!(validates_response(
+                    "MethodNotAllowed",
+                    &method_headers,
+                    Some(&method_body),
+                    false
+                ));
+                assert_eq!(method_body["request_id"], method_id);
+                let mut invalid_allow = method_headers.clone();
+                invalid_allow.insert(header::ALLOW, HeaderValue::from_static("GET"));
+                assert!(!validates_short_link_allow(&invalid_allow));
+
+                let unavailable = redirect_support::state(
+                    "postgres://ferl:ferl@127.0.0.1:1/ferl_test",
+                    &[("FERL_DB_ACQUIRE_TIMEOUT_SECS", "1")],
+                );
+                let unavailable_app = app::router(unavailable.clone());
+                let unavailable_get = call(
+                    unavailable_app.clone(),
+                    request(Method::GET, "/storage-unavailable", peer),
+                )
+                .await;
+                assert_eq!(unavailable_get.status(), StatusCode::SERVICE_UNAVAILABLE);
+                assert!(!unavailable_get.headers().contains_key(header::LOCATION));
+                let unavailable_id = unavailable_get.headers()["x-request-id"]
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                let unavailable_get_headers = unavailable_get.headers().clone();
+                let unavailable_body: Value = serde_json::from_slice(
+                    &unavailable_get
+                        .into_body()
+                        .collect()
+                        .await
+                        .unwrap()
+                        .to_bytes(),
+                )
+                .unwrap();
+                assert!(validates_response(
+                    "Unavailable",
+                    &unavailable_get_headers,
+                    Some(&unavailable_body),
+                    false
+                ));
+                assert!(valid_request_id_header(&unavailable_get_headers));
+                assert_eq!(unavailable_body["request_id"], unavailable_id);
+                let unavailable_head = call(
+                    unavailable_app.clone(),
+                    request(Method::HEAD, "/storage-unavailable", peer),
+                )
+                .await;
+                assert_eq!(unavailable_head.status(), StatusCode::SERVICE_UNAVAILABLE);
+                assert!(validates_headers(
+                    "HeadUnavailable",
+                    unavailable_head.headers()
+                ));
+                let unavailable_head_headers = unavailable_head.headers().clone();
+                assert!(
+                    unavailable_head
+                        .into_body()
+                        .collect()
+                        .await
+                        .unwrap()
+                        .to_bytes()
+                        .is_empty()
+                );
+                let mut invalid_head_headers = unavailable_head_headers;
+                invalid_head_headers
+                    .insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=1"));
+                assert!(!validates_headers("HeadUnavailable", &invalid_head_headers));
+
+                for (state, router) in [(unavailable, unavailable_app), (app_state, app)] {
+                    drop(router);
+                    let pool = state.pool.clone();
+                    drop(state);
+                    timeout(Duration::from_secs(5), pool.close())
+                        .await
+                        .expect("OpenAPI test pool closes before schema cleanup");
+                }
+            })
+        })
+        .await;
+}
+
+fn validates_short_link_allow(headers: &http::HeaderMap) -> bool {
+    openapi_validation::validates_headers("MethodNotAllowed", headers)
+        && headers
+            .get(http::header::ALLOW)
+            .is_some_and(|allow| allow == "GET, HEAD")
+}
+
+fn valid_request_id_header(headers: &http::HeaderMap) -> bool {
+    headers
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| uuid::Uuid::parse_str(value).is_ok())
 }
 
 #[test]
