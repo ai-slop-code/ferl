@@ -63,7 +63,8 @@ Parts are linked from [the implementation index](README.md). Earlier parts may t
 ### Part 05 cross-scenario contributions
 
 Traceability: branch `implementation/05-client-ip-and-rate-limits`, base
-`14ec982566c348f6b59e1f7a715f7eefc2ab9b19`. The Part 05 handoff in
+`14ec982566c348f6b59e1f7a715f7eefc2ab9b19`; verified implementation
+`cda4b77866e96b498be144d6f819cd4a113a6896`. The Part 05 handoff in
 [`progress.md`](progress.md#part-05-handoff--2026-10-28) records the verified
 implementation and integrated part-tip hashes and the explicit local merge state.
 The closing gate passed 144 tests plus 3 compile-fail doctests on Rust 1.99.1 and

@@ -218,7 +218,8 @@ pending pseudo-ref or merge/rebase/sequencer operation directory. Work uses the
 configured repository-local `LubosBa <30705301+LubosBa@users.noreply.github.com>` identity. No branch
 rewrite, remote configuration or push occurred.
 
-Verified implementation: pending reviewed implementation commit.
+Verified implementation: `cda4b77866e96b498be144d6f819cd4a113a6896`
+(`feat(part-05): add effective IP and durable creation allowance`).
 Integrated part tip: pending handoff-only commit and explicit local merge.
 
 ### Delivered behavior and integration contract
