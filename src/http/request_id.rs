@@ -142,10 +142,26 @@ fn safe_route_template(path: &str) -> &'static str {
     match path {
         "/api/health/live" => "/api/health/live",
         "/api/health/ready" => "/api/health/ready",
+        "/api/v1/me" => "/api/v1/me",
+        "/api/v1/me/api-key" => "/api/v1/me/api-key",
+        "/api/v1/admin/accounts" => "/api/v1/admin/accounts",
         "/api" | "/api/" => "/api",
+        _ if account_item_path(path) => "/api/v1/admin/accounts/{id}",
+        _ if account_key_path(path) => "/api/v1/admin/accounts/{id}/api-key",
         _ if path.starts_with("/api/") => "/api/{unmatched}",
         _ => "/{unmatched}",
     }
+}
+
+fn account_item_path(path: &str) -> bool {
+    path.strip_prefix("/api/v1/admin/accounts/")
+        .is_some_and(|tail| !tail.is_empty() && !tail.contains('/'))
+}
+
+fn account_key_path(path: &str) -> bool {
+    path.strip_prefix("/api/v1/admin/accounts/")
+        .and_then(|tail| tail.strip_suffix("/api-key"))
+        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
 }
 
 pub fn method_error(request_id: Uuid, allow: &'static str) -> Response {

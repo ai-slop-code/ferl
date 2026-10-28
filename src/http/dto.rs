@@ -88,16 +88,16 @@ pub struct LinkDto {
 #[derive(Serialize)]
 pub struct AccountCreationDto {
     account: AccountDto,
-    api_key: crate::domain::secret::OneTimeSecret,
+    api_key: crate::domain::secret::AccountApiKey,
 }
 #[derive(Serialize)]
 pub struct ApiKeyReplacementDto {
-    api_key: crate::domain::secret::OneTimeSecret,
+    api_key: crate::domain::secret::AccountApiKey,
 }
 #[derive(Serialize)]
 pub struct AnonymousLinkCreationDto {
     link: LinkDto,
-    management_token: crate::domain::secret::OneTimeSecret,
+    management_token: crate::domain::secret::ManagementTokenSecret,
 }
 #[derive(Serialize)]
 pub struct OwnedLinkCreationDto {
@@ -105,7 +105,7 @@ pub struct OwnedLinkCreationDto {
 }
 #[derive(Serialize)]
 pub struct ManagementTokenReplacementDto {
-    management_token: crate::domain::secret::OneTimeSecret,
+    management_token: crate::domain::secret::ManagementTokenSecret,
 }
 
 #[derive(Serialize)]
@@ -361,6 +361,13 @@ impl PatchAccountRequest {
 }
 
 impl AccountRole {
+    pub const fn as_database_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Admin => "admin",
+        }
+    }
+
     fn parse(value: &Value) -> Result<Self, RequestValidationError> {
         match value {
             Value::String(role) if role == "user" => Ok(Self::User),
@@ -655,19 +662,22 @@ impl<T> CollectionDto<T> {
 }
 
 impl AccountCreationDto {
-    pub fn new(account: AccountDto, api_key: crate::domain::secret::OneTimeSecret) -> Self {
+    pub fn new(account: AccountDto, api_key: crate::domain::secret::AccountApiKey) -> Self {
         Self { account, api_key }
     }
 }
 
 impl ApiKeyReplacementDto {
-    pub fn new(api_key: crate::domain::secret::OneTimeSecret) -> Self {
+    pub fn new(api_key: crate::domain::secret::AccountApiKey) -> Self {
         Self { api_key }
     }
 }
 
 impl AnonymousLinkCreationDto {
-    pub fn new(link: LinkDto, management_token: crate::domain::secret::OneTimeSecret) -> Self {
+    pub fn new(
+        link: LinkDto,
+        management_token: crate::domain::secret::ManagementTokenSecret,
+    ) -> Self {
         Self {
             link,
             management_token,
@@ -682,7 +692,7 @@ impl OwnedLinkCreationDto {
 }
 
 impl ManagementTokenReplacementDto {
-    pub fn new(management_token: crate::domain::secret::OneTimeSecret) -> Self {
+    pub fn new(management_token: crate::domain::secret::ManagementTokenSecret) -> Self {
         Self { management_token }
     }
 }
@@ -775,7 +785,7 @@ mod tests {
         Presence, RawCreateLink, RequestValidationError,
     };
     use crate::{
-        domain::{secret::OneTimeSecret, text::TagSet},
+        domain::{secret::AccountApiKey, text::TagSet},
         http::body::{RawObject, read_json_object_with_deadline},
     };
 
@@ -878,8 +888,7 @@ mod tests {
 
     #[test]
     fn one_time_secret_types_are_the_only_secret_response_fields() {
-        let secret = OneTimeSecret::generate(crate::domain::secret::CredentialClass::AccountKey)
-            .expect("OS randomness is available");
+        let secret = AccountApiKey::generate().expect("OS randomness is available");
         let json = serde_json::to_value(super::ApiKeyReplacementDto::new(secret)).unwrap();
         assert_eq!(
             json.as_object().unwrap().keys().collect::<Vec<_>>(),

@@ -16,6 +16,7 @@ pub enum CredentialClass {
     ManagementToken,
 }
 
+#[derive(Clone, PartialEq, Eq)]
 pub struct SecretDigest([u8; SECRET_BYTES]);
 pub struct ParsedCredential {
     class: CredentialClass,
@@ -25,6 +26,8 @@ pub struct ParsedCredential {
 /// A deliberate, serializable one-time output. Ordinary DTOs contain neither
 /// this type nor its digest; only explicit creation/replacement wrappers do.
 pub struct OneTimeSecret(String);
+pub struct AccountApiKey(OneTimeSecret);
+pub struct ManagementTokenSecret(OneTimeSecret);
 
 pub enum CredentialHeader {
     Missing,
@@ -58,6 +61,13 @@ impl SecretDigest {
 
     pub fn as_bytes(&self) -> &[u8; SECRET_BYTES] {
         &self.0
+    }
+
+    /// Validate a digest loaded from PostgreSQL without ever treating malformed
+    /// stored bytes as a caller credential failure.
+    pub fn from_database_bytes(bytes: &[u8]) -> Option<Self> {
+        let value: [u8; SECRET_BYTES] = bytes.try_into().ok()?;
+        Some(Self(value))
     }
 }
 
@@ -101,6 +111,34 @@ impl OneTimeSecret {
 
     pub fn digest(&self) -> SecretDigest {
         SecretDigest::from_presented_secret(&self.0)
+    }
+}
+
+impl AccountApiKey {
+    pub fn generate() -> Result<Self, SecretGenerationError> {
+        OneTimeSecret::generate(CredentialClass::AccountKey).map(Self)
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn digest(&self) -> SecretDigest {
+        self.0.digest()
+    }
+}
+
+impl ManagementTokenSecret {
+    pub fn generate() -> Result<Self, SecretGenerationError> {
+        OneTimeSecret::generate(CredentialClass::ManagementToken).map(Self)
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn digest(&self) -> SecretDigest {
+        self.0.digest()
     }
 }
 
@@ -177,6 +215,18 @@ impl Serialize for OneTimeSecret {
     }
 }
 
+impl Serialize for AccountApiKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl Serialize for ManagementTokenSecret {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
 impl fmt::Debug for SecretDigest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SecretDigest([REDACTED])")
@@ -195,6 +245,18 @@ impl fmt::Debug for ParsedCredential {
 impl fmt::Debug for OneTimeSecret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("OneTimeSecret([REDACTED])")
+    }
+}
+
+impl fmt::Debug for AccountApiKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AccountApiKey([REDACTED])")
+    }
+}
+
+impl fmt::Debug for ManagementTokenSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ManagementTokenSecret([REDACTED])")
     }
 }
 
@@ -361,6 +423,18 @@ mod tests {
             });
         assert_eq!(actual, expected);
         assert!(!format!("{digest:?}").contains(&actual));
+    }
+
+    #[test]
+    fn stored_digest_conversion_is_exactly_32_bytes() {
+        assert!(SecretDigest::from_database_bytes(&[0; 31]).is_none());
+        assert!(SecretDigest::from_database_bytes(&[0; 33]).is_none());
+        assert_eq!(
+            SecretDigest::from_database_bytes(&[7; 32])
+                .expect("valid digest")
+                .as_bytes(),
+            &[7; 32]
+        );
     }
 
     #[test]

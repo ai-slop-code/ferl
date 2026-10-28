@@ -5,7 +5,7 @@ use ferl_server::{
     db::records::{AccountRecord, LinkRecord, VisitRecord},
     domain::{
         count::{Count, PositiveCount},
-        secret::{CredentialClass, OneTimeSecret},
+        secret::{AccountApiKey, ManagementTokenSecret},
         short_code::ShortCode,
         text::{ComparisonText, SearchQuery, Tag, TagSet, Title, Username},
         time::{TimeInterval, Timestamp},
@@ -161,7 +161,7 @@ fn account_and_link_dtos_expose_exact_fields_and_required_nulls() {
     .unwrap();
     let account_creation = serde_json::to_value(AccountCreationDto::new(
         account_for_creation,
-        OneTimeSecret::generate(CredentialClass::AccountKey).unwrap(),
+        AccountApiKey::generate().unwrap(),
     ))
     .unwrap();
     assert_eq!(
@@ -171,7 +171,7 @@ fn account_and_link_dtos_expose_exact_fields_and_required_nulls() {
     assert_eq!(
         json_keys(
             &serde_json::to_value(ApiKeyReplacementDto::new(
-                OneTimeSecret::generate(CredentialClass::AccountKey).unwrap(),
+                AccountApiKey::generate().unwrap(),
             ))
             .unwrap()
         ),
@@ -180,7 +180,7 @@ fn account_and_link_dtos_expose_exact_fields_and_required_nulls() {
     assert_eq!(
         json_keys(
             &serde_json::to_value(ManagementTokenReplacementDto::new(
-                OneTimeSecret::generate(CredentialClass::ManagementToken).unwrap(),
+                ManagementTokenSecret::generate().unwrap(),
             ))
             .unwrap()
         ),
@@ -228,7 +228,7 @@ fn account_and_link_dtos_expose_exact_fields_and_required_nulls() {
         .collect()
     );
 
-    let token = OneTimeSecret::generate(CredentialClass::ManagementToken).unwrap();
+    let token = ManagementTokenSecret::generate().unwrap();
     let anonymous_creation =
         serde_json::to_value(AnonymousLinkCreationDto::new(anonymous_link, token)).unwrap();
     assert!(anonymous_creation.get("management_token").is_some());

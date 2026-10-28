@@ -154,8 +154,10 @@ The deployment-wide account-authority transaction gate uses the PostgreSQL
 two-int key `(0x4645524c, 0x41434354)` (`FERL` / `ACCT`). Account-authenticated
 link mutations take the shared transaction lock; every account write takes the
 exclusive lock, including bootstrap, key replacement, role/status changes,
-and deletion. The API takes an explicit `&mut Transaction`; it does not check
-out a hidden pool connection.
+creation, and deletion. Part 04 exposes a shared account mutation guard and an
+exclusive account-write guard; each owns its transaction and fresh caller state
+until explicit commit or rollback. Repository calls use the supplied
+transaction/connection and do not check out a hidden pool connection.
 
 Guarded mutations use READ COMMITTED. Acquire the potentially waiting advisory
 lock in one SQL statement, then re-read credential and authorization state in

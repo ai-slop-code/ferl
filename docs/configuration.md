@@ -4,8 +4,10 @@
 `serve` command requires `FERL_DATABASE_URL`, `FERL_PUBLIC_BASE_URL`, and
 `FERL_CURSOR_KEY`. The explicit `migrate` command has a command-specific
 configuration profile: it requires only `FERL_DATABASE_URL` and applicable
-`FERL_MIGRATE_*` settings, and does not parse serving-only variables. The
-`bootstrap-admin` command remains unavailable until Part 04. Invalid values
+`FERL_MIGRATE_*` settings, and does not parse serving-only variables.
+`bootstrap-admin` has a separate profile requiring only the database URL and
+the bounded `FERL_BOOTSTRAP_*` settings below. It does not parse serving-only
+origin, cursor, listener, proxy, analytics, or OTLP settings. Invalid values
 fail with only the setting name and a static reason in diagnostics. Secret
 values are never included in configuration debug output or logs.
 
@@ -59,6 +61,32 @@ configuration.
 
 The supported PostgreSQL/schema versions, migration lock, and exact
 incompatibility behavior are documented in [database.md](database.md).
+
+## One-time bootstrap command settings
+
+`ferl-server bootstrap-admin --username <username>` validates the exact
+username and its command-specific settings before contacting PostgreSQL. It
+requires a schema already migrated and compatible with the binary; it never
+runs migrations. The transaction serializes on the account-authority gate and
+the singleton `system_state` row. Only an acknowledged commit enables output.
+
+| Variable | Default | Bound / behavior |
+| --- | ---: | --- |
+| `FERL_BOOTSTRAP_CONNECT_TIMEOUT_SECS` | `10` | Integer from 1 through 300 seconds. |
+| `FERL_BOOTSTRAP_LOCK_TIMEOUT_SECS` | `5` | Integer from 1 through 300 seconds; bounds the exclusive authority gate. |
+| `FERL_BOOTSTRAP_STATEMENT_TIMEOUT_SECS` | `10` | Integer from 1 through 300 seconds. |
+| `FERL_BOOTSTRAP_TOTAL_TIMEOUT_SECS` | `30` | Integer from 1 through 300 seconds and at least the connection and lock bounds. |
+
+On success, stdout contains exactly one JSON line using the `AccountCreation`
+shape: `{"account":{...},"api_key":"ferl_ak_v1_..."}`. This is the only
+plaintext account-key output. Bootstrap diagnostics go to stderr, separately
+from the serving process's structured JSON stdout logs. Exit status is 0 for
+success, 2 for invalid configuration/username, and 1 for schema, storage,
+already-completed, or output failure. A failed output stream never reopens a
+committed bootstrap; repeating the command does not print a replacement key.
+If the result is lost after commit, recover through the operator's secure
+database/backup procedure. There is intentionally no automatic reset or second
+bootstrap path.
 
 Generate a cursor key with
 `python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode())'`.

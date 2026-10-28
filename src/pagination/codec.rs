@@ -29,6 +29,7 @@ const TAG_BYTES: usize = 16;
 const MAX_PLAINTEXT_BYTES: usize = MAX_CURSOR_ENVELOPE_BYTES - NONCE_BYTES - TAG_BYTES;
 const PREFIX_LENGTH: usize = 5;
 
+#[derive(Clone)]
 pub struct CursorCodec {
     key: [u8; 32],
 }

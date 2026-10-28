@@ -1,3 +1,7 @@
+#[path = "support/database.rs"]
+#[allow(dead_code)]
+mod database_support;
+
 use std::{
     process::Stdio,
     time::{Duration, Instant},
@@ -16,6 +20,9 @@ const PRIVATE_QUERY: &str = "destination=https%3A%2F%2Fprivate.example%2Ffull%3F
 
 #[tokio::test]
 async fn executable_starts_without_database_and_stdout_excludes_secrets_and_raw_urls() {
+    // Hold the harness interprocess lock while reserving a local listener so
+    // other process-level test binaries cannot claim the same ephemeral port.
+    let database = database_support::IsolatedTestDatabase::connect_from_harness().await;
     let reservation = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("reserve a local listener port");
@@ -125,10 +132,11 @@ async fn executable_starts_without_database_and_stdout_excludes_secrets_and_raw_
     assert!(!stdout.contains("sqlx"));
     assert!(!stdout.contains("127.0.0.1:1"));
     assert!(!stdout.contains("collector-secret"));
+    database.close().await;
 }
 
 #[tokio::test]
-async fn unavailable_operator_commands_and_invalid_startup_fail_safely() {
+async fn bootstrap_requires_its_database_profile_and_invalid_startup_fails_safely() {
     let version = tokio::time::timeout(
         Duration::from_secs(5),
         Command::new(env!("CARGO_BIN_EXE_ferl-server"))
@@ -143,23 +151,25 @@ async fn unavailable_operator_commands_and_invalid_startup_fail_safely() {
     assert!(version.status.success());
     assert!(String::from_utf8_lossy(&version.stdout).contains(env!("CARGO_PKG_VERSION")));
 
-    for arguments in [vec!["bootstrap-admin", "--username", "operator"]] {
-        let output = tokio::time::timeout(
-            Duration::from_secs(5),
-            Command::new(env!("CARGO_BIN_EXE_ferl-server"))
-                .env_clear()
-                .args(arguments)
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await
-        .expect("operator command returns promptly")
-        .expect("operator executable runs");
-        assert_eq!(output.status.code(), Some(2));
-        let stderr = String::from_utf8(output.stderr).expect("CLI error is UTF-8");
-        assert!(stderr.contains("not available in this implementation stage"));
-        assert!(stderr.contains("no database was modified"));
-    }
+    let output = tokio::time::timeout(
+        Duration::from_secs(5),
+        Command::new(env!("CARGO_BIN_EXE_ferl-server"))
+            .env_clear()
+            .args(["bootstrap-admin", "--username", "operator"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .expect("bootstrap reports missing database configuration promptly")
+    .expect("server executable runs");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "no result exists on rejected bootstrap"
+    );
+    let stderr = String::from_utf8(output.stderr).expect("CLI diagnostic is UTF-8");
+    assert!(stderr.contains("FERL_DATABASE_URL"));
+    assert!(!stderr.contains("operator"));
 
     let output = tokio::time::timeout(
         Duration::from_secs(5),

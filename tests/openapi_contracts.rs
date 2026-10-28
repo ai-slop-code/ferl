@@ -1,65 +1,16 @@
+#[path = "support/accounts.rs"]
+#[allow(dead_code)]
+mod account_support;
+#[path = "support/database.rs"]
+#[allow(dead_code)]
+mod database_support;
+#[path = "support/openapi.rs"]
+mod openapi_validation;
+
 use std::collections::BTreeSet;
 
+use openapi_validation::{document, validates, validates_ref_with_siblings};
 use serde_json::{Value, json};
-
-fn document() -> Value {
-    let yaml: yaml_serde::Value = yaml_serde::from_str(include_str!("../spec/openapi.yaml"))
-        .expect("checked-in OpenAPI YAML parses");
-    serde_json::to_value(yaml).expect("OpenAPI YAML converts to JSON values")
-}
-
-fn resolve_schema(name: &str) -> Value {
-    let root = document();
-    let schema = root["components"]["schemas"][name]
-        .as_object()
-        .unwrap_or_else(|| panic!("OpenAPI schema {name} exists"));
-    let expanded = resolve_refs(&Value::Object(schema.clone()), &root, &mut Vec::new())
-        .unwrap_or_else(|_| panic!("OpenAPI schema {name} has resolvable local references"));
-    let mut expanded = expanded;
-    expanded["$schema"] = json!("https://json-schema.org/draft/2020-12/schema");
-    expanded
-}
-
-fn resolve_refs(schema: &Value, root: &Value, stack: &mut Vec<String>) -> Result<Value, ()> {
-    match schema {
-        Value::Object(object) => {
-            if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-                if !reference.starts_with("#/components/schemas/")
-                    || stack.iter().any(|r| r == reference)
-                {
-                    return Err(());
-                }
-                let target = root.pointer(reference.trim_start_matches('#')).ok_or(())?;
-                stack.push(reference.to_owned());
-                let mut expanded = resolve_refs(target, root, stack)?;
-                stack.pop();
-                let expanded_object = expanded.as_object_mut().ok_or(())?;
-                for (key, value) in object.iter().filter(|(key, _)| key.as_str() != "$ref") {
-                    expanded_object.insert(key.clone(), resolve_refs(value, root, stack)?);
-                }
-                Ok(expanded)
-            } else {
-                object
-                    .iter()
-                    .map(|(key, value)| Ok((key.clone(), resolve_refs(value, root, stack)?)))
-                    .collect::<Result<serde_json::Map<_, _>, ()>>()
-                    .map(Value::Object)
-            }
-        }
-        Value::Array(values) => values
-            .iter()
-            .map(|value| resolve_refs(value, root, stack))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array),
-        other => Ok(other.clone()),
-    }
-}
-
-fn validates(schema_name: &str, value: &Value) -> bool {
-    jsonschema::validator_for(&resolve_schema(schema_name))
-        .expect("referenced OpenAPI component is valid Draft 2020-12 JSON Schema")
-        .is_valid(value)
-}
 
 #[test]
 fn openapi_31_document_and_all_local_references_are_present() {
@@ -132,6 +83,151 @@ fn openapi_31_document_and_all_local_references_are_present() {
         operations >= 20,
         "business, health, and redirect methods are included"
     );
+}
+
+#[test]
+fn json_schema_ref_sibling_assertions_are_conjunctive_and_formats_are_asserted() {
+    let restricted_role = json!({
+        "$ref": "#/components/schemas/Role",
+        "enum": ["admin"]
+    });
+    assert!(validates_ref_with_siblings(
+        &restricted_role,
+        &json!("admin")
+    ));
+    assert!(!validates_ref_with_siblings(
+        &restricted_role,
+        &json!("user")
+    ));
+    assert!(!validates_ref_with_siblings(
+        &restricted_role,
+        &json!("root")
+    ));
+
+    let valid_account = json!({
+        "id": "4a8ffcd5-3066-4519-a68e-060f956ab500",
+        "username": "alice_1",
+        "role": "user",
+        "enabled": true,
+        "created_at": "2026-10-28T10:00:00.123456Z",
+        "updated_at": "2026-10-28T10:00:00.123456Z"
+    });
+    assert!(validates("Account", &valid_account));
+    let mut invalid = valid_account.clone();
+    invalid["id"] = json!("not-a-uuid");
+    assert!(!validates("Account", &invalid), "uuid format is asserted");
+    let mut invalid = valid_account;
+    invalid["updated_at"] = json!("not-a-dateZ");
+    assert!(
+        !validates("Account", &invalid),
+        "date-time format and UTC suffix are asserted"
+    );
+}
+
+#[tokio::test]
+async fn actual_bootstrap_dto_and_account_http_responses_match_openapi_components() {
+    use std::collections::BTreeMap;
+
+    use account_support::{
+        call, json as response_json, migrated_database, production_router, request,
+    };
+    use axum::http::{Method, StatusCode};
+    use ferl_server::config::BootstrapConfig;
+
+    let database = migrated_database().await;
+    let bootstrap_config = BootstrapConfig::from_map(BTreeMap::from([(
+        "FERL_DATABASE_URL".to_owned(),
+        database.schema_database_url().to_owned(),
+    )]))
+    .expect("command-specific bootstrap profile needs only the database and bounded defaults");
+    let output_dto = ferl_server::accounts::bootstrap::run(&bootstrap_config, "openapi_admin")
+        .await
+        .expect("fresh migrated schema bootstraps through the production service");
+    let serialized = serde_json::to_value(output_dto).expect("bootstrap DTO serializes");
+    assert!(validates("AccountCreation", &serialized));
+    let key = serialized["api_key"].as_str().unwrap().to_owned();
+
+    let app = production_router(&database).await;
+    let response = call(
+        app.clone(),
+        request(Method::GET, "/api/v1/me", Some(&key), ""),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let current = response_json(response).await;
+    assert!(validates("Account", &current));
+
+    let response = call(
+        app.clone(),
+        request(
+            Method::GET,
+            "/api/v1/admin/accounts?limit=1",
+            Some(&key),
+            "",
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let collection = response_json(response).await;
+    assert!(validates("AccountCollection", &collection));
+
+    let response = call(
+        app.clone(),
+        request(
+            Method::POST,
+            "/api/v1/admin/accounts",
+            Some(&key),
+            r#"{"username":"schema_user","role":"user"}"#,
+        ),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = response_json(response).await;
+    assert!(validates("AccountCreation", &created));
+    let created_key = created["api_key"].as_str().unwrap();
+    assert!(created_key.starts_with("ferl_ak_v1_"));
+
+    let response = call(
+        app.clone(),
+        request(Method::POST, "/api/v1/me/api-key", Some(&key), ""),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let replaced = response_json(response).await;
+    assert!(validates("ApiKeyReplacement", &replaced));
+
+    for (schema, mut invalid) in [
+        ("Account", current.clone()),
+        ("AccountCreation", created.clone()),
+        ("ApiKeyReplacement", replaced.clone()),
+    ] {
+        match schema {
+            "Account" => {
+                invalid.as_object_mut().unwrap().remove("updated_at");
+            }
+            "AccountCreation" => {
+                invalid["account"]["api_key_digest"] = json!("must-not-leak");
+            }
+            "ApiKeyReplacement" => {
+                invalid["api_key_digest"] = json!("must-not-leak");
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            !validates(schema, &invalid),
+            "validator rejects invalid {schema}"
+        );
+    }
+    let mut invalid_timestamp = current;
+    invalid_timestamp["created_at"] = json!("not-a-timestampZ");
+    assert!(!validates("Account", &invalid_timestamp));
+    let too_many = json!({
+        "items": vec![created["account"].clone(); 201],
+        "next_cursor": null
+    });
+    assert!(!validates("AccountCollection", &too_many));
+    assert!(!created.to_string().contains(&key));
+    database.close().await;
 }
 
 #[test]
