@@ -73,8 +73,9 @@ embedded, versioned schema using only database and migration settings.
 requires a migrated compatible schema, and emits one account-creation JSON DTO
 to stdout only after commit; its sanitized diagnostics use stderr. Startup and
 migrations never bootstrap. Part 04 registers account routes, and Part 06 adds
-single-link management routes. Collection listing, redirects/visit ingestion,
-discovery and reports remain unregistered until their later stages.
+single-link management routes. Part 07 adds only exact public GET/HEAD redirects
+and bounded best-effort visit ingestion. Link/tag discovery, reports and OTLP
+remain later stages.
 Readiness is fail-closed until the production composition verifies migration
 history and required schema objects, then performs a bounded database probe.
 The verifier rechecks for database or schema recovery.
@@ -99,15 +100,23 @@ pool, lock, SQL, body, and operation bounds. Its code-reservation allocator has 
 private deterministic test seam; production always uses the secure generator.
 `links::representation::build` is reusable by later stages, and
 `links::resolve_active_link(&PgPool, code, deadline)` is the fresh one-statement
-active-link snapshot handoff for Part 07; it does not register redirects.
+active-link snapshot used by redirects. The public router preserves raw path
+spelling, builds `Location` from the exact resolved value, then nonblockingly
+hands an immutable event to a bounded in-memory queue. A configured worker pool
+uses the existing schema-v1 visit table to atomically insert an event and
+conditionally increment its link counter under the link-row lock. Retry and
+shutdown drain are bounded; UUID idempotency covers an ambiguous visit commit,
+and deletion/cascade ordering prevents resurrection. Abrupt process termination
+may lose events that remain buffered.
 
-`sh scripts/check.sh` runs all existing and Part 06 suites, including
+`sh scripts/check.sh` runs all existing suites, including
 `creation_order`, `link_creation`, `link_authorization`, `link_management`,
-`token_rotation`, `link_concurrency`, `link_failures`, `link_resolution`, and
-`link_process`. The process suite starts two independent production server
+`token_rotation`, `link_concurrency`, `link_failures`, `link_resolution`,
+`routing`, `redirects`, `visit_ingestion`, `analytics_failures`,
+`visit_concurrency`, and `link_process`. The process suite starts two independent production server
 executables, captures bounded stdout/stderr, and exercises shared CRUD,
-credential/token invalidation, allowance accounting, trusted TCP peers, and the
-owned PostgreSQL-volume restart. No production test command, HTTP test route,
+credential/token invalidation, allowance accounting, trusted TCP peers, redirects,
+visit persistence across process/container restart, and the owned PostgreSQL-volume restart. No production test command, HTTP test route,
 npm download, or clock override is used. See
 [creation allowance](creation-allowance.md) for Part 05 charge semantics and
 the ownership-consuming Part 06 interface.

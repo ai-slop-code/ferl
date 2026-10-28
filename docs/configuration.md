@@ -31,10 +31,12 @@ values are never included in configuration debug output or logs.
 | `FERL_DB_ACQUIRE_TIMEOUT_SECS` | `2` | Integer from 1 through 300 seconds; bounds readiness acquisition and pool waits. SQLx 0.9 exposes one pool acquisition deadline, so the shorter of connect/acquire timeouts bounds both waiting for a connection and creating one. |
 | `FERL_DB_STATEMENT_TIMEOUT_SECS` | `5` | Integer from 1 through 300 seconds, applied to each new PostgreSQL connection. |
 | `FERL_DB_LOCK_TIMEOUT_SECS` | `2` | Integer from 1 through 300 seconds, applied to each new PostgreSQL connection. |
-| `FERL_ANALYTICS_QUEUE_CAPACITY` | `2048` | Integer from 1 through 65,536; reserved for the bounded worker added in Part 07. |
-| `FERL_ANALYTICS_WORKERS` | `4` | Integer from 1 through 64; reserved for Part 07. |
-| `FERL_ANALYTICS_RETRY_BUDGET` | `3` | Integer from 1 through 10; reserved for Part 07. |
-| `FERL_ANALYTICS_DRAIN_TIMEOUT_SECS` | `5` | Integer from 1 through 300 seconds; reserved for Part 07. |
+| `FERL_ANALYTICS_QUEUE_CAPACITY` | `2048` | Integer from 1 through 65,536; bounded in-memory visit events per instance. Queue-full events are dropped without delaying redirects. |
+| `FERL_ANALYTICS_WORKERS` | `4` | Integer from 1 through 64 concurrent visit workers per instance. |
+| `FERL_ANALYTICS_RETRY_BUDGET` | `3` | Integer from 1 through 10 retries after the initial persistence attempt. Transient/ambiguous visit writes reuse the same event UUID and snapshot. |
+| `FERL_ANALYTICS_OPERATION_TIMEOUT_SECS` | `30` | Integer from 1 through 300 seconds; total bound for each worker persistence attempt, independent of pool, lock and statement deadlines. Must exceed the rollback timeout. |
+| `FERL_ANALYTICS_ROLLBACK_TIMEOUT_SECS` | `2` | Integer from 1 through 300 seconds; bounds explicit rollback after a failed visit transaction. |
+| `FERL_ANALYTICS_DRAIN_TIMEOUT_SECS` | `5` | Integer from 1 through 300 seconds; maximum visit-queue drain before worker cancellation and pool closure. |
 | `FERL_HTTP_DRAIN_TIMEOUT_SECS` | `30` | Integer from 1 through 300 seconds. |
 | `FERL_SHUTDOWN_TIMEOUT_SECS` | `45` | Integer from 1 through 300 seconds and at least the HTTP drain timeout. |
 | `FERL_OTEL_ENDPOINT` | Unset | Optional HTTP(S) OTLP endpoint. Its absence disables export; collector reachability is never required at startup. |
@@ -104,8 +106,9 @@ codes, context binding, and decoded/encoded limits are documented in
 configuration fails before serving. Part 01 installs safe structured stdout
 logging and a typed, low-cardinality operation/outcome facade. Export providers
 and actual traces, metrics, and OTLP logs are delivered in Part 10. Analytics
-settings are similarly validated now and consumed by the analytics worker in
-Part 07.
+settings configure the bounded visit queue/workers, per-attempt and rollback
+deadlines, idempotent retry budget, and shutdown drain. Abrupt process termination
+can lose events still buffered in memory.
 
 API request bodies have a fixed 65,536-byte maximum; this limit is not an
 environment override.

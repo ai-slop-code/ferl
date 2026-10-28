@@ -152,8 +152,14 @@ fn safe_route_template(path: &str) -> &'static str {
         _ if link_token_path(path) => "/api/v1/links/{code}/management-token",
         _ if link_item_path(path) => "/api/v1/links/{code}",
         _ if path.starts_with("/api/") => "/api/{unmatched}",
+        _ if one_public_segment(path) => "/{short_code}",
         _ => "/{unmatched}",
     }
+}
+
+fn one_public_segment(path: &str) -> bool {
+    path.strip_prefix('/')
+        .is_some_and(|segment| !segment.is_empty() && !segment.contains('/'))
 }
 
 fn account_item_path(path: &str) -> bool {

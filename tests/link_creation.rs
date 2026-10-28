@@ -228,18 +228,24 @@ async fn permanent_code_namespace_reserves_api_but_not_asset_or_health_root_name
                     assert_eq!(json(response).await["link"]["short_code"], code);
                 }
 
-                let direct_asset = call(
-                    application.clone(),
-                    request(Method::GET, "/assets", None, ""),
-                )
-                .await;
-                assert_eq!(direct_asset.status(), StatusCode::NOT_FOUND);
-                let direct_health = call(
-                    application.clone(),
-                    request(Method::GET, "/health", None, ""),
-                )
-                .await;
-                assert_eq!(direct_health.status(), StatusCode::NOT_FOUND);
+                for (code, destination) in [
+                    ("assets", "https://assets.example/"),
+                    ("health", "https://health.example/"),
+                    ("api-sale", "https://api-sale.example/"),
+                ] {
+                    let followed = call(
+                        application.clone(),
+                        request(Method::GET, &format!("/{code}"), None, ""),
+                    )
+                    .await;
+                    assert_eq!(
+                        followed.status(),
+                        StatusCode::FOUND,
+                        "{code} is a public code"
+                    );
+                    assert_eq!(followed.headers()[http::header::LOCATION], destination);
+                    assert!(bytes(followed).await.is_empty());
+                }
 
                 let deleted = call(
                     application.clone(),

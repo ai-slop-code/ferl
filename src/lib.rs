@@ -1,4 +1,5 @@
 pub mod accounts;
+pub mod analytics;
 pub mod app;
 pub mod auth;
 pub mod client_ip;
@@ -10,6 +11,7 @@ pub mod http;
 pub mod links;
 pub mod pagination;
 pub mod rate_limit;
+pub mod redirects;
 pub mod shutdown;
 pub mod telemetry;
 

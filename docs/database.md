@@ -212,6 +212,38 @@ anonymous owner or an existing enabled account owner. It returns unavailable
 links separately from storage/conversion failures, uses no cache, and performs no
 redirect or visit work.
 
+## Part 07 visit writes
+
+Part 07 uses this schema unchanged; no migration is required. Each worker attempt
+checks out one bounded pool connection and opens one transaction. It locks the
+live link row by immutable ID and verifies its immutable code, inserts the
+queued UUID/time/destination/method/IP/header snapshot with `ON CONFLICT (id) DO
+NOTHING`, and increments `visit_count` only when `RETURNING id` proves that this
+transaction inserted a new row. Insert and increment share the transaction; a
+counter overflow or failed increment rolls the visit insert back. Analytics does
+not update `updated_at` and does not consult the link's current destination.
+
+Retries are limited to the configured retry budget and bounded exponential
+backoff. They reuse the exact same event UUID, timestamp, destination snapshot,
+method, address, and optional headers. This UUID idempotency is the one
+intentional exception to the general no-retry rule for unknown commit
+acknowledgements: a committed first attempt becomes a duplicate insert and does
+not increment again; an uncommitted attempt is inserted once. Other write
+outcomes are reported as safe categories and dropped after bounded retries.
+Each worker attempt, connection acquisition, PostgreSQL statement/lock wait,
+explicit rollback, and shutdown drain has its own bound. If a transaction is
+cancelled, it is discarded; application code never continues a cancelled
+transaction.
+
+Deletion safety follows the existing order: a worker that locks the link first
+may commit its visit/counter, after which deletion waits and cascades both; a
+deletion that commits first leaves no live row for the worker and the event is
+dropped. Workers do not create links, reservations, visits for absent links, or
+counters. Abrupt termination may lose the bounded in-memory queue; PostgreSQL
+rows/counters already committed remain durable.
+An event denotes a ferl-issued 302 only; it is not evidence that the client
+received the response or reached the destination.
+
 ## Isolated PostgreSQL tests
 
 `tests/support/database.rs::IsolatedTestDatabase::connect_from_harness()`

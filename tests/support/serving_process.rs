@@ -115,14 +115,32 @@ impl ServingProcess {
             .expect("child status is readable")
             .is_none()
         {
-            self.child
-                .start_kill()
-                .expect("serving child accepts termination");
+            let pid = self.child.id().expect("running child has a process ID");
+            let mut signal = Command::new("/bin/kill");
+            signal.kill_on_drop(true).args(["-TERM", &pid.to_string()]);
+            let signalled = matches!(
+                timeout(Duration::from_secs(2), signal.status()).await,
+                Ok(Ok(status)) if status.success()
+            );
+            if !signalled {
+                self.child
+                    .start_kill()
+                    .expect("serving child accepts bounded fallback termination");
+            }
         }
-        timeout(Duration::from_secs(5), self.child.wait())
-            .await
-            .expect("serving child is reaped before its deadline")
-            .expect("serving child exit is collected");
+        match timeout(Duration::from_secs(12), self.child.wait()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => panic!("serving child exit is collected: {error}"),
+            Err(_) => {
+                self.child
+                    .start_kill()
+                    .expect("overdue serving child accepts bounded fallback termination");
+                timeout(Duration::from_secs(3), self.child.wait())
+                    .await
+                    .expect("serving child is forcibly reaped before the cleanup deadline")
+                    .expect("serving child exit is collected");
+            }
+        }
         let stdout = take_capture(&mut self.stdout).await;
         let stderr = take_capture(&mut self.stderr).await;
         CapturedOutput {

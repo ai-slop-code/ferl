@@ -3,7 +3,10 @@ use std::{future::Future, io, pin::Pin, time::Duration};
 use tokio::{signal, time::timeout};
 use tokio_util::sync::CancellationToken;
 
-use crate::app::ReadinessState;
+use crate::{
+    analytics::{AnalyticsWorkers, WorkerStopOutcome},
+    app::ReadinessState,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HttpDrainOutcome {
@@ -25,6 +28,13 @@ pub async fn stop_accepting_and_drain(
         Ok(Err(_)) => HttpDrainOutcome::ServerFailed,
         Err(_) => HttpDrainOutcome::DeadlineExceeded,
     }
+}
+
+/// Drain the instance-local bounded analytics queue only after HTTP admission
+/// has stopped and in-flight redirects have completed. The worker guard
+/// cancels any remaining work when this independent deadline expires.
+pub async fn drain_analytics(workers: AnalyticsWorkers, deadline: Duration) -> WorkerStopOutcome {
+    workers.shutdown(deadline).await
 }
 
 pub async fn wait_for_shutdown_signal() {

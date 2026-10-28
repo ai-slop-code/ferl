@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 use ferl_server::{
     BUILD_VERSION,
     accounts::bootstrap::{self, BootstrapFailure},
+    analytics::WorkerStopOutcome,
     app::{self, AppState},
     config::{BootstrapConfig, Config, ConfigError, MigrationConfig},
     db::migrate::{self, MigrationFailure},
@@ -175,6 +176,7 @@ enum ServerError {
     DatabaseConfiguration,
     ListenerBind,
     HttpServer,
+    AnalyticsWorkerStart,
 }
 
 impl ServerError {
@@ -183,6 +185,7 @@ impl ServerError {
             Self::DatabaseConfiguration => "database_configuration_invalid",
             Self::ListenerBind => "listener_bind_failed",
             Self::HttpServer => "http_server_failed",
+            Self::AnalyticsWorkerStart => "analytics_worker_start_failed",
         }
     }
 }
@@ -192,6 +195,10 @@ async fn serve(config: Config) -> Result<(), ServerError> {
         PoolBuildError::InvalidConnectionOptions => ServerError::DatabaseConfiguration,
     })?;
     let pool = state.pool.clone();
+    let analytics_workers = state
+        .start_analytics_workers()
+        .map_err(|_| ServerError::AnalyticsWorkerStart)?;
+    let mut analytics_workers = Some(analytics_workers);
     let listener = TcpListener::bind(config.listen_addr)
         .await
         .map_err(|_| ServerError::ListenerBind)?;
@@ -227,13 +234,18 @@ async fn serve(config: Config) -> Result<(), ServerError> {
         result = &mut server => {
             cancellation.cancel();
             finish_schema_monitor(&mut schema_monitor).await;
-            result.map_err(|_| ServerError::HttpServer)?;
+            if let Some(workers) = analytics_workers.take() {
+                report_analytics_shutdown(
+                    shutdown::drain_analytics(workers, config.analytics.drain_timeout).await,
+                );
+            }
             let pool_closed = close_pool_bounded(&pool, config.shutdown.total_timeout).await;
             tracing::info!(
                 category = "server_stopped",
                 outcome = if pool_closed { "success" } else { "pool_close_deadline" },
                 "HTTP server stopped"
             );
+            result.map_err(|_| ServerError::HttpServer)?;
         }
         _ = shutdown::wait_for_shutdown_signal() => {
             let shutdown_started = Instant::now();
@@ -259,6 +271,16 @@ async fn serve(config: Config) -> Result<(), ServerError> {
             }
             drop(server);
 
+            let remaining = config
+                .shutdown
+                .total_timeout
+                .saturating_sub(shutdown_started.elapsed());
+            if let Some(workers) = analytics_workers.take() {
+                let analytics_deadline = config.analytics.drain_timeout.min(remaining);
+                report_analytics_shutdown(
+                    shutdown::drain_analytics(workers, analytics_deadline).await,
+                );
+            }
             let remaining = config
                 .shutdown
                 .total_timeout
@@ -297,6 +319,26 @@ async fn serve(config: Config) -> Result<(), ServerError> {
     }
 
     Ok(())
+}
+
+fn report_analytics_shutdown(outcome: WorkerStopOutcome) {
+    match outcome {
+        WorkerStopOutcome::Drained => tracing::info!(
+            category = "analytics_drain_complete",
+            outcome = "success",
+            "analytics workers drained the bounded in-memory queue"
+        ),
+        WorkerStopOutcome::DeadlineExceeded => tracing::warn!(
+            category = "analytics_drain_deadline",
+            outcome = "unavailable",
+            "analytics shutdown deadline reached"
+        ),
+        WorkerStopOutcome::WorkerFailed => tracing::warn!(
+            category = "analytics_worker_failed",
+            outcome = "failure",
+            "an analytics worker failed during shutdown"
+        ),
+    }
 }
 
 async fn finish_schema_monitor(monitor: &mut tokio::task::JoinHandle<()>) {

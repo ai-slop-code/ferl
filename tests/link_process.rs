@@ -12,7 +12,12 @@ use serving_process::{
     ServingProcess, assert_headers, json, send, send_chunked, send_with_headers,
 };
 use std::{process::Output, time::Duration};
-use tokio::{process::Command, sync::Barrier, task::JoinSet, time::timeout};
+use tokio::{
+    process::Command,
+    sync::Barrier,
+    task::JoinSet,
+    time::{sleep, timeout},
+};
 
 const CURSOR_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const PROCESS_SETTINGS: &[(&str, &str)] = &[
@@ -184,6 +189,92 @@ async fn independent_production_servers_share_link_state_allowance_and_restart_p
                 assert_headers(&persisted);
                 assert_eq!(persisted.status, 201);
                 let _ = json(&persisted);
+
+                let referer = "https://referrer.process-private-canary.invalid/path?q=secret#frag";
+                let user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36";
+                let get_visit_headers = [
+                    ("Referer", referer),
+                    ("User-Agent", user_agent),
+                    ("X-Forwarded-For", "203.0.113.77"),
+                ];
+                let get = send_with_headers(
+                    first.address,
+                    "GET",
+                    "/persist-process?source=redirect-query-private-canary",
+                    None,
+                    "",
+                    &get_visit_headers,
+                )
+                .await
+                .unwrap();
+                assert_headers(&get);
+                assert_eq!(get.status, 302);
+                assert_eq!(
+                    get.headers.get("location").map(String::as_str),
+                    Some("https://persisted-between-processes.invalid/")
+                );
+                assert!(get.body.is_empty());
+                let head_visit_headers = [
+                    ("Referer", referer),
+                    ("User-Agent", user_agent),
+                    ("X-Forwarded-For", "203.0.113.80,broken"),
+                ];
+                let head = send_with_headers(
+                    second.address,
+                    "HEAD",
+                    "/persist-process?campaign=ignored",
+                    None,
+                    "",
+                    &head_visit_headers,
+                )
+                .await
+                .unwrap();
+                assert_headers(&head);
+                assert_eq!(head.status, 302);
+                assert_eq!(
+                    head.headers.get("location").map(String::as_str),
+                    Some("https://persisted-between-processes.invalid/")
+                );
+                assert!(head.body.is_empty());
+                wait_for_visit_count(database.pool(), "persist-process", 2).await;
+                assert_eq!(
+                    sqlx::query_scalar::<_, i64>(
+                        "SELECT visit_count FROM links WHERE short_code = 'persist-process'",
+                    )
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap(),
+                    2
+                );
+                assert_eq!(
+                    sqlx::query_scalar::<_, i64>(
+                        "SELECT count(*) FROM visits WHERE redirect_url = 'https://persisted-between-processes.invalid/' \
+                         AND method IN ('GET', 'HEAD') AND referrer = $1 AND user_agent = $2",
+                    )
+                    .bind(referer)
+                    .bind(user_agent)
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap(),
+                    2,
+                    "independent TCP processes persist the same full request analytics"
+                );
+                let visit_ips = sqlx::query_as::<_, (String, String)>(
+                    "SELECT method, host(client_ip) FROM visits v \
+                     JOIN links l ON l.id = v.link_id WHERE l.short_code = 'persist-process' \
+                     ORDER BY method",
+                )
+                .fetch_all(database.pool())
+                .await
+                .unwrap();
+                assert_eq!(
+                    visit_ips,
+                    [
+                        ("GET".to_owned(), "203.0.113.77".to_owned()),
+                        ("HEAD".to_owned(), "127.0.0.1".to_owned()),
+                    ],
+                    "actual trusted TCP peer chain and malformed-chain fallback persist"
+                );
 
                 let chunked_body = vec![b'x'; 65_537];
                 let oversized = send_chunked(
@@ -366,6 +457,11 @@ async fn independent_production_servers_share_link_state_allowance_and_restart_p
                     "203.0.113.201".to_owned(),
                     "https://edited-on-b.invalid/path?query=1#frag".to_owned(),
                     "https://persisted-between-processes.invalid/".to_owned(),
+                    referer.to_owned(),
+                    user_agent.to_owned(),
+                    "redirect-query-private-canary".to_owned(),
+                    "campaign=ignored".to_owned(),
+                    "restart-revisit-private-canary".to_owned(),
                     "https://shared-anonymous-0.invalid/".to_owned(),
                     "https://shared-anonymous-1.invalid/".to_owned(),
                     "https://shared-anonymous-2.invalid/".to_owned(),
@@ -377,11 +473,23 @@ async fn independent_production_servers_share_link_state_allowance_and_restart_p
                 canaries.extend(anonymous_tokens);
                 canaries.extend(
                     sqlx::query_scalar::<_, String>(
-                        "SELECT id::text FROM links UNION ALL SELECT id::text FROM rate_buckets UNION ALL SELECT id::text FROM rate_charges",
+                        "SELECT id::text FROM links UNION ALL SELECT id::text FROM visits \
+                         UNION ALL SELECT id::text FROM rate_buckets UNION ALL SELECT id::text FROM rate_charges",
                     )
                     .fetch_all(database.pool())
                     .await
                     .unwrap(),
+                );
+                assert!(
+                    [
+                        &first_output.stdout,
+                        &first_output.stderr,
+                        &second_output.stdout,
+                        &second_output.stderr,
+                    ]
+                    .iter()
+                    .any(|output| output.contains("request completed")),
+                    "safe request-completion diagnostic is present in captured process output"
                 );
                 for output in [
                     &first_output.stdout,
@@ -447,6 +555,26 @@ async fn independent_production_servers_share_link_state_allowance_and_restart_p
                     "two effective forwarded IPs and the account share durable buckets"
                 );
                 assert_eq!(
+                    sqlx::query_scalar::<_, i64>(
+                        "SELECT count(*) FROM visits v JOIN links l ON l.id = v.link_id \
+                         WHERE l.short_code = 'persist-process' AND v.redirect_url = 'https://persisted-between-processes.invalid/'",
+                    )
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap(),
+                    2,
+                    "GET/HEAD visit rows and snapshots survive the owned volume restart"
+                );
+                assert_eq!(
+                    sqlx::query_scalar::<_, i64>(
+                        "SELECT visit_count FROM links WHERE short_code = 'persist-process'",
+                    )
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap(),
+                    2
+                );
+                assert_eq!(
                     sqlx::query_scalar::<_, i64>("SELECT count(*) FROM code_reservations WHERE short_code = 'cross-process-code'")
                         .fetch_one(database.pool())
                         .await
@@ -497,6 +625,32 @@ async fn independent_production_servers_share_link_state_allowance_and_restart_p
                 assert_headers(&after_restart);
                 assert_eq!(after_restart.status, 200);
                 assert_eq!(json(&after_restart)["tags"], serde_json::json!(["restarttag"]));
+                let after_restart_redirect = send(
+                    replacement.address,
+                    "GET",
+                    "/persist-process?source=restart-revisit-private-canary",
+                    None,
+                    "",
+                )
+                .await
+                .unwrap();
+                assert_headers(&after_restart_redirect);
+                assert_eq!(after_restart_redirect.status, 302);
+                assert_eq!(
+                    after_restart_redirect.headers.get("location").map(String::as_str),
+                    Some("https://persisted-between-processes.invalid/")
+                );
+                assert!(after_restart_redirect.body.is_empty());
+                wait_for_visit_count(database.pool(), "persist-process", 3).await;
+                assert_eq!(
+                    sqlx::query_scalar::<_, i64>(
+                        "SELECT visit_count FROM links WHERE short_code = 'persist-process'",
+                    )
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap(),
+                    3
+                );
                 let token_after_restart = send(
                     replacement.address,
                     "GET",
@@ -509,9 +663,46 @@ async fn independent_production_servers_share_link_state_allowance_and_restart_p
                 assert_headers(&token_after_restart);
                 assert_eq!(token_after_restart.status, 200);
                 let replacement_output = replacement.stop_and_capture().await;
+                assert!(
+                    replacement_output.stdout.contains("request completed")
+                        || replacement_output.stderr.contains("request completed")
+                );
                 assert!(!replacement_output.stdout.contains(&new_key));
                 assert!(!replacement_output.stdout.contains(&rotated_token));
+                for output in [&replacement_output.stdout, &replacement_output.stderr] {
+                    for canary in &canaries {
+                        assert!(
+                            !output.contains(canary),
+                            "replacement diagnostics leaked canary {canary}"
+                        );
+                    }
+                }
             })
         })
         .await;
+}
+
+async fn wait_for_visit_count(pool: &sqlx::PgPool, code: &str, expected: i64) {
+    timeout(Duration::from_secs(8), async {
+        loop {
+            let count = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM visits v JOIN links l ON l.id = v.link_id \
+                 WHERE l.short_code = $1",
+            )
+            .bind(code)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if count == expected {
+                return;
+            }
+            assert!(
+                count < expected,
+                "visit worker produced unexpected duplicate rows"
+            );
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("visit persistence completes before its deadline");
 }
