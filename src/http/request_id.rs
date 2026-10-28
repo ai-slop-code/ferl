@@ -146,6 +146,7 @@ fn safe_route_template(path: &str) -> &'static str {
         "/api/v1/me/api-key" => "/api/v1/me/api-key",
         "/api/v1/admin/accounts" => "/api/v1/admin/accounts",
         "/api/v1/links" => "/api/v1/links",
+        "/api/v1/tags" => "/api/v1/tags",
         "/api" | "/api/" => "/api",
         _ if account_item_path(path) => "/api/v1/admin/accounts/{id}",
         _ if account_key_path(path) => "/api/v1/admin/accounts/{id}/api-key",

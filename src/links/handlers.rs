@@ -43,6 +43,9 @@ pub async fn dispatch(state: AppState, request: Request<Body>) -> Response {
     if matches!(route, Route::Create) {
         return create(state, request, request_id, query.as_deref()).await;
     }
+    if matches!(route, Route::List) {
+        return super::list_handler::dispatch(state, request, request_id).await;
+    }
 
     let (parts, request_body) = request.into_parts();
     let principal = match authenticate(
@@ -67,7 +70,7 @@ pub async fn dispatch(state: AppState, request: Request<Body>) -> Response {
         Route::Get(code) | Route::Patch(code) | Route::Delete(code) | Route::RotateToken(code) => {
             code
         }
-        Route::Create | Route::MethodNotAllowed(_) => unreachable!(),
+        Route::Create | Route::List | Route::MethodNotAllowed(_) => unreachable!(),
     };
     if crate::domain::short_code::ShortCode::parse_custom(raw_code).is_err() {
         return rejection::request_error(
@@ -141,7 +144,9 @@ pub async fn dispatch(state: AppState, request: Request<Body>) -> Response {
                 Err(failure) => link_error(request_id, failure),
             }
         }
-        Route::Create | Route::MethodNotAllowed(_) => unreachable!("handled before authentication"),
+        Route::Create | Route::List | Route::MethodNotAllowed(_) => {
+            unreachable!("handled before authentication")
+        }
     }
 }
 
@@ -182,6 +187,7 @@ async fn create(
 #[derive(Clone, Copy)]
 enum Route<'a> {
     Create,
+    List,
     Get(&'a str),
     Patch(&'a str),
     Delete(&'a str),
@@ -191,10 +197,10 @@ enum Route<'a> {
 
 fn select_route<'a>(path: &'a str, method: &Method) -> Option<Route<'a>> {
     if path == "/api/v1/links" {
-        return Some(if *method == Method::POST {
-            Route::Create
-        } else {
-            Route::MethodNotAllowed("POST")
+        return Some(match *method {
+            Method::GET => Route::List,
+            Method::POST => Route::Create,
+            _ => Route::MethodNotAllowed("GET, POST"),
         });
     }
     let tail = path.strip_prefix("/api/v1/links/")?;
@@ -224,7 +230,7 @@ fn reject_query(request_id: Uuid, raw: Option<&str>) -> Option<Response> {
         .map(|_| rejection::query_error(request_id, QueryError::InvalidRequest))
 }
 
-fn authentication_error(request_id: Uuid, failure: AuthFailure) -> Response {
+pub(crate) fn authentication_error(request_id: Uuid, failure: AuthFailure) -> Response {
     match failure {
         AuthFailure::Missing => error::response(
             request_id,
@@ -262,7 +268,7 @@ fn authentication_error(request_id: Uuid, failure: AuthFailure) -> Response {
     }
 }
 
-fn link_error(request_id: Uuid, failure: LinkFailure) -> Response {
+pub(crate) fn link_error(request_id: Uuid, failure: LinkFailure) -> Response {
     let (code, message) = match failure {
         LinkFailure::AuthenticationRequired => (
             ErrorCode::AuthenticationRequired,
@@ -312,7 +318,11 @@ fn link_error(request_id: Uuid, failure: LinkFailure) -> Response {
     error::response(request_id, code, message, None)
 }
 
-fn json_response(status: StatusCode, value: &impl serde::Serialize, request_id: Uuid) -> Response {
+pub(crate) fn json_response(
+    status: StatusCode,
+    value: &impl serde::Serialize,
+    request_id: Uuid,
+) -> Response {
     match serde_json::to_vec(value) {
         Ok(bytes) => success_json(status, bytes),
         Err(_) => {
@@ -349,7 +359,7 @@ mod tests {
     use super::{Route, handles_path, select_route};
 
     #[test]
-    fn link_dispatch_selects_only_the_part_06_methods() {
+    fn link_dispatch_selects_management_and_discovery_methods_explicitly() {
         assert!(handles_path("/api/v1/links"));
         assert!(handles_path("/api/v1/links/a"));
         assert!(!handles_path("/api/v1/links-search"));
@@ -359,7 +369,11 @@ mod tests {
         ));
         assert!(matches!(
             select_route("/api/v1/links", &Method::GET),
-            Some(Route::MethodNotAllowed("POST"))
+            Some(Route::List)
+        ));
+        assert!(matches!(
+            select_route("/api/v1/links", &Method::HEAD),
+            Some(Route::MethodNotAllowed("GET, POST"))
         ));
         assert!(matches!(
             select_route("/api/v1/links/example", &Method::HEAD),

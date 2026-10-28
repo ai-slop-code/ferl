@@ -349,7 +349,7 @@ mod tests {
             ids::{AccountId, LinkId},
             time::Timestamp,
         },
-        http::query::{BreakdownQuery, LinkListQuery, VisitListQuery},
+        http::query::{BreakdownQuery, LinkListQuery, TagDiscoveryQuery, VisitListQuery},
     };
 
     use super::{CursorActor, CursorContext, CursorResource};
@@ -374,6 +374,46 @@ mod tests {
         assert_eq!(
             CursorContext::links(account(), &short).resource(),
             CursorResource::Links
+        );
+
+        let defaults = LinkListQuery::parse(None).unwrap();
+        let explicit_defaults =
+            LinkListQuery::parse(Some("scope=own&sort=created_at&order=desc")).unwrap();
+        assert_eq!(
+            CursorContext::links(account(), &defaults).digest(),
+            CursorContext::links(account(), &explicit_defaults).digest(),
+            "omitted and explicit defaults share one context"
+        );
+
+        let tags_a =
+            LinkListQuery::parse(Some("tag=Work&tag=rust&tag=work&q=Stra%C3%9Fe")).unwrap();
+        let tags_b = LinkListQuery::parse(Some("q=STRASSE&tag=rust&tag=WORK")).unwrap();
+        assert_eq!(
+            CursorContext::links(account(), &tags_a).digest(),
+            CursorContext::links(account(), &tags_b).digest(),
+            "canonical tag order/duplicates and normalized search are equivalent"
+        );
+
+        let times_a = LinkListQuery::parse(Some(
+            "created_from=2026-04-01T02%3A00%3A00.123456789%2B02%3A00&created_to=2026-04-02T00%3A00%3A00Z",
+        ))
+        .unwrap();
+        let times_b = LinkListQuery::parse(Some(
+            "created_from=2026-04-01T00%3A00%3A00.123456Z&created_to=2026-04-02T00%3A00%3A00Z",
+        ))
+        .unwrap();
+        assert_eq!(
+            CursorContext::links(account(), &times_a).digest(),
+            CursorContext::links(account(), &times_b).digest(),
+            "equivalent RFC 3339 offsets normalize to the same microsecond context"
+        );
+
+        let tag_a = TagDiscoveryQuery::parse(Some("q=Stra%C3%9Fe")).unwrap();
+        let tag_b = TagDiscoveryQuery::parse(Some("scope=own&q=STRASSE")).unwrap();
+        assert_eq!(
+            CursorContext::tags(account(), &tag_a).digest(),
+            CursorContext::tags(account(), &tag_b).digest(),
+            "tag q folding and explicit default scope are canonical"
         );
     }
 

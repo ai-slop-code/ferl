@@ -19,13 +19,16 @@ use crate::{
         url::StoredUrl,
     },
     http::dto::{
-        AnonymousLinkCreationDto, CreateLinkRequest, LinkDto, ManagementTokenReplacementDto,
-        OwnedLinkCreationDto, PatchLinkRequest, Presence, RecordConversionError,
+        AnonymousLinkCreationDto, CollectionDto, CreateLinkRequest, LinkDto,
+        ManagementTokenReplacementDto, OwnedLinkCreationDto, PatchLinkRequest, Presence,
+        RecordConversionError,
     },
+    http::query::{LinkListQuery, LinkSort},
+    pagination::{CursorBoundary, CursorCodec, CursorContext},
     rate_limit::{ChargedAttempt, Creator},
 };
 
-use super::{allocation, repository};
+use super::{allocation, list_repository, repository};
 
 const ROLLBACK_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -102,6 +105,52 @@ impl LinkService {
     ) -> Result<CreatedLink, LinkFailure> {
         self.with_deadline(self.create_inner(attempt.into_creator(), input))
             .await
+    }
+
+    /// List a bounded page using one PostgreSQL statement snapshot for the
+    /// candidate page, owner state, canonical tags and cursor ordering values.
+    pub async fn list(
+        &self,
+        codec: &CursorCodec,
+        actor_id: crate::domain::ids::AccountId,
+        query: &LinkListQuery,
+    ) -> Result<CollectionDto<LinkDto>, LinkFailure> {
+        self.with_deadline(async {
+            let context = CursorContext::links(actor_id, query);
+            let boundary = query
+                .page()
+                .cursor()
+                .map(|cursor| codec.decode(&context, cursor))
+                .transpose()
+                .map_err(|_| LinkFailure::InvalidRequest)?;
+            let mut rows =
+                list_repository::list(&self.pool, actor_id.as_uuid(), query, boundary.as_ref())
+                    .await
+                    .map_err(map_sql)?;
+            let limit = usize::from(query.page().limit());
+            let has_more = rows.len() > limit;
+            rows.truncate(limit);
+
+            let mut items = Vec::with_capacity(rows.len());
+            let mut next_cursor = None;
+            let page_len = rows.len();
+            for (index, snapshot) in rows.into_iter().enumerate() {
+                let (record, tags, owner_enabled) = snapshot.into_parts();
+                let item = super::representation::build(&record, tags, &self.origin, owner_enabled)
+                    .map_err(map_conversion)?;
+                if has_more && index + 1 == page_len {
+                    let boundary = link_boundary(query.sort(), &record)?;
+                    next_cursor = Some(
+                        codec
+                            .encode(&context, &boundary)
+                            .map_err(|_| LinkFailure::Internal)?,
+                    );
+                }
+                items.push(item);
+            }
+            Ok(CollectionDto::new(items, next_cursor))
+        })
+        .await
     }
 
     async fn create_inner(
@@ -885,6 +934,25 @@ fn snapshot_dto(
 ) -> Result<LinkDto, LinkFailure> {
     let (record, tags, owner_enabled) = snapshot.into_parts();
     LinkDto::from_record(&record, tags, origin, owner_enabled).map_err(map_conversion)
+}
+
+fn link_boundary(sort: LinkSort, record: &LinkRecord) -> Result<CursorBoundary, LinkFailure> {
+    let id = LinkId::new(record.id);
+    match sort {
+        LinkSort::CreatedAt => Ok(CursorBoundary::LinkCreatedAt {
+            at: list_repository::boundary_timestamp(record.created_at)
+                .map_err(|_| LinkFailure::Internal)?,
+            id,
+        }),
+        LinkSort::Title => Ok(CursorBoundary::LinkTitle {
+            normalized_title: record.title_search.clone(),
+            id,
+        }),
+        LinkSort::VisitCount => Ok(CursorBoundary::LinkVisitCount {
+            count: record.visit_count,
+            id,
+        }),
+    }
 }
 
 fn authorize_snapshot(

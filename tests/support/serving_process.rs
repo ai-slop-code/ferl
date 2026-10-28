@@ -35,12 +35,48 @@ impl ServingProcess {
     }
 
     pub async fn start_with(database_url: &str, cursor_key: &str, extra: &[(&str, &str)]) -> Self {
+        Self::start_binary_with(
+            env!("CARGO_BIN_EXE_ferl-server"),
+            database_url,
+            cursor_key,
+            extra,
+        )
+        .await
+    }
+
+    #[allow(dead_code)]
+    pub async fn start_binary_with(
+        binary: &str,
+        database_url: &str,
+        cursor_key: &str,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        Self::start_binary(binary, database_url, cursor_key, extra, true).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn start_binary_without_readiness(
+        binary: &str,
+        database_url: &str,
+        cursor_key: &str,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        Self::start_binary(binary, database_url, cursor_key, extra, false).await
+    }
+
+    async fn start_binary(
+        binary: &str,
+        database_url: &str,
+        cursor_key: &str,
+        extra: &[(&str, &str)],
+        wait_for_ready: bool,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("reserve a local process-test port");
         let address = listener.local_addr().unwrap();
         drop(listener);
-        let mut child = Command::new(env!("CARGO_BIN_EXE_ferl-server"));
+        let mut child = Command::new(binary);
         child
             .env_clear()
             .env("FERL_DATABASE_URL", database_url)
@@ -75,7 +111,9 @@ impl ServingProcess {
             stdout,
             stderr,
         };
-        process.wait_until_ready().await;
+        if wait_for_ready {
+            process.wait_until_ready().await;
+        }
         process
     }
 

@@ -13,6 +13,7 @@ pub mod pagination;
 pub mod rate_limit;
 pub mod redirects;
 pub mod shutdown;
+pub mod tags;
 pub mod telemetry;
 
 pub const BUILD_VERSION: &str = env!("FERL_BUILD_VERSION");

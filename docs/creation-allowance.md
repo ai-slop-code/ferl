@@ -86,8 +86,10 @@ orchestration remains historical service-level evidence, not endpoint evidence.
 
 ## PostgreSQL protocol and precision
 
-Schema version **1**, PostgreSQL **17.x**, and the published initial migration
-remain unchanged. Subject partial unique indexes establish one stable bucket.
+At the Part 05 rate-accounting increment, schema version **1**, PostgreSQL
+**17.x**, and the published initial migration were unchanged. Part 08 later adds
+schema version 2 discovery indexes only; it does not change allowance tables or
+the accounting protocol. Subject partial unique indexes establish one stable bucket.
 The rate transaction is READ COMMITTED. Lock order is:
 
 ```text

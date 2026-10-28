@@ -2,6 +2,7 @@ use std::{
     fs::{File, OpenOptions},
     io,
     process::Output,
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -23,7 +24,14 @@ pub struct IsolatedTestDatabase {
     admin_pool: PgPool,
     schema: String,
     schema_database_url: String,
+    _process_fixture_lock: tokio::sync::OwnedMutexGuard<()>,
     _harness_lock: File,
+}
+
+static PROCESS_FIXTURE_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
+
+fn process_fixture_lock() -> Arc<tokio::sync::Mutex<()>> {
+    Arc::clone(PROCESS_FIXTURE_LOCK.get_or_init(|| Arc::new(tokio::sync::Mutex::new(()))))
 }
 
 impl IsolatedTestDatabase {
@@ -74,6 +82,17 @@ impl IsolatedTestDatabase {
     }
 
     pub async fn connect_from_harness() -> Self {
+        // `flock` coordinates independent test binaries and harness scripts, but
+        // on some platforms locks opened by the same process do not serialize
+        // sibling Tokio test tasks. Account-authority advisory locks are database-
+        // scoped (not schema-scoped), so keep fixture scenarios in this test
+        // binary serial as well.
+        let process_fixture_lock = timeout(
+            Duration::from_secs(120),
+            process_fixture_lock().lock_owned(),
+        )
+        .await
+        .expect("process-local PostgreSQL fixture lock is acquired before deadline");
         let harness_lock = acquire_harness_lock().await;
         let database_url = std::env::var("FERL_TEST_DATABASE_URL")
             .expect("FERL_TEST_DATABASE_URL is required; run scripts/postgres.sh start");
@@ -139,6 +158,7 @@ impl IsolatedTestDatabase {
             admin_pool,
             schema,
             schema_database_url,
+            _process_fixture_lock: process_fixture_lock,
             _harness_lock: harness_lock,
         }
     }
@@ -175,9 +195,10 @@ impl IsolatedTestDatabase {
     }
 }
 
-/// A process-wide file lock coordinates every database test and scripts that
-/// may start/stop the shared Podman container. Unlike a Rust mutex, `flock`
-/// coordinates independent test binaries and concurrent harness invocations.
+/// A process-wide file lock coordinates test binaries and scripts that may
+/// start/stop the shared Podman container. The process-local async mutex above
+/// serializes sibling Tokio test tasks, because PostgreSQL advisory keys are
+/// database-scoped even when tests use separate schemas.
 async fn acquire_harness_lock() -> File {
     let path = std::env::var_os("FERL_TEST_HARNESS_LOCK_PATH")
         .map(std::path::PathBuf::from)

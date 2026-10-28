@@ -12,7 +12,8 @@ mod redirect_support;
 
 use std::collections::BTreeSet;
 
-use openapi_validation::{document, validates, validates_ref_with_siblings};
+use http_body_util::BodyExt;
+use openapi_validation::{document, validates, validates_ref_with_siblings, validates_response};
 use serde_json::{Value, json};
 
 #[test]
@@ -553,6 +554,129 @@ fn account_link_and_conditional_secret_fixtures_match_checked_in_components() {
         .unwrap()
         .remove("management_token");
     assert!(!validates("LinkCreation", &invalid_anonymous));
+}
+
+#[tokio::test]
+async fn actual_discovery_responses_and_errors_match_openapi_components() {
+    use account_support::{
+        call, json as response_json, migrated_database, production_router, request, seed_account,
+    };
+    use axum::http::{Method, StatusCode};
+    use serde_json::json;
+
+    let database = migrated_database().await;
+    database
+        .verify(|database| {
+            Box::pin(async move {
+                let (_, admin_key) =
+                    seed_account(database.pool(), "openapi_discovery_admin", "admin", true).await;
+                let (_, user_key) =
+                    seed_account(database.pool(), "openapi_discovery_user", "user", true).await;
+                let app = production_router(database).await;
+                let created = call(
+                    app.clone(),
+                    request(
+                        Method::POST,
+                        "/api/v1/links",
+                        Some(&user_key),
+                        r#"{"destination_url":"https://openapi-discovery.example/","short_code":"openapi-discovery","title":null,"tags":["OpenAPI Tag"]}"#,
+                    ),
+                )
+                .await;
+                assert_eq!(created.status(), StatusCode::CREATED);
+                let _ = response_json(created).await;
+
+                for (path, key, component, schema) in [
+                    ("/api/v1/links", user_key.as_str(), "Links", "LinkCollection"),
+                    ("/api/v1/tags", user_key.as_str(), "Tags", "TagCollection"),
+                    ("/api/v1/links?scope=all", admin_key.as_str(), "Links", "LinkCollection"),
+                    ("/api/v1/tags?scope=all", admin_key.as_str(), "Tags", "TagCollection"),
+                ] {
+                    let response = call(
+                        app.clone(),
+                        request(Method::GET, path, Some(key), ""),
+                    )
+                    .await;
+                    assert_eq!(response.status(), StatusCode::OK, "{path}");
+                    let headers = response.headers().clone();
+                    let body = response_json(response).await;
+                    assert!(validates_response(component, &headers, Some(&body), false), "{path}");
+                    assert!(validates(schema, &body), "{path}");
+                }
+
+                let forbidden = call(
+                    app.clone(),
+                    request(
+                        Method::GET,
+                        "/api/v1/links?scope=all&owner_id=%GG",
+                        Some(&user_key),
+                        "",
+                    ),
+                )
+                .await;
+                assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+                let headers = forbidden.headers().clone();
+                let body = response_json(forbidden).await;
+                assert_eq!(body["error"]["code"], "forbidden");
+                assert!(validates_response("Forbidden", &headers, Some(&body), false));
+
+                let malformed = call(
+                    app.clone(),
+                    request(
+                        Method::GET,
+                        "/api/v1/tags?unknown=OPENAPI-PRIVATE-CANARY",
+                        Some(&user_key),
+                        "",
+                    ),
+                )
+                .await;
+                assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
+                let headers = malformed.headers().clone();
+                let body = response_json(malformed).await;
+                assert_eq!(body["error"]["code"], "invalid_request");
+                assert!(validates_response("BadRequest", &headers, Some(&body), false));
+                let mut invalid_error = body.clone();
+                invalid_error.as_object_mut().unwrap().remove("request_id");
+                assert!(!validates("Error", &invalid_error));
+
+                let unauthenticated = call(
+                    app.clone(),
+                    request(Method::GET, "/api/v1/tags", None, ""),
+                )
+                .await;
+                assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+                let headers = unauthenticated.headers().clone();
+                let body = response_json(unauthenticated).await;
+                assert!(validates_response("Unauthorized", &headers, Some(&body), false));
+
+                let head = call(
+                    app,
+                    request(Method::HEAD, "/api/v1/links", None, ""),
+                )
+                .await;
+                assert_eq!(head.status(), StatusCode::METHOD_NOT_ALLOWED);
+                assert_eq!(head.headers()["allow"], "GET, POST");
+                assert!(validates_response("MethodNotAllowed", head.headers(), None, true));
+                assert!(
+                    head.into_body()
+                        .collect()
+                        .await
+                        .unwrap()
+                        .to_bytes()
+                        .is_empty()
+                );
+
+                let mut invalid_link_collection = json!({
+                    "items": [],
+                    "next_cursor": null
+                });
+                invalid_link_collection["next_cursor"] = json!("");
+                assert!(!validates("LinkCollection", &invalid_link_collection));
+                let invalid_tag = json!({"name":"work","link_count":0});
+                assert!(!validates("TagInfo", &invalid_tag));
+            })
+        })
+        .await;
 }
 
 #[test]

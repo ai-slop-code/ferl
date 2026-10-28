@@ -427,7 +427,7 @@ async fn actual_link_http_contract_storage_failures_and_production_diagnostics_a
                 )
                 .await;
                 assert_eq!(method.status(), StatusCode::METHOD_NOT_ALLOWED);
-                assert_eq!(method.headers()["allow"], "POST");
+                assert_eq!(method.headers()["allow"], "GET, POST");
                 assert_eq!(method.headers()["cache-control"], "no-store");
                 assert!(openapi::validates_response(
                     "MethodNotAllowed",

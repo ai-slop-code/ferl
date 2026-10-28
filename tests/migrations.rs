@@ -6,6 +6,7 @@ use std::{collections::BTreeMap, process::Output, sync::Arc, time::Duration};
 use ferl_server::{
     config::MigrationConfig,
     db::migrate::{self, MIGRATION_LOCK_KEY, SchemaIssue, VerificationError},
+    domain::text::ComparisonText,
 };
 use sqlx::Row;
 use tokio::{process::Command, sync::Barrier, time::timeout};
@@ -21,7 +22,11 @@ async fn migration_cli_migrates_fresh_isolated_schema_and_is_idempotent() {
     );
 
     let first = run_migrate(database.schema_database_url(), &[]).await;
-    assert!(first.status.success(), "first migration command succeeds");
+    assert!(
+        first.status.success(),
+        "first migration command succeeds: {}",
+        combined_output(&first)
+    );
 
     let second = run_migrate(database.schema_database_url(), &[]).await;
     assert!(
@@ -36,9 +41,11 @@ async fn migration_cli_migrates_fresh_isolated_schema_and_is_idempotent() {
         .fetch_all(database.pool())
         .await
         .expect("migration history is queryable");
-    assert_eq!(history.len(), 1, "repeated migrate records one version row");
+    assert_eq!(history.len(), 2, "both versioned migrations are recorded");
     assert_eq!(history[0].get::<i64, _>("version"), 1);
     assert!(history[0].get::<bool, _>("success"));
+    assert_eq!(history[1].get::<i64, _>("version"), 2);
+    assert!(history[1].get::<bool, _>("success"));
 
     let table_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM information_schema.tables \
@@ -107,7 +114,7 @@ async fn concurrent_migration_processes_create_one_consistent_history() {
         .fetch_one(database.pool())
         .await
         .expect("migration history is readable");
-    assert_eq!(versions, 1, "the migration was applied exactly once");
+    assert_eq!(versions, 2, "each migration was applied exactly once");
     database.close().await;
 }
 
@@ -177,7 +184,7 @@ async fn migration_rejects_dirty_mismatched_and_newer_history_without_repairing_
         .expect("test restores the exact embedded checksum");
     sqlx::query(
         "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
-         VALUES (2, 'unexpected', true, $1, 0)",
+         VALUES (3, 'unexpected', true, $1, 0)",
     )
     .bind(vec![7_u8; 48])
     .execute(database.pool())
@@ -193,7 +200,7 @@ async fn migration_rejects_dirty_mismatched_and_newer_history_without_repairing_
         .fetch_one(database.pool())
         .await
         .expect("unsupported history remains unchanged");
-    assert_eq!(history_count, 2);
+    assert_eq!(history_count, 3);
     database.close().await;
 }
 
@@ -300,6 +307,388 @@ async fn schema_verifier_detects_nullability_and_minimal_reservation_drift() {
         .await
         .expect("restored schema verifies again");
     database.close().await;
+}
+
+#[tokio::test]
+async fn populated_authentic_v1_upgrade_preserves_authoritative_rows_and_digests() {
+    let database = IsolatedTestDatabase::connect_from_harness().await;
+    database
+        .verify_owned(|pool, schema_url| {
+            Box::pin(async move {
+                let config = MigrationConfig::from_map(BTreeMap::from([(
+                    "FERL_DATABASE_URL".to_owned(),
+                    schema_url.clone(),
+                )]))
+                .expect("isolated URL forms a migration profile");
+    migrate::run_migrations(&config)
+        .await
+        .expect("fresh baseline and discovery migrations apply");
+
+    let admin_id = uuid::Uuid::from_u128(0x801);
+    let owner_id = uuid::Uuid::from_u128(0x802);
+    let account_digest = vec![0x31_u8; 32];
+    let owner_digest = vec![0x32_u8; 32];
+    sqlx::query(
+        "INSERT INTO accounts (id, username, role, enabled, api_key_digest) \
+         VALUES ($1, 'upgrade_admin', 'admin', true, $2), \
+                ($3, 'upgrade_owner', 'user', false, $4)",
+    )
+    .bind(admin_id)
+    .bind(&account_digest)
+    .bind(owner_id)
+    .bind(&owner_digest)
+    .execute(&pool)
+    .await
+    .expect("fixture accounts and credential digests persist");
+    sqlx::query("UPDATE system_state SET bootstrap_completed = true")
+        .execute(&pool)
+        .await
+        .expect("bootstrap state advances with an enabled admin present");
+
+    let destination = "https://upgrade.example.test/path?keep=1#fragment";
+    let destination_search = ComparisonText::from_persisted(destination);
+    sqlx::query(
+        "INSERT INTO code_reservations (short_code) VALUES \
+         ('upgrade-owned'), ('upgrade-anonymous'), ('retained-deleted-code')",
+    )
+    .execute(&pool)
+    .await
+    .expect("linked and retained reservations are present");
+    sqlx::query(
+        "INSERT INTO links \
+         (id, short_code, owner_id, destination_url, destination_search, title, title_search, \
+          enabled, visit_count, management_token_digest) \
+         VALUES ($1, 'upgrade-owned', $2, $3, $4, 'Upgrade title', 'upgrade title', \
+                 true, 2, NULL), \
+                ($5, 'upgrade-anonymous', NULL, $6, $7, NULL, NULL, true, 0, $8)",
+    )
+    .bind(uuid::Uuid::from_u128(0x803))
+    .bind(owner_id)
+    .bind(destination)
+    .bind(destination_search.as_str())
+    .bind(uuid::Uuid::from_u128(0x804))
+    .bind("https://anonymous-upgrade.example.test/")
+    .bind("https://anonymous-upgrade.example.test/")
+    .bind(vec![0x33_u8; 32])
+    .execute(&pool)
+    .await
+    .expect("owned and anonymous link state is valid in the baseline schema");
+    sqlx::query(
+        "INSERT INTO link_tags (link_id, name) VALUES \
+         ($1, 'upgrade tag'), ($2, 'anonymous tag')",
+    )
+    .bind(uuid::Uuid::from_u128(0x803))
+    .bind(uuid::Uuid::from_u128(0x804))
+    .execute(&pool)
+    .await
+    .expect("tag associations are canonical and persisted");
+    sqlx::query(
+        "INSERT INTO visits \
+         (id, link_id, redirect_url, occurred_at, method, client_ip, referrer, user_agent, \
+          device, browser, os) \
+         VALUES ($1, $2, $3, '2026-10-28T10:00:00Z', 'GET', '192.0.2.1', NULL, NULL, \
+                 'unknown', 'unknown', 'unknown'), \
+                ($4, $2, $3, '2026-10-28T10:01:00Z', 'HEAD', '2001:db8::1', \
+                 'https://ref.example/', 'agent', 'desktop', 'browser', 'os')",
+    )
+    .bind(uuid::Uuid::from_u128(0x805))
+    .bind(uuid::Uuid::from_u128(0x803))
+    .bind(destination)
+    .bind(uuid::Uuid::from_u128(0x806))
+    .execute(&pool)
+    .await
+    .expect("historical visit snapshots survive the upgrade");
+    let bucket_id = uuid::Uuid::from_u128(0x807);
+    sqlx::query(
+        "INSERT INTO rate_buckets (id, bucket_kind, account_id, client_ip) \
+         VALUES ($1, 'account', $2, NULL)",
+    )
+    .bind(bucket_id)
+    .bind(owner_id)
+    .execute(&pool)
+    .await
+    .expect("account allowance bucket is persisted");
+    sqlx::query("INSERT INTO rate_charges (id, bucket_id) VALUES ($1, $2)")
+        .bind(uuid::Uuid::from_u128(0x808))
+        .bind(bucket_id)
+        .execute(&pool)
+        .await
+        .expect("committed rate charge is persisted");
+
+    restore_authentic_v1_state(&pool).await;
+    assert_eq!(
+        migrate::verify_compatibility(&pool).await,
+        Err(VerificationError::Incompatible(
+            SchemaIssue::HistoryMismatch
+        )),
+        "new binary fails closed until its version-2 migration is applied"
+    );
+    migrate::run_migrations(&config)
+        .await
+        .expect("upgrade from populated authentic schema v1 applies v2");
+    migrate::verify_compatibility(&pool)
+        .await
+        .expect("upgraded schema and both migration checksums verify");
+
+    let versions: Vec<i64> =
+        sqlx::query_scalar("SELECT version FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(versions, [1, 2]);
+    assert_eq!(
+        sqlx::query_scalar::<_, Vec<u8>>("SELECT api_key_digest FROM accounts WHERE id = $1")
+            .bind(admin_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        account_digest
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Vec<u8>>("SELECT api_key_digest FROM accounts WHERE id = $1")
+            .bind(owner_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        owner_digest
+    );
+    let (owner_enabled, title, counter, link_digest): (bool, Option<String>, i64, Option<Vec<u8>>) =
+        sqlx::query_as(
+            "SELECT a.enabled, l.title, l.visit_count, l.management_token_digest \
+             FROM links l JOIN accounts a ON a.id = l.owner_id WHERE l.short_code = 'upgrade-owned'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(!owner_enabled);
+    assert_eq!(title.as_deref(), Some("Upgrade title"));
+    assert_eq!(counter, 2);
+    assert_eq!(link_digest, None);
+    assert_eq!(
+        sqlx::query_scalar::<_, Vec<u8>>(
+            "SELECT management_token_digest FROM links WHERE short_code = 'upgrade-anonymous'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        vec![0x33_u8; 32]
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM visits WHERE link_id = $1")
+            .bind(uuid::Uuid::from_u128(0x803))
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Vec<String>>(
+            "SELECT array_agg(name ORDER BY name COLLATE \"C\") FROM link_tags \
+             WHERE link_id = $1",
+        )
+        .bind(uuid::Uuid::from_u128(0x803))
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        ["upgrade tag"]
+    );
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM code_reservations WHERE short_code = 'retained-deleted-code')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap()
+    );
+    assert!(
+        sqlx::query_scalar::<_, bool>("SELECT bootstrap_completed FROM system_state")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM rate_charges WHERE bucket_id = $1")
+            .bind(bucket_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+        1
+    );
+            })
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn discovery_verifier_detects_missing_and_wrong_key_indexes() {
+    let database = IsolatedTestDatabase::connect_from_harness().await;
+    database
+        .verify_owned(|pool, schema_url| {
+            Box::pin(async move {
+                let config = MigrationConfig::from_map(BTreeMap::from([(
+                    "FERL_DATABASE_URL".to_owned(),
+                    schema_url.clone(),
+                )]))
+                .unwrap();
+                migrate::run_migrations(&config).await.unwrap();
+                sqlx::query("DROP INDEX links_title_search_id_asc_idx")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    migrate::verify_compatibility(&pool).await,
+                    Err(VerificationError::Incompatible(SchemaIssue::MissingIndex))
+                );
+                sqlx::query(
+                    "CREATE INDEX links_title_search_id_asc_idx ON links (created_at ASC, id ASC)",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                assert_eq!(
+                    migrate::verify_compatibility(&pool).await,
+                    Err(VerificationError::Incompatible(SchemaIssue::IndexMismatch))
+                );
+                sqlx::query("DROP INDEX links_title_search_id_asc_idx")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query(
+                    "CREATE INDEX links_title_search_id_asc_idx \
+         ON links (title_search COLLATE \"C\" ASC NULLS LAST, id ASC)",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                migrate::verify_compatibility(&pool)
+                    .await
+                    .expect("restored index key semantics are accepted");
+                sqlx::query("DROP INDEX links_title_search_id_asc_idx")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query(
+                    "CREATE UNIQUE INDEX links_title_search_id_asc_idx \
+         ON links (title_search COLLATE \"C\" ASC NULLS LAST, id ASC)",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                assert_eq!(
+                    migrate::verify_compatibility(&pool).await,
+                    Err(VerificationError::Incompatible(SchemaIssue::IndexMismatch)),
+                    "a same-key unique index is not interchangeable with the required nonunique key"
+                );
+                sqlx::query("DROP INDEX links_title_search_id_asc_idx")
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                sqlx::query(
+                    "CREATE INDEX links_title_search_id_asc_idx \
+         ON links (title_search COLLATE \"C\" ASC NULLS LAST, id ASC)",
+                )
+                .execute(&pool)
+                .await
+                .unwrap();
+                migrate::verify_compatibility(&pool)
+                    .await
+                    .expect("final exact index definition verifies");
+            })
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn transactional_index_build_lock_timeout_rolls_back_and_recovers() {
+    let database = IsolatedTestDatabase::connect_from_harness().await;
+    database
+        .verify_owned(|pool, schema_url| {
+            Box::pin(async move {
+                let config = MigrationConfig::from_map(BTreeMap::from([(
+                    "FERL_DATABASE_URL".to_owned(),
+                    schema_url.clone(),
+                )]))
+                .unwrap();
+                migrate::run_migrations(&config).await.unwrap();
+                restore_authentic_v1_state(&pool).await;
+
+                let mut blocker = pool.begin().await.unwrap();
+                sqlx::query("UPDATE links SET enabled = enabled WHERE false")
+                    .execute(&mut *blocker)
+                    .await
+                    .unwrap();
+                let failed = run_migrate(
+                    schema_url.as_str(),
+                    &[
+                        ("FERL_MIGRATE_CONNECT_TIMEOUT_SECS", "1"),
+                        ("FERL_MIGRATE_LOCK_TIMEOUT_SECS", "1"),
+                        ("FERL_MIGRATE_STATEMENT_TIMEOUT_SECS", "5"),
+                        ("FERL_MIGRATE_TOTAL_TIMEOUT_SECS", "8"),
+                    ],
+                )
+                .await;
+                assert_eq!(failed.status.code(), Some(1));
+                let failure_output = combined_output(&failed);
+                assert!(
+                    failure_output.contains("migration_database_unavailable")
+                        || failure_output.contains("migration_execution_failed"),
+                    "bounded DDL lock failure must be sanitized: {failure_output}"
+                );
+                assert_eq!(
+                    sqlx::query_scalar::<_, i64>(
+                        "SELECT count(*) FROM _sqlx_migrations WHERE version = 2"
+                    )
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap(),
+                    0,
+                    "a timed-out transactional migration has no success history"
+                );
+                assert!(
+                    !sqlx::query_scalar::<_, bool>(
+                        "SELECT to_regclass('links_created_at_id_idx') IS NOT NULL",
+                    )
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap()
+                );
+                blocker.rollback().await.unwrap();
+
+                run_migrate(schema_url.as_str(), &[])
+                    .await
+                    .status
+                    .success()
+                    .then_some(())
+                    .expect("released lock permits clean bounded migration recovery");
+                migrate::verify_compatibility(&pool)
+                    .await
+                    .expect("recovered migration installs the complete verified index set");
+            })
+        })
+        .await;
+}
+
+async fn restore_authentic_v1_state(pool: &sqlx::PgPool) {
+    for index in [
+        "links_created_at_id_idx",
+        "links_owner_created_at_id_idx",
+        "links_visit_count_id_idx",
+        "links_owner_visit_count_id_idx",
+        "links_title_search_id_asc_idx",
+        "links_title_search_id_desc_idx",
+        "links_owner_title_search_id_asc_idx",
+        "links_owner_title_search_id_desc_idx",
+    ] {
+        let statement = format!("DROP INDEX {index}");
+        sqlx::query(sqlx::AssertSqlSafe(statement))
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 2")
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
