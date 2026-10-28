@@ -1024,8 +1024,15 @@ Execution checklist:
 8. [x] Real HTTP/PostgreSQL/concurrency/process/privacy/fault/OpenAPI evidence.
 9. [x] Full gate and complete tracked/untracked diff review; whitespace/error
    checks pass.
-10. [ ] Verified implementation commit, handoff-only follow-up, explicit local
-    no-ff merge, and clean final Git/handoff state.
+10. [ ] Explicit local no-ff merge and clean final Git/handoff state.
+
+Part 09 implementation handoff: verified implementation commit
+`178e297` (`feat(part-09): add analytics reports`), based on Part 08 merge
+`12c10c234c492dcbdf554a3cc6e1321d83474361`. The complete gate and diff review
+recorded above passed before this commit. `main` is an ancestor of the implementation
+commit; no history was rewritten, no remote was configured, and nothing was pushed.
+The implementation branch is retained. The explicit local integration merge and
+integrated tip hash will be recorded on `main` after that merge is completed.
 
 ## Per-part handoff template
 
