@@ -9,6 +9,7 @@ pub const MAX_URL_BYTES: usize = 8_192;
 
 pub struct DestinationUrl(String);
 pub struct StoredUrl(String);
+#[derive(Clone)]
 pub struct PublicOrigin(String);
 
 impl DestinationUrl {

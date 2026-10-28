@@ -180,6 +180,38 @@ while creating links. Unknown commit acknowledgement remains ambiguous and is
 not automatically retried. No domain service, bootstrap command, rate limiter,
 link CRUD API, redirect, or analytics worker is implemented in Part 02.
 
+## Part 06 link-management transactions
+
+Part 06 uses the existing version-1 schema without a migration. Eligible create
+requests first obtain an independently acknowledged Part 05 allowance charge,
+then create in a separate READ COMMITTED transaction. Account creation acquires
+the shared account-authority gate and re-reads the retained credential, enabled
+state, and current role in a later statement. Anonymous creation stores a null
+owner and one freshly generated token digest. Reservations, link metadata/search
+values, and tag associations commit or roll back together. Generated allocation
+uses conflict-safe reservation insertion and at most ten candidates; collisions
+do not abort the transaction. Deleted links cascade their tags and visits but
+leave the minimal reservation row permanently occupied.
+
+PATCH and DELETE take the shared account-authority gate for account callers or
+the live token-bearing link row for token callers, then lock the target link row
+and revalidate current authority before changing any child rows. Token rotation
+uses the same row lock; admin token replacement additionally uses the shared
+account gate and current admin role. The lock order remains authority gate →
+account rows → link rows → child rows. The bounded gate helper initially leaves
+its lock deadline in transaction-local `statement_timeout`; link services
+explicitly restore the configured statement and lock deadlines before further
+SQL. Each mutation retains the lock through acknowledged commit. Unknown commit
+acknowledgement is not retried, compensated, or converted into a success.
+
+Detail representations read link metadata, owner state, and canonical tag names
+from one SQL statement snapshot. `links::resolve_active_link` is the Part 07
+handoff: a fresh, bounded primary-pool single-statement link/owner join that
+returns only a typed immutable destination snapshot for an enabled link with an
+anonymous owner or an existing enabled account owner. It returns unavailable
+links separately from storage/conversion failures, uses no cache, and performs no
+redirect or visit work.
+
 ## Isolated PostgreSQL tests
 
 `tests/support/database.rs::IsolatedTestDatabase::connect_from_harness()`

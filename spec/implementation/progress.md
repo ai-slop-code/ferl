@@ -1,6 +1,6 @@
 # Implementation progress and agent handoff
 
-Historical baseline note: instructions were prepared before implementation began. Parts 01–05 have completed and merged into local `main`; Part 06 is the current next stage.
+Historical baseline note: instructions were prepared before implementation began. Parts 01–05 are complete and merged into local `main`; Part 06 is the current implementation stage.
 
 Status lifecycle: Planned → In progress → Verified (awaiting merge) → Complete. Use Blocked when a required implementation, verification or Git integration step cannot finish. Complete requires a committed merge into local `main`, as defined in [git-workflow.md](git-workflow.md).
 
@@ -13,7 +13,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 03 Domain and wire contracts | Complete | Verified implementation `9f143478c657a505082911d015c8961f14df28dd` and handoff-only branch tip `5d5da6142397fecfe4ae7c7a67187da00f3a2e5f` from `implementation/03-domain-and-wire-contracts` are integrated by this explicit no-ff merge into `main`. |
 | 04 Authentication and accounts | Complete | Verified implementation `b740bb2d80c1bac590df52b72005efcc6bebb758` and integrated part tip `1aacfbca49b94c000cd7ab17b20a3609b4c740dd` from `implementation/04-authentication-and-accounts` are integrated by this explicit no-ff merge into `main` from base `15d9ddebdc0b15d06a0bea97883a6beaf1b1437a`. The tested implementation tree is unchanged; only this completion handoff is added in the merge commit. |
 | 05 Client IP and rate limits | Complete | Verified implementation `cda4b77866e96b498be144d6f819cd4a113a6896` and integrated part tip `6c21d8ab8a4d05f7c41166da98d8fb3d42ffd7d3` from `implementation/05-client-ip-and-rate-limits`, base `14ec982566c348f6b59e1f7a715f7eefc2ab9b19`, are integrated by this explicit local no-ff merge. Closing gate: 144 tests and 3 compile-fail doctests passed. |
-| 06 Link management | Planned | — |
+| 06 Link management | Verified (awaiting merge) | Closing gate passed on `implementation/06-link-management` from `bbe53b3b439d961b88e0a56b877ad3e409411f2e`; reviewed implementation/part-tip hashes are recorded in the handoff follow-up. |
 | 07 Redirects and visit ingestion | Planned | — |
 | 08 Link and tag discovery | Planned | — |
 | 09 Analytics reports | Planned | — |
@@ -230,6 +230,8 @@ Integration is recorded by this merge commit, whose parents are
 `git diff --exit-code` confirmed exact equality with the reviewed part tree.
 Only this progress completion metadata differs from the integrated part tip;
 implementation/build inputs remain identical to the closing full gate.
+The actual Part 05 integration merge is
+`bbe53b3b439d961b88e0a56b877ad3e409411f2e`.
 
 ### Delivered behavior and integration contract
 
@@ -390,10 +392,212 @@ of those broad scenarios is marked release-complete here.
 Required verification checks unexecuted: **none**. Part 05 blockers: **none**.
 The verified part branch is retained for traceability. The merge's resulting hash
 is reported from Git after commit rather than embedded in its own tree.
-**Next: Part 06 — Link management**. Public creation must obtain the acknowledged
-charge before body validation, consume its retained evidence by ownership, and
-revalidate in a separate protected creation transaction. Part 06 and later-stage
-business implementation has not begun.
+Historical next-part note: Part 06 — Link management followed the Part 05
+checkpoint. It is now active on `implementation/06-link-management` from this
+verified Part 05 merge; its completed handoff will be recorded below. Public
+creation consumes the acknowledged charge before body validation and revalidates
+account authority in a separate protected creation transaction.
+
+## Part 06 handoff — 2026-10-28
+
+Status: **Verified (awaiting merge)**. The Part 06 implementation and closing
+verification gate passed on `implementation/06-link-management`. The explicit
+local `main` merge remains the next integration step.
+
+### Git checkpoint and traceability
+
+- Repository root: `$PWD`.
+- Base/main: `bbe53b3b439d961b88e0a56b877ad3e409411f2e`, the verified Part 05
+  merge with parents `14ec982566c348f6b59e1f7a715f7eefc2ab9b19` and
+  `6c21d8ab8a4d05f7c41166da98d8fb3d42ffd7d3`. The retained Part 05 branch and
+  tip remain `implementation/05-client-ip-and-rate-limits` and
+  `6c21d8ab8a4d05f7c41166da98d8fb3d42ffd7d3`; verified Part 05 implementation
+  is `cda4b77866e96b498be144d6f819cd4a113a6896`.
+- `implementation/06-link-management` already existed at the expected base when
+  resumed. Its working tree contained the in-progress Part 06 source/docs/tests
+  listed below; the index was initially clean. The main and branch refs, merge
+  ancestry, retained Part 05 branch, and absence of merge/rebase/cherry-pick/
+  revert/sequencer operation state were inspected. No existing branch or commit
+  was reset, replaced, amended, or force-updated.
+- Local identity: `LubosBa <30705301+LubosBa@users.noreply.github.com>` from repository configuration.
+  No global identity, remote, or push was configured.
+- Base commit: `bbe53b3b439d961b88e0a56b877ad3e409411f2e`.
+- Verified implementation commit: recorded in the handoff-only follow-up after
+  the reviewed implementation commit is created. Integrated part-tip and merge
+  commit are recorded during explicit local integration; a commit never embeds
+  its own hash.
+
+### Implemented Part 06 behavior
+
+- `AppState::from_config` composes `LinkService` with the actual validated
+  `PublicOrigin`, production primary pool, configured link-operation/statement/
+  lock/acquire bounds, and the Part 05 `CreationService`. No handler default or
+  request `Host`/forwarded origin is used. Added bounded
+  `FERL_LINK_OPERATION_TIMEOUT_SECS` (default 30s, range 1–300) to validated
+  serving configuration, `.env.example`, and `docs/configuration.md`.
+- Registered exactly `POST /api/v1/links`, `GET /api/v1/links/{code}`,
+  `PATCH /api/v1/links/{code}`, `DELETE /api/v1/links/{code}`, and
+  `POST /api/v1/links/{code}/management-token`. Dispatch selects paths/methods
+  before authentication, advertises only implemented methods, does not install
+  future collection behavior, and does not provide implicit API HEAD success.
+  Safe request-log templates hide resolved codes.
+- Actual createLink pipeline: route/method selection → split request into parts
+  and body → `state.creation.prepare(&parts)` → charged creator eligibility and
+  independently acknowledged allowance commit → query/media/streamed-body/raw
+  field/domain/feature validation → consume `ChargedAttempt` by ownership in
+  `LinkService::create` → new creation transaction → acknowledged commit → 201.
+  The handler has no Axum JSON extractor, eager body middleware, content-length
+  shortcut, or pre-charge query validation. Anonymous `short_code` raw-member
+  presence wins before ordinary field validation, including null/wrong type.
+  Eligible malformed, oversized, unsupported-media, invalid-field, conflict,
+  allocation, and post-charge persistence failures retain their earlier charge.
+- `ChargedAttempt` remains private-field, non-Clone/Copy/non-serializable. The
+  link service consumes it; account creation retains the presented `Principal`
+  and revalidates it in a *new* READ COMMITTED transaction after taking the
+  shared authority gate. `owner_id` comes only from the fresh guarded caller.
+  Anonymous creation uses a separate transaction, stores null owner plus one
+  fresh management-token digest, and emits plaintext only in the committed
+  one-time response. No allowance transaction/bucket lock spans body reads,
+  allocation, or link writes; charges are never refunded.
+- Generated codes use the existing secure uniform eight-character generator,
+  share the permanent reservation namespace with custom codes, and try at most
+  ten `INSERT ... ON CONFLICT DO NOTHING RETURNING` candidates. Collisions do
+  not abort the transaction; unrelated constraint/decode/storage errors are not
+  reclassified as collisions. A private internal candidate-source seam is
+  replaceable only by in-crate tests; HTTP and environment values cannot control
+  it, and production composition always uses OS randomness. Custom `api` and
+  occupied/deleted codes return 409; `assets`, `health`, and `api-sale` remain
+  valid custom codes. Reservation/link/search/tag writes are atomic; rollback
+   leaves no new reservation or child rows, while committed deletion retains only
+   the permanent reservation.
+- Narrow prerequisite safety corrections: Part 06 link rows use a checked finite
+  PostgreSQL-microsecond `DatabaseTimestamp` decoder rather than SQLx 0.9's
+  unchecked Chrono binary addition; the `infinity` stored-value HTTP test proves
+  a sanitized 500 rather than a driver panic. Inspection of locked `uuid`
+  1.29.0 also showed `Uuid::new_v4()` panics on `getrandom` failure. New link-ID
+  generation uses fallible `getrandom::fill` plus
+  `Builder::from_random_bytes`; `links::service::tests::link_identifier_randomness_failure_is_typed_instead_of_panicking`
+  verifies deterministic failure maps to the internal typed error without
+  panic. These fixes are limited to new link row/ID paths; no completed-stage
+  rewrite was made.
+- The reusable `links::representation::build` delegates to checked
+  `LinkDto::from_record(record, canonical_tags, configured_origin, owner_state)`.
+  Representations contain exactly the required 12 fields, explicit null title
+  and owner, sorted/deduplicated canonical tags, checked counts/timestamps,
+  configured short URL, and computed current `active`; no digest or plaintext
+  token is serialized. A single-statement link/owner/tag snapshot prevents mixed
+  metadata versions. No-op canonical PATCH commits without changing `updated_at`;
+  actual destination/search, title/search, enabled and complete tag-set changes
+  update atomically with database time. IDs/code/owner/created time/counter are
+  immutable. DELETE cascades only its live link children and preserves its code.
+- Protected management checks current authority before reading mutation bodies,
+  release those preflight guards before body I/O, and repeat complete checks in
+  the actual mutation transaction. Account operations take the shared
+  account-authority gate, re-read key/existence/enabled/current role after the
+  wait, lock the target live link, and retain locks through commit. Token
+  operations lock/revalidate the live token-bearing row; token rotation and
+  token-authorized edits/deletion use that same row protocol. Admin token
+  replacement additionally revalidates current admin role and rejects owned
+  links with `not_anonymous_link`. Lock order is authority gate → account rows →
+  live link rows → child rows. Bounded gate helpers leave lock-deadline
+  `statement_timeout`; link services explicitly restore configured statement
+  and lock bounds before subsequent work. No hidden pool checkout occurs inside
+  a held transaction.
+- `GET` and `PATCH`/`DELETE` conceal unrelated objects as 404, missing auth is
+  401 `authentication_required`, invalid/revoked/disabled credentials are 401
+  `invalid_credentials` with Bearer challenge, and valid wrong operation scope
+  is 403. Enabled owners, admins, and a matching management token manage their
+  permitted links; admins may inspect/manage disabled links and suspended-owner
+  links. Old anonymous tokens stop authenticating after rotation/deletion.
+- Commit errors/deadlines return sanitized 503 and no DTO/plaintext secret. No
+  mutation transaction is replayed, no reservation is released after unknown
+  commit, no charge is refunded, and no create idempotency is added. A test-only
+  PostgreSQL wire proxy targets a specified successful COMMIT ordinal so the
+  actual allowance COMMIT is acknowledged before the create COMMIT response is
+  withheld. It similarly targets post-preflight PATCH, DELETE, and token
+  replacement commits. Independent durable-state reads prove the committed
+  outcomes and no success DTO/204/token plaintext is returned. Separate
+  trigger/backend-termination evidence proves an aborted create COMMIT leaves its
+  charge but no link/reservation/tags. No uncertain request is automatically
+  replayed or compensated.
+- Added `links::resolve_active_link(&PgPool, code, deadline)` as the Part 07
+  handoff. Its fresh single SQL statement joins link/owner state on the primary,
+  verifies anonymous/owned invariants and stored values, applies enabled/live
+  owner state, and returns a minimal typed immutable destination snapshot. It
+  distinguishes unavailable code from storage/conversion failure, has no cache
+  or credential bypass, and adds no redirect, visit event, queue, or worker.
+
+### Files, compatibility, and contract review
+
+New production modules: `src/links/{mod,allocation,repository,service,handlers,representation}.rs`.
+Updated production seams: `src/{app,config,lib}.rs`,
+`src/accounts/handlers.rs`, `src/auth/guard.rs`, `src/db/records.rs`,
+`src/domain/url.rs`, `src/http/{dto,request_id}.rs`, and `scripts/check.sh`.
+Executable evidence adds `src/links/service/tests.rs`,
+`tests/{creation_order,link_creation,link_authorization,link_management,token_rotation,link_concurrency,link_resolution,link_failures,link_process}.rs`,
+and narrowly extends `tests/support/{accounts,commit_proxy,database,openapi,serving_process}.rs`.
+Operator/test documentation updates `docs/{configuration,database,development,domain-contracts}.md`,
+`.env.example`, and this record plus `acceptance-map.md`.
+
+No migration or Cargo dependency/lockfile change was required. Published
+`migrations/0001_initial.sql` is unchanged. Supported ferl schema remains v1 and
+PostgreSQL compatibility remains 17.x. Normative `server-business-logic.md` and
+`openapi.yaml` were not edited; no contract conflict was found. Prior Part 01
+container-pull TLS history and Part 05 verification/integration records remain
+unchanged. No Part 07/08 service, public redirect, visit ingestion, list/search,
+tag discovery, report, analytics worker, SPA, OTLP exporter, or release-wide
+deployment feature was added.
+
+### Closing verification evidence
+
+- Environment: `podman info`, `podman machine list`, and
+  `sh scripts/postgres.sh ready` passed. Podman 6.1.4 and its existing machine
+  were available; pinned PostgreSQL 17.6 `ferl-stage01-postgres` was ready.
+  The link-process suite restarted only that verified container directly while
+  holding `IsolatedTestDatabase`'s common interprocess harness lock, preserved
+  `ferl-stage01-postgres-data`, then verified links/tags/digests/reservations/
+  charges through a replacement production server. No image pull or TLS change
+  was needed.
+- `sh scripts/check.sh` passed after final code/test changes. It ran
+  `cargo fmt --all -- --check`,
+  `cargo check --workspace --all-targets --all-features`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace --all-targets`, and `cargo test --doc`. Results:
+  **168 tests plus 3 compile-fail doctests passed**, with none ignored or skipped:
+  77 library, 7 account concurrency, 1 account process, 4 accounts,
+  1 authentication, 5 bootstrap, 4 client IP, 2 coordination,
+  4 creation-order, 6 cursor, 5 domain-contract, 2 foundation HTTP,
+  1 foundation PostgreSQL restart/readiness, 2 foundation process,
+  5 HTTP-decoding, 1 link-authorization, 4 link-concurrency, 3 link-creation,
+  2 link-failures, 2 link-management, 1 link-process, 1 link-resolution,
+  7 migrations, 5 OpenAPI, 4 persistence, 4 rate-concurrency,
+  1 rate-failure/privacy, 1 rate-process, 5 rate-limit allowance, and
+  1 token-rotation test. Binary unit target: 0 tests.
+- `cargo metadata --format-version 1 --locked` resolved 345 packages; none
+  advertises an MSRV above 1.94. Actual toolchain was
+  `rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)` and
+  `cargo 1.99.1 (5f94df478 2026-08-27) (Homebrew)`. Rust 1.94 was not run and
+  is not claimed. `sh -n scripts/check.sh scripts/postgres.sh` and
+  `git diff --check` passed.
+- Concrete Part 06 test evidence: `tests/creation_order.rs::{route_and_eligibility_rejections_precede_body_reads_and_allowance_charges,every_eligible_invalid_attempt_is_charged_after_prepare,account_rotation_after_charge_and_before_body_completion_blocks_creation,default_public_create_limits_charge_five_anonymous_and_sixty_account_attempts}`;
+  `tests/link_creation.rs::{production_create_routes_return_complete_owned_and_anonymous_representations,one_connection_pool_composes_allowance_and_new_creation_transaction,permanent_code_namespace_reserves_api_but_not_asset_or_health_root_names}`;
+  `tests/link_management.rs::{patch_detail_noops_and_delete_are_atomic_and_keep_permanent_reservations,concurrent_tag_replacements_commit_complete_sets_without_union}`;
+  `tests/link_authorization.rs::public_link_operations_apply_fresh_object_authority_and_conceal_other_objects`;
+  `tests/token_rotation.rs::token_replacement_is_scoped_bodyless_one_time_and_survives_creation_disable`;
+  `tests/link_concurrency.rs::{concurrent_custom_code_requests_have_one_winner_and_one_durable_reservation,guarded_account_mutations_revalidate_after_wait_and_hold_shared_gate_to_commit,link_row_lock_timeout_and_request_cancellation_leave_no_partial_mutation,token_patch_serializes_with_rotation_and_deletion_on_the_live_link_row}`;
+  `tests/link_failures.rs::{actual_link_http_contract_storage_failures_and_production_diagnostics_are_private,creation_and_token_commit_acknowledgement_uncertainty_is_not_replayed}`;
+  `tests/link_process.rs::independent_production_servers_share_link_state_allowance_and_restart_persistence`;
+  `tests/link_resolution.rs::fresh_active_link_resolver_tracks_http_edits_disable_suspension_and_deletion`; and
+  `links::service::tests::{generated_allocation_retries_exactly_ten_without_orphan_rows_or_extra_charge,link_identifier_randomness_failure_is_typed_instead_of_panicking}`.
+- Acceptance contributions are scoped to scenarios **1–4, 9–13, 16–18, 20,
+  26–28, 32–34, 39, 41, and 43–45**, plus relevant privacy/OpenAPI subsets of
+  **30/51**, as mapped in `acceptance-map.md`. Later discovery, redirect/visit,
+  analytics, OTLP, and full release conformance are explicitly not claimed.
+
+No required Part 06 check remains unexecuted and no blocker remains. **Next:
+Part 07 — Redirects and visit ingestion**, which may consume the documented
+representation builder and resolver but must still implement its own routes,
+redirect, event, queue, worker, and deletion-race behavior.
 
 ## Per-part handoff template
 

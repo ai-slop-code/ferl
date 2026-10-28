@@ -21,6 +21,7 @@ pub struct AppState {
     pub acquire_timeout: Duration,
     pub lock_timeout: Duration,
     pub creation: crate::rate_limit::CreationService,
+    pub links: crate::links::LinkService,
     pub client_ip: crate::client_ip::ClientIpResolver,
     pub(crate) cursor_codec: CursorCodec,
     pub(crate) http_admission: HttpAdmission,
@@ -31,6 +32,7 @@ impl AppState {
         let pool = pool::create_pool(&config.database)?;
         Ok(Self {
             creation: crate::rate_limit::CreationService::from_config(pool.clone(), config),
+            links: crate::links::LinkService::from_config(pool.clone(), config),
             client_ip: crate::client_ip::ClientIpResolver::new(&config.trusted_proxies),
             pool,
             readiness: Arc::new(ReadinessState::new_accepting()),

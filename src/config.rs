@@ -154,6 +154,7 @@ pub struct Config {
     pub anonymous_create_limit: u32,
     pub account_create_limit: u32,
     pub creation_timeout: Duration,
+    pub link_operation_timeout: Duration,
     pub trusted_proxies: Vec<IpNet>,
     pub cursor_key: CursorKey,
     pub analytics: AnalyticsConfig,
@@ -225,6 +226,7 @@ impl Config {
         let account_create_limit =
             parse_bounded(&values, "FERL_ACCOUNT_CREATE_LIMIT", 60_u32, 1, 1_000_000)?;
         let creation_timeout = seconds(&values, "FERL_CREATION_TIMEOUT_SECS", 15)?;
+        let link_operation_timeout = seconds(&values, "FERL_LINK_OPERATION_TIMEOUT_SECS", 30)?;
         let cursor_key = parse_cursor_key(required(&values, "FERL_CURSOR_KEY")?)?;
         let trusted_proxies = parse_trusted_proxies(values.get("FERL_TRUSTED_PROXIES"))?;
 
@@ -281,6 +283,7 @@ impl Config {
             anonymous_create_limit,
             account_create_limit,
             creation_timeout,
+            link_operation_timeout,
             trusted_proxies,
             cursor_key,
             analytics,
@@ -734,9 +737,21 @@ mod tests {
         assert!(!config.anonymous_creation);
         assert_eq!(config.anonymous_create_limit, 5);
         assert_eq!(config.account_create_limit, 60);
+        assert_eq!(config.link_operation_timeout, Duration::from_secs(30));
         assert!(config.trusted_proxies.is_empty());
         assert_eq!(config.database.pool_max_connections, 10);
         assert_eq!(config.telemetry.trace_sample_ratio, 1.0);
+    }
+
+    #[test]
+    fn link_operation_deadline_is_independently_bounded() {
+        let mut values = valid_values();
+        values.insert(
+            "FERL_LINK_OPERATION_TIMEOUT_SECS".to_owned(),
+            "0".to_owned(),
+        );
+        let error = Config::from_map(values).expect_err("zero link-operation deadline is invalid");
+        assert_eq!(error.setting, "FERL_LINK_OPERATION_TIMEOUT_SECS");
     }
 
     #[test]

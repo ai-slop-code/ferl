@@ -46,6 +46,9 @@ pub async fn dispatch(state: AppState, request: Request<Body>) -> Response {
 }
 
 async fn dispatch_inner(state: AppState, request: Request<Body>) -> Response {
+    if crate::links::handlers::handles_path(request.uri().path()) {
+        return crate::links::handlers::dispatch(state, request).await;
+    }
     let request_id = request
         .extensions()
         .get::<RequestId>()

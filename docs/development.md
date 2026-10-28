@@ -72,8 +72,9 @@ embedded, versioned schema using only database and migration settings.
 `bootstrap-admin --username ...` uses its own bounded configuration profile,
 requires a migrated compatible schema, and emits one account-creation JSON DTO
 to stdout only after commit; its sanitized diagnostics use stderr. Startup and
-migrations never bootstrap. Part 04 registers the account routes; later
-business routes remain structured 404s until their implementation part.
+migrations never bootstrap. Part 04 registers account routes, and Part 06 adds
+single-link management routes. Collection listing, redirects/visit ingestion,
+discovery and reports remain unregistered until their later stages.
 Readiness is fail-closed until the production composition verifies migration
 history and required schema objects, then performs a bounded database probe.
 The verifier rechecks for database or schema recovery.
@@ -87,11 +88,26 @@ payloads, credentials, database statements/parameters, or destination URLs to
 instrumentation.
 
 Part 05 adds production-composed effective-IP/creation-allowance services and TCP
-peer plumbing. `POST /api/v1/links` remains a current-stage 404 until Part 06.
-The all-targets gate includes `client_ip`, `rate_limits`,
-`rate_limit_concurrency`, `rate_limit_failures`, and `rate_limit_process`.
-The process suite re-executes its own test binary as independent workers, captures
-their diagnostics, and uses the same fixture URL/configuration path. No extra
-production CLI command, HTTP test endpoint, npm download, or clock override is
-needed. See [creation allowance](creation-allowance.md) for exact boundaries,
-commit-fault evidence and the Part 06 consumption interface.
+peer plumbing. Part 06 registers create/detail/PATCH/DELETE/management-token
+operations; collection listing and public redirects remain later stages.
+Create-link dispatch calls `CreationService::prepare(&Parts)` before query/body
+validation, consumes its private acknowledged charge by ownership, and opens a
+separate creation transaction. Account writes revalidate the retained credential
+under the shared authority gate; token mutations lock/revalidate the live link
+row. The shared `LinkService` uses the validated public origin and independent
+pool, lock, SQL, body, and operation bounds. Its code-reservation allocator has a
+private deterministic test seam; production always uses the secure generator.
+`links::representation::build` is reusable by later stages, and
+`links::resolve_active_link(&PgPool, code, deadline)` is the fresh one-statement
+active-link snapshot handoff for Part 07; it does not register redirects.
+
+`sh scripts/check.sh` runs all existing and Part 06 suites, including
+`creation_order`, `link_creation`, `link_authorization`, `link_management`,
+`token_rotation`, `link_concurrency`, `link_failures`, `link_resolution`, and
+`link_process`. The process suite starts two independent production server
+executables, captures bounded stdout/stderr, and exercises shared CRUD,
+credential/token invalidation, allowance accounting, trusted TCP peers, and the
+owned PostgreSQL-volume restart. No production test command, HTTP test route,
+npm download, or clock override is used. See
+[creation allowance](creation-allowance.md) for Part 05 charge semantics and
+the ownership-consuming Part 06 interface.

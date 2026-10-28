@@ -64,21 +64,25 @@ for accounts, the presented authentication evidence as a `Principal`. There is
 no ID/boolean constructor, Clone/Copy, serialization, global capability store,
 or user-visible charge token. Compile-fail doctests enforce those boundaries.
 `creator()` borrows it; `into_creator()` consumes the attempt. Part 06's creation
-service must accept/consume the charge by ownership rather than mint an ID-only
-"already authenticated" flag.
+service consumes it by ownership rather than minting an ID-only "already
+authenticated" flag. `links::service::LinkService::create` is the production
+consumer; its private `Creator` retains the presented `Principal` for the new
+protected creation transaction.
 
-Part 06 then performs strict body/media/feature validation and opens a **new**
-creation transaction. For an account, pass the retained `creator.principal()` to
-`begin_account_mutation` again; do not authorize using only `subject()` or the
-previous role. A rotation between charging and creation can reject this later
-transaction while retaining the charge. Never refund charges for bad input,
-feature rejection, conflicts, retries, cancellation, or later creation rollback.
-Allocation/CRUD/tokens are Part 06; redirects/visit capture are Part 07.
+The production Part 06 route now performs strict body/media/feature validation
+after `prepare` and opens a **new** creation transaction. For an account, it passes
+the retained `creator.principal()` to `begin_account_mutation` again; it never
+authorizes from `subject()` or the previously observed role. A rotation between
+charge acknowledgement and body completion can reject this later transaction
+while retaining the charge. Charges are never refunded for bad input, feature
+rejection, conflicts, retries, cancellation, or later creation rollback.
+Allocation/CRUD/tokens are Part 06; redirects/visit capture remain Part 07.
 
 `http::rejection::creation_error` maps the reusable failures, including a positive
 integer Retry-After, through the production request-ID/no-store/HEAD envelope.
-Test-owned orchestration validates this interface against checked-in OpenAPI
-components; this is not createLink endpoint or release conformance.
+Actual public-route charge/body/creation order is covered by
+`tests/creation_order.rs` and the link HTTP/OpenAPI suites; the Part 05 fixture
+orchestration remains historical service-level evidence, not endpoint evidence.
 
 ## PostgreSQL protocol and precision
 

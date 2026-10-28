@@ -259,9 +259,10 @@ async fn health_account_and_unimplemented_routes_do_not_charge() {
                 (http::Method::GET, "/api/health/ready", 200),
                 (http::Method::GET, "/api/v1/me", 200),
                 (http::Method::POST, "/api/v1/me/api-key", 200),
-                (http::Method::POST, "/api/v1/links", 404),
+                (http::Method::GET, "/api/v1/links", 405),
+                (http::Method::POST, "/api/v1/links/unknown/visits", 404),
                 (http::Method::GET, "/api/v1/unknown", 404),
-                (http::Method::HEAD, "/api/v1/links", 404),
+                (http::Method::HEAD, "/api/v1/links", 405),
             ] {
                 let response = account_support::call(
                     app.clone(),

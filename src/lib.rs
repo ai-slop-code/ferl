@@ -7,6 +7,7 @@ pub mod db;
 pub mod domain;
 pub mod error;
 pub mod http;
+pub mod links;
 pub mod pagination;
 pub mod rate_limit;
 pub mod shutdown;

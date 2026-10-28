@@ -37,7 +37,14 @@ pub async fn migrated_database() -> IsolatedTestDatabase {
 }
 
 pub async fn production_router(database: &IsolatedTestDatabase) -> Router {
-    let config = Config::from_map(BTreeMap::from([
+    production_router_with(database, &[]).await
+}
+
+pub async fn production_router_with(
+    database: &IsolatedTestDatabase,
+    extra: &[(&str, &str)],
+) -> Router {
+    let mut values = BTreeMap::from([
         (
             "FERL_DATABASE_URL".to_owned(),
             database.schema_database_url().to_owned(),
@@ -51,8 +58,12 @@ pub async fn production_router(database: &IsolatedTestDatabase) -> Router {
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
         ),
         ("FERL_DB_LOCK_TIMEOUT_SECS".to_owned(), "10".to_owned()),
-    ]))
-    .expect("test production profile has a configured deployment cursor key");
+    ]);
+    for (name, value) in extra {
+        values.insert((*name).to_owned(), (*value).to_owned());
+    }
+    let config = Config::from_map(values)
+        .expect("test production profile has a configured deployment cursor key");
     let state = AppState::from_config(&config).expect("production pool configuration is valid");
     state
         .verify_schema()

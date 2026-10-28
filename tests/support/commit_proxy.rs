@@ -17,6 +17,14 @@ pub struct CommitProxy {
 }
 impl CommitProxy {
     pub async fn start(schema_url: &str) -> Self {
+        Self::start_target(schema_url, 1).await
+    }
+
+    /// Withhold the selected successful COMMIT acknowledgement on this
+    /// loopback-only connection. `1` is the allowance transaction; `2` is the
+    /// subsequent creation transaction for a real createLink request.
+    pub async fn start_target(schema_url: &str, target_commit: usize) -> Self {
+        assert!(target_commit > 0);
         let mut url = url::Url::parse(schema_url).unwrap();
         assert_eq!(url.host_str(), Some("127.0.0.1"));
         assert!(url.query_pairs().any(
@@ -39,6 +47,7 @@ impl CommitProxy {
                 let (mut server_read, mut server_write) = upstream.into_split();
                 let frontend = async { let _ = tokio::io::copy(&mut client_read, &mut server_write).await; };
                 let backend = async {
+                    let mut successful_commits = 0;
                     loop {
                         let mut header = [0u8; 5];
                         server_read.read_exact(&mut header).await.unwrap();
@@ -47,12 +56,15 @@ impl CommitProxy {
                         let mut payload = vec![0; length - 4];
                         server_read.read_exact(&mut payload).await.unwrap();
                         if header[0] == b'C' && payload == b"COMMIT\0" {
-                            observed_tx.send(()).unwrap();
-                            // Parent independently reads the durable row before
-                            // allowing this connection to close without delivery.
-                            let _ = release_rx.await;
-                            client_write.shutdown().await.unwrap();
-                            break;
+                            successful_commits += 1;
+                            if successful_commits == target_commit {
+                                observed_tx.send(()).unwrap();
+                                // Parent independently reads the durable row before
+                                // allowing this connection to close without delivery.
+                                let _ = release_rx.await;
+                                client_write.shutdown().await.unwrap();
+                                break;
+                            }
                         }
                         client_write.write_all(&header).await.unwrap();
                         client_write.write_all(&payload).await.unwrap();
