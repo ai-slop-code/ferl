@@ -18,7 +18,6 @@ use ferl_server::{
     app::{self, AppState},
     config::Config,
     domain::secret::AccountApiKey,
-    pagination::CursorCodec,
 };
 use http_body_util::BodyExt;
 use tokio::{net::TcpListener, sync::oneshot, time::timeout};
@@ -267,23 +266,23 @@ async fn exercise_database_outages() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let unavailable_port = listener.local_addr().unwrap().port();
     drop(listener);
-    let options = sqlx::postgres::PgConnectOptions::new()
-        .host("127.0.0.1")
-        .port(unavailable_port)
-        .username("ferl_test")
-        .database("ferl_test");
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_millis(100))
-        .connect_lazy_with(options);
-    let app = app::router(AppState::new(
-        pool,
-        Duration::from_millis(100),
-        Duration::from_millis(100),
-        CursorCodec::new([0x61; 32]),
-        8,
-        8,
-    ));
+    let config = Config::from_map(std::collections::BTreeMap::from([
+        (
+            "FERL_DATABASE_URL".into(),
+            format!("postgres://ferl_test@127.0.0.1:{unavailable_port}/ferl_test"),
+        ),
+        (
+            "FERL_PUBLIC_BASE_URL".into(),
+            "https://short.example.test".into(),
+        ),
+        (
+            "FERL_CURSOR_KEY".into(),
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+        ),
+        ("FERL_DB_ACQUIRE_TIMEOUT_SECS".into(), "1".into()),
+    ]))
+    .unwrap();
+    let app = app::router(AppState::from_config(&config).unwrap());
     let response = call_with_auth(app, Method::GET, "/api/v1/me", Some(key.as_str()), "").await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_headers(&response);

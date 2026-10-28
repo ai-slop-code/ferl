@@ -159,5 +159,10 @@ codes, digests, search keys, tags, counters, timestamps, visit methods/device
 values, optional-header limits, and non-host inet masks. IPv4-mapped IPv6 host
 addresses normalize to bare IPv4; other IPs serialize as canonical bare host
 addresses. Conversion failures are internal persistence errors, not caller 400s.
+Part 05 centralizes IP normalization in `client_ip::CanonicalIp`, also used by
+this converter and anonymous accounting. Its private accounting `DatabaseInstant`
+is distinct from request/cursor `Timestamp`: exact PostgreSQL binary microseconds
+and database interval arithmetic preserve rate-window boundaries without Chrono
+range panics or application-clock sampling.
 Historical visit DTOs use the stored destination snapshot. No migration was
 needed: schema version 1 and `migrations/0001_initial.sql` are unchanged.

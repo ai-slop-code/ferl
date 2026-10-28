@@ -81,3 +81,50 @@ fn validates_schema(schema: &Value, value: &Value) -> bool {
         .expect("OpenAPI schema is valid Draft 2020-12 JSON Schema")
         .is_valid(value)
 }
+
+/// Validate the mandatory normative response headers and checked-in body schema.
+/// Header integer values are decoded from their HTTP wire representation.
+#[allow(dead_code)]
+pub fn validates_response(
+    component: &str,
+    headers: &http::HeaderMap,
+    body: Option<&Value>,
+    head: bool,
+) -> bool {
+    let root = document();
+    let response = &root["components"]["responses"][component];
+    let Some(expected) = response["headers"].as_object() else {
+        return false;
+    };
+    for (name, specification) in expected {
+        let Some(reference) = specification["$ref"].as_str() else {
+            return false;
+        };
+        let Some(specification) = root.pointer(reference.trim_start_matches('#')) else {
+            return false;
+        };
+        let Some(value) = headers.get(name).and_then(|value| value.to_str().ok()) else {
+            return false;
+        };
+        let value = if specification["schema"]["type"] == "integer" {
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return false;
+            }
+            let Ok(value) = value.parse::<u64>() else {
+                return false;
+            };
+            json!(value)
+        } else {
+            json!(value)
+        };
+        if !validates_ref_with_siblings(&specification["schema"], &value) {
+            return false;
+        }
+    }
+    if head {
+        return body.is_none();
+    }
+    body.is_some_and(|body| {
+        validates_ref_with_siblings(&response["content"]["application/json"]["schema"], body)
+    })
+}

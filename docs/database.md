@@ -107,8 +107,9 @@ Version 1 creates only these authoritative tables:
 - `rate_buckets` and `rate_charges`: typed account-UUID or canonical host-IP
   identity independent of credential values, durable charge IDs and database
   timestamps. Bucket identity has no account/link ownership FK, so deleting an
-  account/link does not erase the accounting history. Expiry/pruning is a later
-  rate-limit service responsibility.
+  account/link does not erase the accounting history. Part 05 implements rolling
+  accounting and bounded opportunistic pruning under the stable bucket lock;
+  see [creation allowance](creation-allowance.md).
 
 The migration adds baseline unique digest/code and ownership indexes, visit
 ordering `(link_id, occurred_at DESC, id DESC)`, tag membership `(name,

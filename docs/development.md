@@ -24,7 +24,7 @@ endpoint/release conformance (Part 11).
 The PostgreSQL integration test is required by the ordinary test command. It
 fails with an actionable message if the harness environment is missing; it is
 not silently skipped. Run `scripts/check.sh` to start/verify the test database,
-set the required test variables, and execute all three commands.
+set the required test variables, execute all four commands, and run doctests.
 
 ## PostgreSQL with Podman
 
@@ -85,3 +85,13 @@ status, operation/outcome category, and request correlation ID are emitted by
 the HTTP envelope. Never add raw paths, query strings, headers, addresses,
 payloads, credentials, database statements/parameters, or destination URLs to
 instrumentation.
+
+Part 05 adds production-composed effective-IP/creation-allowance services and TCP
+peer plumbing. `POST /api/v1/links` remains a current-stage 404 until Part 06.
+The all-targets gate includes `client_ip`, `rate_limits`,
+`rate_limit_concurrency`, `rate_limit_failures`, and `rate_limit_process`.
+The process suite re-executes its own test binary as independent workers, captures
+their diagnostics, and uses the same fixture URL/configuration path. No extra
+production CLI command, HTTP test endpoint, npm download, or clock override is
+needed. See [creation allowance](creation-allowance.md) for exact boundaries,
+commit-fault evidence and the Part 06 consumption interface.

@@ -1,36 +1,33 @@
 #[path = "support/http.rs"]
 mod http_support;
 
-use std::time::Duration;
+use std::collections::BTreeMap;
 
 use axum::http::{Method, StatusCode};
+use ferl_server::config::Config;
 use ferl_server::{app::AppState, http::router};
-use sqlx::{
-    PgPool,
-    postgres::{PgConnectOptions, PgPoolOptions},
-};
 use uuid::Uuid;
 
 use http_support::{call, response_body};
 
 fn app_with_unreachable_database() -> axum::Router {
-    let options = PgConnectOptions::new()
-        .host("127.0.0.1")
-        .port(1)
-        .username("ferl_test")
-        .database("ferl_test");
-    let pool: PgPool = PgPoolOptions::new()
-        .max_connections(1)
-        .acquire_timeout(Duration::from_millis(100))
-        .connect_lazy_with(options);
-    router(AppState::new(
-        pool,
-        Duration::from_millis(100),
-        Duration::from_millis(100),
-        ferl_server::pagination::CursorCodec::new([0x42; 32]),
-        16,
-        16,
-    ))
+    let config = Config::from_map(BTreeMap::from([
+        (
+            "FERL_DATABASE_URL".into(),
+            "postgres://ferl_test@127.0.0.1:1/ferl_test".into(),
+        ),
+        (
+            "FERL_PUBLIC_BASE_URL".into(),
+            "https://short.example.test".into(),
+        ),
+        (
+            "FERL_CURSOR_KEY".into(),
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+        ),
+        ("FERL_DB_POOL_MAX".into(), "1".into()),
+    ]))
+    .unwrap();
+    router(AppState::from_config(&config).unwrap())
 }
 
 #[tokio::test]

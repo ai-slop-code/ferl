@@ -602,11 +602,9 @@ fn canonical_host_ip(net: &ipnet::IpNet) -> Result<String, ValidationError> {
         ipnet::IpNet::V6(network) if network.prefix_len() == 128 => IpAddr::V6(network.addr()),
         _ => return Err(crate::domain::invalid("inet value is not a host address")),
     };
-    let normalized = match address {
-        IpAddr::V6(address) => address.to_ipv4_mapped().map_or(address.into(), IpAddr::V4),
-        other => other,
-    };
-    Ok(normalized.to_string())
+    Ok(crate::client_ip::CanonicalIp::new(address)
+        .address()
+        .to_string())
 }
 
 impl VisitStatsDto {

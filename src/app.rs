@@ -20,6 +20,8 @@ pub struct AppState {
     pub readiness: Arc<ReadinessState>,
     pub acquire_timeout: Duration,
     pub lock_timeout: Duration,
+    pub creation: crate::rate_limit::CreationService,
+    pub client_ip: crate::client_ip::ClientIpResolver,
     pub(crate) cursor_codec: CursorCodec,
     pub(crate) http_admission: HttpAdmission,
 }
@@ -27,32 +29,16 @@ pub struct AppState {
 impl AppState {
     pub fn from_config(config: &Config) -> Result<Self, pool::PoolBuildError> {
         let pool = pool::create_pool(&config.database)?;
-        Ok(Self::new(
-            pool,
-            config.database.acquire_timeout,
-            config.database.lock_timeout,
-            CursorCodec::new(config.cursor_key.copy_bytes()),
-            config.http_max_in_flight,
-            config.http_max_waiting,
-        ))
-    }
-
-    pub fn new(
-        pool: PgPool,
-        acquire_timeout: Duration,
-        lock_timeout: Duration,
-        cursor_codec: CursorCodec,
-        http_max_in_flight: usize,
-        http_max_waiting: usize,
-    ) -> Self {
-        Self {
+        Ok(Self {
+            creation: crate::rate_limit::CreationService::from_config(pool.clone(), config),
+            client_ip: crate::client_ip::ClientIpResolver::new(&config.trusted_proxies),
             pool,
             readiness: Arc::new(ReadinessState::new_accepting()),
-            acquire_timeout,
-            lock_timeout,
-            cursor_codec,
-            http_admission: HttpAdmission::new(http_max_in_flight, http_max_waiting),
-        }
+            acquire_timeout: config.database.acquire_timeout,
+            lock_timeout: config.database.lock_timeout,
+            cursor_codec: CursorCodec::new(config.cursor_key.copy_bytes()),
+            http_admission: HttpAdmission::new(config.http_max_in_flight, config.http_max_waiting),
+        })
     }
 
     /// Run the production schema verifier and update this instance's readiness
@@ -151,4 +137,12 @@ impl ReadinessState {
 
 pub fn router(state: AppState) -> axum::Router {
     http::router(state)
+}
+
+/// Transport composition shared by the executable and TCP integration harness.
+pub fn transport_service(
+    router: axum::Router,
+) -> axum::extract::connect_info::IntoMakeServiceWithConnectInfo<axum::Router, std::net::SocketAddr>
+{
+    router.into_make_service_with_connect_info::<std::net::SocketAddr>()
 }
