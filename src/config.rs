@@ -153,6 +153,7 @@ pub struct Config {
     pub anonymous_creation: bool,
     pub anonymous_create_limit: u32,
     pub account_create_limit: u32,
+    pub creation_timeout: Duration,
     pub trusted_proxies: Vec<IpNet>,
     pub cursor_key: CursorKey,
     pub analytics: AnalyticsConfig,
@@ -223,6 +224,7 @@ impl Config {
             parse_bounded(&values, "FERL_ANONYMOUS_CREATE_LIMIT", 5_u32, 1, 1_000_000)?;
         let account_create_limit =
             parse_bounded(&values, "FERL_ACCOUNT_CREATE_LIMIT", 60_u32, 1, 1_000_000)?;
+        let creation_timeout = seconds(&values, "FERL_CREATION_TIMEOUT_SECS", 15)?;
         let cursor_key = parse_cursor_key(required(&values, "FERL_CURSOR_KEY")?)?;
         let trusted_proxies = parse_trusted_proxies(values.get("FERL_TRUSTED_PROXIES"))?;
 
@@ -278,6 +280,7 @@ impl Config {
             anonymous_creation,
             anonymous_create_limit,
             account_create_limit,
+            creation_timeout,
             trusted_proxies,
             cursor_key,
             analytics,

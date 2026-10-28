@@ -12,5 +12,9 @@ export FERL_TEST_POSTGRES_PORT="$PORT"
 cargo fmt --all -- --check
 cargo check --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-# --all-targets includes Part 03 domain, decoder, cursor, and OpenAPI suites.
+# Child workers execute the rate_limit_process test binary, never a production
+# CLI test command. Clear only worker dispatch inputs for this parent gate.
+unset FERL_RATE_TEST_WORKER_URL FERL_RATE_TEST_CREDENTIAL
+# Includes IP, allowance, concurrency, fault/privacy and independent-process suites.
 cargo test --workspace --all-targets
+cargo test --doc

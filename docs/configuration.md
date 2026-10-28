@@ -21,6 +21,7 @@ values are never included in configuration debug output or logs.
 | `FERL_ANONYMOUS_CREATION` | `false` | Case-insensitive `true` or `false`. |
 | `FERL_ANONYMOUS_CREATE_LIMIT` | `5` | Positive integer, maximum 1,000,000 attempts per rolling 60 seconds. |
 | `FERL_ACCOUNT_CREATE_LIMIT` | `60` | Positive integer, maximum 1,000,000 attempts per account per rolling 60 seconds (admins included). |
+| `FERL_CREATION_TIMEOUT_SECS` | `15` | Integer from 1 through 300 seconds; total authentication, eligibility, and independently committed allowance deadline. |
 | `FERL_TRUSTED_PROXIES` | Empty | Comma-separated IP addresses/CIDRs. Empty entries and malformed ranges are rejected; private ranges are not trusted automatically. |
 | `FERL_CURSOR_KEY` | Required | Canonical unpadded base64url encoding of exactly 32 bytes. Keep stable across restarts and instances; do not generate an instance-local fallback. Part 03 cursor tokens use the authenticated `fc1<resource>.` envelope and up to 87,387 encoded bytes. |
 | `FERL_DB_POOL_MIN` | `0` | Integer from 0 through `FERL_DB_POOL_MAX`. |
@@ -115,3 +116,9 @@ recovery becomes ready without restart; readiness also requires a bounded
 database probe and acceptance of work. A successful `SELECT 1` alone does not
 imply schema readiness. Run `ferl-server migrate` explicitly before rollout;
 the server never runs migrations or bootstrap implicitly at startup.
+
+Part 05 composes anonymous creation, both limits, proxy trust and database bounds
+into production `CreationService`; changing business settings requires coordinated
+fleet restart. [Creation allowance](creation-allowance.md) defines mapped IPv6
+proxy-prefix comparisons, exact rolling accounting, cleanup and failure bounds.
+The public creation route is delivered in Part 06.

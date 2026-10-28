@@ -27,6 +27,28 @@ pub struct IsolatedTestDatabase {
 }
 
 impl IsolatedTestDatabase {
+    /// Bound a complete scenario and clean up the owned schema before resuming
+    /// an assertion panic. Child tasks in scenarios use abort-on-drop JoinSet;
+    /// child processes use kill-on-drop and bounded explicit waits.
+    #[allow(dead_code)]
+    pub async fn verify(
+        self,
+        scenario: impl for<'a> FnOnce(&'a Self) -> futures_util::future::BoxFuture<'a, ()>,
+    ) {
+        use futures_util::FutureExt;
+        let result = timeout(
+            Duration::from_secs(90),
+            std::panic::AssertUnwindSafe(scenario(&self)).catch_unwind(),
+        )
+        .await;
+        self.close().await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(panic)) => std::panic::resume_unwind(panic),
+            Err(_) => panic!("isolated database scenario exceeded its 90-second deadline"),
+        }
+    }
+
     pub async fn connect_from_harness() -> Self {
         let harness_lock = acquire_harness_lock().await;
         let database_url = std::env::var("FERL_TEST_DATABASE_URL")

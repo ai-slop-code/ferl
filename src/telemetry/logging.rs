@@ -2,7 +2,7 @@ use tracing_subscriber::{
     EnvFilter,
     filter::filter_fn,
     fmt::{self, MakeWriter},
-    layer::{Layer, SubscriberExt},
+    layer::SubscriberExt,
     util::SubscriberInitExt,
 };
 
@@ -14,7 +14,8 @@ pub fn init_stderr() {
     init_with_writer(std::io::stderr);
 }
 
-fn init_with_writer<W>(writer: W)
+/// Install the production JSON/filter composition with an explicit output sink.
+pub fn init_with_writer<W>(writer: W)
 where
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,
 {
@@ -24,12 +25,16 @@ where
         .with_writer(writer)
         .with_current_span(false)
         .with_span_list(false)
-        .with_target(false)
-        .with_filter(filter)
-        .with_filter(filter_fn(|metadata| {
+        .with_target(false);
+    // Global filters compose before formatting. Nesting per-layer filters here
+    // can leave application events suppressed after filtered dependency spans.
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(filter_fn(|metadata| {
             is_allowlisted_target(metadata.target())
-        }));
-    tracing_subscriber::registry().with(layer).init();
+        }))
+        .with(layer)
+        .init();
 }
 
 /// Keep application stdout/stderr diagnostics on the explicit internal target

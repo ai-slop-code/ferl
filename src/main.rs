@@ -218,7 +218,7 @@ async fn serve(config: Config) -> Result<(), ServerError> {
         std::time::Duration::from_secs(30),
     );
     let mut server = Box::pin(
-        axum::serve(listener, app::router(state.clone()))
+        axum::serve(listener, app::transport_service(app::router(state.clone())))
             .with_graceful_shutdown(cancellation.clone().cancelled_owned())
             .into_future(),
     );

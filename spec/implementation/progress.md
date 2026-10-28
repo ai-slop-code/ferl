@@ -12,7 +12,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 02 Persistence | Complete | Verified implementation `1a6b7bbbebc35c815a37dca478287004683cb1a1` and handoff branch tip `31c9a1e184052eca3e55ffb16160aee0c14b0f06` from `implementation/02-persistence` are integrated in the explicit local no-ff merge into `main`. |
 | 03 Domain and wire contracts | Complete | Verified implementation `9f143478c657a505082911d015c8961f14df28dd` and handoff-only branch tip `5d5da6142397fecfe4ae7c7a67187da00f3a2e5f` from `implementation/03-domain-and-wire-contracts` are integrated by this explicit no-ff merge into `main`. |
 | 04 Authentication and accounts | Complete | Verified implementation `b740bb2d80c1bac590df52b72005efcc6bebb758` and integrated part tip `1aacfbca49b94c000cd7ab17b20a3609b4c740dd` from `implementation/04-authentication-and-accounts` are integrated by this explicit no-ff merge into `main` from base `15d9ddebdc0b15d06a0bea97883a6beaf1b1437a`. The tested implementation tree is unchanged; only this completion handoff is added in the merge commit. |
-| 05 Client IP and rate limits | Planned | — |
+| 05 Client IP and rate limits | Verified (awaiting merge) | Branch `implementation/05-client-ip-and-rate-limits`, base `14ec982566c348f6b59e1f7a715f7eefc2ab9b19`; closing full gate passed: 144 tests and 3 compile-fail doctests, including real PostgreSQL, independent processes, restart, privacy and durable lost-acknowledgement evidence. |
 | 06 Link management | Planned | — |
 | 07 Redirects and visit ingestion | Planned | — |
 | 08 Link and tag discovery | Planned | — |
@@ -172,7 +172,7 @@ Status: **Complete**. Verified implementation commit `b740bb2d80c1bac590df52b720
 
 Part branch: `implementation/04-authentication-and-accounts`.
 
-Base commit: `15d9ddebdc0b15d06a0bea97883a6beaf1b1437a` on verified `main`, including the Part 03 handoff-only follow-up. The branch was created from this exact commit with a clean index/tree. Verified implementation and integrated part-tip hashes will be recorded after the reviewed Part 04 commits exist.
+Base commit: `15d9ddebdc0b15d06a0bea97883a6beaf1b1437a` on verified `main`, including the Part 03 handoff-only follow-up. The branch was created from this exact commit with a clean index/tree. Verified implementation: `b740bb2d80c1bac590df52b72005efcc6bebb758`; integrated part tip: `1aacfbca49b94c000cd7ab17b20a3609b4c740dd`. The completed integration is merge `14ec982566c348f6b59e1f7a715f7eefc2ab9b19`, with parents `15d9ddebdc0b15d06a0bea97883a6beaf1b1437a` and `1aacfbca49b94c000cd7ab17b20a3609b4c740dd`.
 
 ### Delivered interfaces and behavior
 
@@ -201,7 +201,185 @@ Added `src/auth/{mod,bearer,principal,guard}.rs`, `src/accounts/{mod,bootstrap,h
 
 Acceptance contributions: scenario 2 credential/error distinctions; scenarios 5–9 bootstrap, account key lifecycle, suspension, last-admin races, deletion; scenario 20 bootstrap persistence/restart subset; scenario 27 real authentication and mutation outages; scenario 28 guard order/revalidation; scenario 32 independent-server account auth/cursor continuation; scenario 34 independent-process bootstrap/admin races. Fixture-level object authority evidence contributes to scenarios 3–4 but their public link services remain Parts 06/09. Bootstrap/account response components and actual account HTTP outputs contribute to scenario 51 but complete release conformance remains Part 11. Exact test mappings and later responsibilities are in `acceptance-map.md`.
 
-Part 04 is complete and merged. Part 05 — Client IP and creation allowance — is next. Remaining later-stage responsibilities include Part 05 client IP/rate accounting; Parts 06–09 link/redirect/analytics services; and Parts 10–11 OTLP/full release verification. No Part 05 work has begun.
+Part 04 is complete and merged. At that checkpoint Part 05 had not begun. Part 05 work now proceeds on its own branch as recorded below; Parts 06–09 link/redirect/analytics services and Parts 10–11 OTLP/full release verification remain later responsibilities. The historical Part 04 test named `lost_commit_acknowledgement_is_not_replayed_as_a_second_account_creation` terminates a backend inside a deferred COMMIT trigger and proves an aborted transaction, not durable commit with lost acknowledgement. Part 05 adds distinct wire-proxy evidence for the latter.
+
+## Part 05 handoff — 2026-10-28
+
+Status: **Verified (awaiting merge)**. The closing full verification gate passed.
+
+Part branch: `implementation/05-client-ip-and-rate-limits`.
+
+Base: `14ec982566c348f6b59e1f7a715f7eefc2ab9b19`, the verified Part 04 merge.
+The initial inspection confirmed clean `main`/index/tree, both expected merge
+parents and relevant ancestry back to baseline
+`40b3ae713f0cd9bd2389f872d2953d29ef38f38d`, retained Part 04 tip
+`1aacfbca49b94c000cd7ab17b20a3609b4c740dd`, no existing Part 05 branch and no
+pending pseudo-ref or merge/rebase/sequencer operation directory. Work uses the
+configured repository-local `LubosBa <30705301+LubosBa@users.noreply.github.com>` identity. No branch
+rewrite, remote configuration or push occurred.
+
+Verified implementation: pending reviewed implementation commit.
+Integrated part tip: pending handoff-only commit and explicit local merge.
+
+### Delivered behavior and integration contract
+
+- `client_ip::{CanonicalIp, ClientIpResolver}` centralizes canonical mapped-IP
+  identity, host-mask persistence and redacted diagnostics. Full trusted-chain
+  validation precedes right-to-left selection; invalid/missing/duplicate/33-hop
+  chains fall back to canonical peer. Only X-Forwarded-For has conditional
+  authority. Original IPv6 proxy prefixes are retained; canonical IPv4 is compared
+  using its mapped representation against IPv6 ranges, preserving exact /128,
+  /120→IPv4 /24, /96 and broader-prefix membership. Parsing stores at most 32
+  addresses, relies on transport header bounds, and imposes no extra whitespace
+  byte limit. The existing visit DTO converter now uses the same canonical type.
+- `main.rs` uses `app::transport_service` to install accepted TCP
+  `ConnectInfo<SocketAddr>`. Missing context is an internal integration failure,
+  never an invented anonymous identity. Test-owned TCP composition invokes the
+  same production wrapper and resolver.
+- `AppState::from_config` composes actual anonymous/proxy/limit/timeout settings
+  into `CreationService`. Its old partial constructor was removed; the two
+  existing tests using it now use validated production configuration. New startup
+  `FERL_CREATION_TIMEOUT_SECS` defaults to 15s, bounded 1–300. Existing 5 anonymous
+  and 60 user/admin defaults and overrides are preserved.
+- `CreationService::prepare(&Parts)` performs fresh authentication → eligibility
+  → independently acknowledged charge, without access to body frames. Valid
+  management tokens are forbidden, missing credentials obey the anonymous switch,
+  supplied-invalid credentials never fall back, availability is 503, corruption
+  is sanitized 500. Account charges use the shared account guard, fresh separate
+  post-wait credential/status/role lookup, and retain that guard through COMMIT.
+- `ChargedAttempt` has private fields, no Clone/Copy/serialization or public
+  identity constructor, and owns its creator/evidence for this attempt.
+  **Part 06 sequence:** select route/method; split request; call `prepare`; retain
+  the acknowledged charge; strictly decode/validate body and feature permissions;
+  consume the charge by ownership; open a new creation transaction and call the
+  shared account guard again using `creator.principal()` when authenticated.
+  `subject()` is identity, not authorization. Later rotation/validation/creation
+  failure leaves the charge committed. No link endpoint, allocation/CRUD/token
+  business service, redirect/worker, SPA or exporter is delivered here.
+- READ COMMITTED protocol: shared authority gate if account → stable subject
+  bucket FOR UPDATE → bucket charge rows. Unique partial indexes coordinate first
+  use; INSERT ON CONFLICT DO NOTHING is followed by a fresh-statement lookup even
+  when the winner was invisible to the INSERT snapshot. Account buckets have no
+  ownership cascade. Every helper uses the passed active connection; independent
+  one-connection production pools work without hidden checkout.
+- One database `clock_timestamp()` sample follows the bucket wait. Private checked
+  `DatabaseInstant` preserves PostgreSQL binary microseconds, including valid
+  ranges beyond Chrono, without application time/float arithmetic or request-time
+  truncation. Count `(sample - 60s, sample]`, excluding future charges; insert one
+  explicitly sampled charge iff `n < L`. Rejection changes no charge ID/time.
+  Retry-After is `max(1, ceil(t[n-L] + 60s - sample))`, using exact PostgreSQL
+  NUMERIC interval extraction. Seven charges at reduced limit three select the
+  fifth oldest, established by controlled database-time tests.
+- The shared-gate helper's local statement setting is explicitly restored to the
+  configured SQL bound before bucket queries; lock, SQL, auth and total operation
+  deadlines stay distinct. Error rollback has a 2s bound within the total bound.
+  Cancelling the owning service future drops the transaction/queues SQLx rollback;
+  server-side statement/lock bounds remain active. Private borrowed-connection
+  futures require rollback/drop on cancellation; no mutation continues afterward.
+  Existing bounded server drain/schema-monitor join/pool shutdown remain composed.
+- No internal retries. I/O failure or timeout during COMMIT is uncertain and
+  returns sanitized storage 503, without capability, automatic replay or refund.
+  The failure suite distinguishes an aborted in-flight COMMIT from a durable
+  COMMIT whose acknowledgement a controlled loopback test proxy withholds after
+  independent durable-row observation. Exactly one durable charge remains in the
+  latter case; no second charge is attempted.
+- Opportunistic cleanup only on admission removes at most 128 expired charge rows
+  at/before the sampled cutoff under the same bucket lock/transaction. Stable
+  buckets remain; idle expired history is ignored until later use. A cleanup
+  failure aborts admission. Multiple processes safely prune the same expired
+  history. No worker/task/interval or global unbounded delete is introduced.
+- `http::rejection::creation_error` supplies reusable 401/403/429/503/500 mapping,
+  positive Retry-After and the production request-ID/no-store/JSON/bodyless-HEAD
+  envelope. Actual HTTP errors are schema/header validated with the locked
+  OpenAPI tooling, including ref-sibling conjunction, formats and invalid controls.
+  Health/accounts and unimplemented link/unknown fallbacks consume no allowance.
+
+Narrow prerequisite correction: the actual production logging capture initially
+failed because nested per-layer filters suppressed required application events
+after SQLx activity (including acknowledged `charged`). Composing EnvFilter and
+the dependency-target allowlist globally restored those events while retaining
+dependency suppression. `tests/rate_limit_failures.rs` reproduced the defect and
+now captures the actual JSON logger with diagnostic-presence and canary-exclusion
+assertions. Historical Part 04 verification records remain preserved; its stale
+future-tense hash wording and distinction between its aborted-COMMIT test and true
+lost acknowledgement are corrected above. No normative contract conflict or
+normative business/OpenAPI edit was needed.
+
+### Changed files and compatibility
+
+Added `src/client_ip.rs`, `src/rate_limit/{mod,bucket,clock,repository,service,maintenance,tests}.rs`,
+`tests/{client_ip,rate_limits,rate_limit_concurrency,rate_limit_failures,rate_limit_process}.rs`,
+`tests/support/{rate_limits,commit_proxy}.rs`, and `docs/creation-allowance.md`.
+Updated `src/{app,config,lib,main}.rs`, `src/http/{dto,mod,rejection}.rs`,
+`src/telemetry/logging.rs`, `tests/{authentication,foundation_http}.rs`,
+`tests/support/{database,openapi}.rs`, `scripts/check.sh`, `.env.example`,
+`docs/{configuration,database,development,domain-contracts}.md`, this record and
+`acceptance-map.md`. Test scenarios now have a bounded cleanup-on-assertion wrapper;
+child executables/captures are part of the test harness, never production commands.
+
+**No migration or dependency change:** `migrations/0001_initial.sql`, `Cargo.toml`,
+`Cargo.lock`, schema version 1, PostgreSQL 17.x compatibility, and pinned Rust
+1.99.1/package MSRV 1.94 remain intact. SQLx 0.9.0's actual timestamp codec was
+inspected before choosing the accounting representation. Complete decisions and
+consumption details are in `docs/creation-allowance.md`.
+
+### Verification evidence
+
+- `podman info`; `podman machine list`; `sh scripts/postgres.sh start`;
+  `sh scripts/postgres.sh ready` — passed. Existing machine was running; existing
+  label/digest/port/volume-verified PostgreSQL 17.6 harness was reused. No image pull
+  or TLS change was needed; earlier corporate TLS failure/resolution history above
+  remains preserved. Every database/child pool used `IsolatedTestDatabase` and its
+  schema URL. Container restart retained `ferl-stage01-postgres-data` under the
+  existing cross-process lock without invoking a recursively locking script.
+- Full `sh scripts/check.sh` passed: `cargo fmt --all -- --check`,
+  `cargo check --workspace --all-targets --all-features`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace --all-targets`, and explicit `cargo test --doc`.
+  Observed **144 tests + 3 compile-fail doctests**, none ignored/skipped:
+  72 library; 7 account concurrency; 1 account process; 4 accounts;
+  1 authentication; 5 bootstrap; 4 client IP; 2 coordination; 6 cursor;
+  5 domain; 2 foundation HTTP; 1 PostgreSQL readiness/restart; 2 foundation process;
+  5 HTTP decoding; 7 migrations; 5 OpenAPI; 4 persistence; 4 rate concurrency;
+  1 rate failure/privacy; 1 rate process; 5 rate allowance. Binary unit target 0.
+  The final mapped exact-address startup fixture is included in the closing gate.
+- Exact new test names are mapped in `acceptance-map.md` and
+  `docs/creation-allowance.md`. Important evidence includes
+  `concurrent_first_use_shared_guards_and_unique_buckets_admit_exact_limit`,
+  `exact_microsecond_window_rounding_equal_times_and_reduced_limits`,
+  `eligibility_and_body_order_preserve_independently_committed_charges`,
+  `real_failures_commit_uncertainty_http_contract_and_production_diagnostics_are_private`,
+  and `independent_processes_share_allowance_and_restarts_preserve_durable_charges`.
+  The latter re-executes independently running test workers for both account/IP
+  categories, verifies ten database waiters and exactly five combined committed
+  admissions, process replacement, bounded concurrent cleanup and named-volume
+  restart. Production stdout/stderr is captured rather than discarded.
+- `rustc --version`: `rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)`;
+  `cargo --version`: `cargo 1.99.1 (5f94df478 2026-08-27) (Homebrew)`.
+  `cargo metadata --format-version 1 --locked`: 345 packages, no advertised
+  dependency MSRV above 1.94. This is metadata evidence; Rust 1.94 was not run.
+- Intermediate compilation exposed the test harness needing the shared envelope
+  module's public library access, and Clippy requested eager `unwrap_or`; causes
+  were corrected. The real logging regression above was fixed without weakening
+  diagnostic-presence/privacy assertions. All affected suites then passed.
+- `sh -n scripts/check.sh scripts/postgres.sh`, `git diff --check`, and
+  `git diff --cached --check` passed. The complete 36-file staged diff against
+  `main`, including every new file, was reviewed. `git diff --exit-code` confirmed
+  the working tree matches the staged content; explicit contract/migration/build
+  manifest/lockfile comparison found no changes. No generated files or secrets
+  are included. Post-gate `sh scripts/postgres.sh ready` passed. Only handoff
+  metadata changes follow the tested implementation.
+
+Acceptance contributions: scenarios **16–19, 27–28, 33**, and the accounting,
+coordination, stdout privacy and reusable-error subsets of **20/30/34/51**.
+These are production-service/fixture/independent-worker contributions; public
+createLink composition remains Part 06, resolver visit capture Part 07, complete
+OTLP privacy Part 10, and broad multi-service/release conformance Part 11. None
+of those broad scenarios is marked release-complete here.
+
+Required verification checks unexecuted: **none**. Remaining Part 05 work is the
+reviewed explicit local Git merge and its completion metadata. Next implementation
+responsibility after completed integration is **Part 06 — Link management**.
 
 ## Per-part handoff template
 
