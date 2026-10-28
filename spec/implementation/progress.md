@@ -11,7 +11,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 01 Foundation | Complete | Full Part 01 gate and real PostgreSQL readiness/outage/recovery passed; verified branch `implementation/01-foundation` was integrated by merge commit `5bd6127d36560e51ded4f46de68efc10ea78bf5a`. |
 | 02 Persistence | Complete | Verified implementation `1a6b7bbbebc35c815a37dca478287004683cb1a1` and handoff branch tip `31c9a1e184052eca3e55ffb16160aee0c14b0f06` from `implementation/02-persistence` are integrated in the explicit local no-ff merge into `main`. |
 | 03 Domain and wire contracts | Complete | Verified implementation `9f143478c657a505082911d015c8961f14df28dd` and handoff-only branch tip `5d5da6142397fecfe4ae7c7a67187da00f3a2e5f` from `implementation/03-domain-and-wire-contracts` are integrated by this explicit no-ff merge into `main`. |
-| 04 Authentication and accounts | Verified (awaiting merge) | Full Part 04 gate passed; final diff/staged review completed on branch `implementation/04-authentication-and-accounts`, based on verified main checkpoint `15d9ddebdc0b15d06a0bea97883a6beaf1b1437a`. Verified implementation and handoff commits are pending. |
+| 04 Authentication and accounts | Verified (awaiting merge) | Verified implementation `b740bb2d80c1bac590df52b72005efcc6bebb758` passed the full Part 04 gate on branch `implementation/04-authentication-and-accounts`, based on main checkpoint `15d9ddebdc0b15d06a0bea97883a6beaf1b1437a`; a handoff-only commit records this hash. Awaiting local merge. |
 | 05 Client IP and rate limits | Planned | — |
 | 06 Link management | Planned | — |
 | 07 Redirects and visit ingestion | Planned | — |
@@ -168,7 +168,7 @@ Unexecuted required checks/blockers at the Part 03 checkpoint: **none**. Postgre
 
 ## Part 04 handoff — 2026-10-28
 
-Status: **Verified (awaiting merge)**. The implementation and complete gate passed; final source/diff and staged review are complete. The verified implementation hash will be recorded in a handoff-only follow-up after the implementation commit.
+Status: **Verified (awaiting merge)**. Implementation commit `b740bb2d80c1bac590df52b72005efcc6bebb758` and the complete gate passed; final source/diff and staged review are complete. This handoff-only follow-up records the implementation hash after its commit.
 
 Part branch: `implementation/04-authentication-and-accounts`.
 
