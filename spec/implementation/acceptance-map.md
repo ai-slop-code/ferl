@@ -84,9 +84,11 @@ The verified Part 06 handoff in [`progress.md`](progress.md#part-06-handoff--202
 records branch/base/implementation/part-tip traceability and the full PostgreSQL
 gate. Branch: `implementation/06-link-management`; base: verified `main`
 `bbe53b3b439d961b88e0a56b877ad3e409411f2e` (the Part 05 merge).
-Verified implementation and integrated part-tip hashes are added in the
-handoff-only follow-ups. These are Part 06 contributions, not claims that
-redirect, listing, reports, OTLP, or release-wide scenarios are complete.
+Verified implementation: `264f3f35bcdab2e2f563d779fae6728e50b0c1a8`.
+The exact handoff-only integrated part-tip hash is recorded in the completed
+progress entry after that follow-up is committed. These are Part 06 contributions,
+not claims that redirect, listing, reports, OTLP, or release-wide scenarios are
+complete.
 
 - **1–2:** `tests/link_creation.rs::production_create_routes_return_complete_owned_and_anonymous_representations` verifies actual owned/anonymous creation and one-time secret placement; `tests/token_rotation.rs::token_replacement_is_scoped_bodyless_one_time_and_survives_creation_disable` verifies existing tokens remain usable after the anonymous-creation switch is off. `tests/creation_order.rs::route_and_eligibility_rejections_precede_body_reads_and_allowance_charges` distinguishes disabled creation, invalid credentials, wrong-scope token, method and unmatched-route precedence without body reads or charges.
 - **3–4:** `tests/link_authorization.rs::public_link_operations_apply_fresh_object_authority_and_conceal_other_objects` covers owner/admin/matching-token/unrelated-account/unrelated-token, unknown, disabled and suspended-owner detail/PATCH/DELETE behavior, missing/invalid credentials, indistinguishable 404s, token revocation and secrecy. Token replacement scope/reset/creation-disabled behavior is covered in `tests/token_rotation.rs::token_replacement_is_scoped_bodyless_one_time_and_survives_creation_disable`.

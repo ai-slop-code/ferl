@@ -422,10 +422,11 @@ local `main` merge remains the next integration step.
 - Local identity: `LubosBa <30705301+LubosBa@users.noreply.github.com>` from repository configuration.
   No global identity, remote, or push was configured.
 - Base commit: `bbe53b3b439d961b88e0a56b877ad3e409411f2e`.
-- Verified implementation commit: recorded in the handoff-only follow-up after
-  the reviewed implementation commit is created. Integrated part-tip and merge
-  commit are recorded during explicit local integration; a commit never embeds
-  its own hash.
+- Verified implementation commit: `264f3f35bcdab2e2f563d779fae6728e50b0c1a8`
+  (`feat(part-06): implement link management`). A handoff-only follow-up records
+  this implementation hash; the explicit merge completion entry records the
+  integrated part tip and merge commit without embedding either commit's own
+  hash.
 
 ### Implemented Part 06 behavior
 
