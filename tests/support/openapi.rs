@@ -6,6 +6,7 @@ pub fn document() -> Value {
     serde_json::to_value(yaml).expect("OpenAPI YAML converts to JSON values")
 }
 
+#[allow(dead_code)]
 pub fn resolve_schema(name: &str) -> Value {
     let root = document();
     let schema = root["components"]["schemas"][name]
@@ -58,6 +59,7 @@ fn resolve_refs(schema: &Value, root: &Value, stack: &mut Vec<String>) -> Result
     }
 }
 
+#[allow(dead_code)]
 pub fn validates(schema_name: &str, value: &Value) -> bool {
     validates_schema(&resolve_schema(schema_name), value)
 }
@@ -93,6 +95,22 @@ pub fn validates_response(
 ) -> bool {
     let root = document();
     let response = &root["components"]["responses"][component];
+    if !validates_headers(component, headers) {
+        return false;
+    }
+    if head {
+        return body.is_none();
+    }
+    body.is_some_and(|body| {
+        validates_ref_with_siblings(&response["content"]["application/json"]["schema"], body)
+    })
+}
+
+/// Validate only the headers declared by an OpenAPI response, useful for
+/// bodyless 204 operations whose schemas intentionally have no content section.
+pub fn validates_headers(component: &str, headers: &http::HeaderMap) -> bool {
+    let root = document();
+    let response = &root["components"]["responses"][component];
     let Some(expected) = response["headers"].as_object() else {
         return false;
     };
@@ -121,10 +139,5 @@ pub fn validates_response(
             return false;
         }
     }
-    if head {
-        return body.is_none();
-    }
-    body.is_some_and(|body| {
-        validates_ref_with_siblings(&response["content"]["application/json"]["schema"], body)
-    })
+    true
 }

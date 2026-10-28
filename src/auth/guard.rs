@@ -330,12 +330,15 @@ async fn set_transaction_lock_deadline(
     deadline: Duration,
 ) -> Result<(), GuardFailure> {
     let millis = deadline.as_millis().max(1).to_string();
-    sqlx::query("SELECT set_config('lock_timeout', $1, true)")
-        .bind(millis)
-        .execute(&mut **transaction)
-        .await
-        .map(|_| ())
-        .map_err(|error| GuardFailure::Database(classify(&error, OperationStage::BeforeCommit)))
+    sqlx::query(
+        "SELECT set_config('statement_timeout', $1, true), \
+                set_config('lock_timeout', $1, true)",
+    )
+    .bind(millis)
+    .execute(&mut **transaction)
+    .await
+    .map(|_| ())
+    .map_err(|error| GuardFailure::Database(classify(&error, OperationStage::BeforeCommit)))
 }
 
 fn map_coordination(error: CoordinationError) -> GuardFailure {

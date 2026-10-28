@@ -145,9 +145,12 @@ fn safe_route_template(path: &str) -> &'static str {
         "/api/v1/me" => "/api/v1/me",
         "/api/v1/me/api-key" => "/api/v1/me/api-key",
         "/api/v1/admin/accounts" => "/api/v1/admin/accounts",
+        "/api/v1/links" => "/api/v1/links",
         "/api" | "/api/" => "/api",
         _ if account_item_path(path) => "/api/v1/admin/accounts/{id}",
         _ if account_key_path(path) => "/api/v1/admin/accounts/{id}/api-key",
+        _ if link_token_path(path) => "/api/v1/links/{code}/management-token",
+        _ if link_item_path(path) => "/api/v1/links/{code}",
         _ if path.starts_with("/api/") => "/api/{unmatched}",
         _ => "/{unmatched}",
     }
@@ -162,6 +165,17 @@ fn account_key_path(path: &str) -> bool {
     path.strip_prefix("/api/v1/admin/accounts/")
         .and_then(|tail| tail.strip_suffix("/api-key"))
         .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+}
+
+fn link_item_path(path: &str) -> bool {
+    path.strip_prefix("/api/v1/links/")
+        .is_some_and(|code| !code.is_empty() && !code.contains('/'))
+}
+
+fn link_token_path(path: &str) -> bool {
+    path.strip_prefix("/api/v1/links/")
+        .and_then(|tail| tail.strip_suffix("/management-token"))
+        .is_some_and(|code| !code.is_empty() && !code.contains('/'))
 }
 
 pub fn method_error(request_id: Uuid, allow: &'static str) -> Response {

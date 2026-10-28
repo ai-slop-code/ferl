@@ -1,9 +1,10 @@
 use std::{collections::BTreeMap, process::Stdio, time::Duration};
 
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     process::{Child, Command},
+    task::JoinHandle,
     time::{sleep, timeout},
 };
 use uuid::Uuid;
@@ -11,6 +12,8 @@ use uuid::Uuid;
 pub struct ServingProcess {
     child: Child,
     pub address: std::net::SocketAddr,
+    stdout: Option<JoinHandle<Vec<u8>>>,
+    stderr: Option<JoinHandle<Vec<u8>>>,
 }
 
 pub struct HttpResult {
@@ -19,8 +22,19 @@ pub struct HttpResult {
     pub body: Vec<u8>,
 }
 
+#[allow(dead_code)]
+pub struct CapturedOutput {
+    pub stdout: String,
+    pub stderr: String,
+}
+
 impl ServingProcess {
+    #[allow(dead_code)]
     pub async fn start(database_url: &str, cursor_key: &str) -> Self {
+        Self::start_with(database_url, cursor_key, &[]).await
+    }
+
+    pub async fn start_with(database_url: &str, cursor_key: &str, extra: &[(&str, &str)]) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("reserve a local process-test port");
@@ -39,11 +53,28 @@ impl ServingProcess {
             .env("FERL_HTTP_MAX_IN_FLIGHT", "32")
             .env("FERL_HTTP_MAX_WAITING", "16")
             .env("RUST_LOG", "info")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
+        for (name, value) in extra {
+            child.env(name, value);
+        }
         let child = child.spawn().expect("ferl-server process starts");
-        let mut process = Self { child, address };
+        let mut child = child;
+        let stdout = child
+            .stdout
+            .take()
+            .map(|pipe| tokio::spawn(capture_output(pipe)));
+        let stderr = child
+            .stderr
+            .take()
+            .map(|pipe| tokio::spawn(capture_output(pipe)));
+        let mut process = Self {
+            child,
+            address,
+            stdout,
+            stderr,
+        };
         process.wait_until_ready().await;
         process
     }
@@ -72,7 +103,12 @@ impl ServingProcess {
         }
     }
 
-    pub async fn stop(mut self) {
+    #[allow(dead_code)]
+    pub async fn stop(self) {
+        let _ = self.stop_and_capture().await;
+    }
+
+    pub async fn stop_and_capture(mut self) -> CapturedOutput {
         if self
             .child
             .try_wait()
@@ -87,6 +123,57 @@ impl ServingProcess {
             .await
             .expect("serving child is reaped before its deadline")
             .expect("serving child exit is collected");
+        let stdout = take_capture(&mut self.stdout).await;
+        let stderr = take_capture(&mut self.stderr).await;
+        CapturedOutput {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        }
+    }
+}
+
+impl Drop for ServingProcess {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.start_kill();
+        }
+        if let Some(task) = self.stdout.take() {
+            task.abort();
+        }
+        if let Some(task) = self.stderr.take() {
+            task.abort();
+        }
+    }
+}
+
+async fn capture_output<R>(mut reader: R) -> Vec<u8>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+{
+    const CAPTURE_LIMIT: usize = 1_048_576;
+    let mut captured = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = match timeout(Duration::from_secs(30), reader.read(&mut buffer)).await {
+            Ok(Ok(0)) | Err(_) | Ok(Err(_)) => break,
+            Ok(Ok(read)) => read,
+        };
+        let remaining = CAPTURE_LIMIT.saturating_sub(captured.len());
+        captured.extend_from_slice(&buffer[..read.min(remaining)]);
+    }
+    captured
+}
+
+async fn take_capture(task: &mut Option<JoinHandle<Vec<u8>>>) -> Vec<u8> {
+    let Some(mut task) = task.take() else {
+        return Vec::new();
+    };
+    match timeout(Duration::from_secs(3), &mut task).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(_)) | Err(_) => {
+            task.abort();
+            Vec::new()
+        }
     }
 }
 
@@ -96,6 +183,17 @@ pub async fn send(
     path: &str,
     credential: Option<&str>,
     body: &str,
+) -> std::io::Result<HttpResult> {
+    send_with_headers(address, method, path, credential, body, &[]).await
+}
+
+pub async fn send_with_headers(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    credential: Option<&str>,
+    body: &str,
+    extra_headers: &[(&str, &str)],
 ) -> std::io::Result<HttpResult> {
     timeout(Duration::from_secs(5), async {
         let mut stream = TcpStream::connect(address).await?;
@@ -109,6 +207,12 @@ pub async fn send(
         if !body.is_empty() {
             request.push_str("Content-Type: application/json\r\n");
         }
+        for (name, value) in extra_headers {
+            request.push_str(name);
+            request.push_str(": ");
+            request.push_str(value);
+            request.push_str("\r\n");
+        }
         request.push_str("\r\n");
         request.push_str(body);
         stream.write_all(request.as_bytes()).await?;
@@ -118,6 +222,50 @@ pub async fn send(
     })
     .await
     .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "HTTP test deadline exceeded"))?
+}
+
+/// Send an actual HTTP/1.1 chunked body over TCP, with no Content-Length. The
+/// chunk boundaries are transport framing, not application body frames.
+#[allow(dead_code)]
+pub async fn send_chunked(
+    address: std::net::SocketAddr,
+    method: &str,
+    path: &str,
+    credential: Option<&str>,
+    body: &[u8],
+    chunk_size: usize,
+    extra_headers: &[(&str, &str)],
+) -> std::io::Result<HttpResult> {
+    timeout(Duration::from_secs(8), async {
+        let mut stream = TcpStream::connect(address).await?;
+        let mut request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nTransfer-Encoding: chunked\r\nContent-Type: application/json\r\n"
+        );
+        if let Some(credential) = credential {
+            request.push_str(&format!("Authorization: Bearer {credential}\r\n"));
+        }
+        for (name, value) in extra_headers {
+            request.push_str(name);
+            request.push_str(": ");
+            request.push_str(value);
+            request.push_str("\r\n");
+        }
+        request.push_str("\r\n");
+        stream.write_all(request.as_bytes()).await?;
+        for chunk in body.chunks(chunk_size.max(1)) {
+            stream
+                .write_all(format!("{:X}\r\n", chunk.len()).as_bytes())
+                .await?;
+            stream.write_all(chunk).await?;
+            stream.write_all(b"\r\n").await?;
+        }
+        stream.write_all(b"0\r\n\r\n").await?;
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await?;
+        parse_response(&response)
+    })
+    .await
+    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "chunked HTTP deadline exceeded"))?
 }
 
 fn parse_response(bytes: &[u8]) -> std::io::Result<HttpResult> {

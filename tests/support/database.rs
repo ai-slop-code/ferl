@@ -49,6 +49,30 @@ impl IsolatedTestDatabase {
         }
     }
 
+    /// Run a fully owned local future under the same deadline/cleanup contract
+    /// when a focused test needs a deterministic, non-Send internal seam. The
+    /// future receives only this fixture's pool and schema-scoped URL.
+    #[allow(dead_code)]
+    pub async fn verify_owned(
+        self,
+        scenario: impl FnOnce(PgPool, String) -> futures_util::future::LocalBoxFuture<'static, ()>,
+    ) {
+        use futures_util::FutureExt;
+        let pool = self.pool.clone();
+        let schema_url = self.schema_database_url.clone();
+        let result = timeout(
+            Duration::from_secs(90),
+            std::panic::AssertUnwindSafe(scenario(pool, schema_url)).catch_unwind(),
+        )
+        .await;
+        self.close().await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(panic)) => std::panic::resume_unwind(panic),
+            Err(_) => panic!("isolated owned database scenario exceeded its 90-second deadline"),
+        }
+    }
+
     pub async fn connect_from_harness() -> Self {
         let harness_lock = acquire_harness_lock().await;
         let database_url = std::env::var("FERL_TEST_DATABASE_URL")

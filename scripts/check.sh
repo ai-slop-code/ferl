@@ -15,6 +15,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 # Child workers execute the rate_limit_process test binary, never a production
 # CLI test command. Clear only worker dispatch inputs for this parent gate.
 unset FERL_RATE_TEST_WORKER_URL FERL_RATE_TEST_CREDENTIAL
-# Includes IP, allowance, concurrency, fault/privacy and independent-process suites.
+# Includes IP/allowance and all link-management HTTP, PostgreSQL, concurrency,
+# fault/privacy, TCP, and independent-production-process suites.
 cargo test --workspace --all-targets
 cargo test --doc

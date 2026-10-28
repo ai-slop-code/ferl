@@ -535,10 +535,22 @@ impl LinkDto {
             enabled: record.enabled,
             active: record.enabled && owner_active,
             visit_count: count,
-            created_at: Timestamp::from_database(record.created_at)
-                .map_err(|_| RecordConversionError("link creation time is invalid"))?,
-            updated_at: Timestamp::from_database(record.updated_at)
-                .map_err(|_| RecordConversionError("link update time is invalid"))?,
+            created_at: Timestamp::from_unix_micros(
+                record
+                    .created_at
+                    .postgres_micros()
+                    .checked_add(946_684_800_000_000)
+                    .ok_or(RecordConversionError("link creation time is invalid"))?,
+            )
+            .map_err(|_| RecordConversionError("link creation time is invalid"))?,
+            updated_at: Timestamp::from_unix_micros(
+                record
+                    .updated_at
+                    .postgres_micros()
+                    .checked_add(946_684_800_000_000)
+                    .ok_or(RecordConversionError("link update time is invalid"))?,
+            )
+            .map_err(|_| RecordConversionError("link update time is invalid"))?,
         })
     }
 }

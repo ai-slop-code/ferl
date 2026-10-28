@@ -164,5 +164,10 @@ this converter and anonymous accounting. Its private accounting `DatabaseInstant
 is distinct from request/cursor `Timestamp`: exact PostgreSQL binary microseconds
 and database interval arithmetic preserve rate-window boundaries without Chrono
 range panics or application-clock sampling.
+Link metadata uses a separate `DatabaseTimestamp` decoder for finite PostgreSQL
+binary microseconds. It rejects infinities/invalid database ranges before DTO
+conversion, then checks the narrower RFC 3339 wire range without invoking SQLx's
+Chrono binary timestamp decoder. The accounting and link timestamp types have
+separate responsibilities.
 Historical visit DTOs use the stored destination snapshot. No migration was
 needed: schema version 1 and `migrations/0001_initial.sql` are unchanged.

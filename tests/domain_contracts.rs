@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use ferl_server::{
-    db::records::{AccountRecord, LinkRecord, VisitRecord},
+    db::records::{AccountRecord, DatabaseTimestamp, LinkRecord, VisitRecord},
     domain::{
         count::{Count, PositiveCount},
         secret::{AccountApiKey, ManagementTokenSecret},
@@ -45,8 +45,10 @@ fn sample_link(owner_id: Option<Uuid>) -> LinkRecord {
         enabled: true,
         visit_count: i64::MAX,
         management_token_digest: owner_id.is_none().then_some(vec![0xa5; 32]),
-        created_at: utc("2026-10-28T10:00:00.123456789Z"),
-        updated_at: utc("2026-10-28T10:00:01.987654321Z"),
+        created_at: DatabaseTimestamp::from_utc(utc("2026-10-28T10:00:00.123456789Z"))
+            .expect("finite fixture timestamp is representable"),
+        updated_at: DatabaseTimestamp::from_utc(utc("2026-10-28T10:00:01.987654321Z"))
+            .expect("finite fixture timestamp is representable"),
     }
 }
 
