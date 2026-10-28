@@ -1060,6 +1060,10 @@ The branch is based on the verified Part 09 merge
 `6153b7684383d066697f473731755c103c870484`. The repository-local identity is
 `LubosBa <30705301+LubosBa@users.noreply.github.com>`. The work began from clean `main`/index/tree;
 there are no remotes, and no history rewrite or push is part of this workflow.
+Verified implementation commit: `1d84f0aacf21bfcf82465463e3c1c623a23cb7f2`
+(`feat(part-10): add OTLP observability and bounded lifecycle`). This full hash
+is recorded by the handoff-only follow-up commit; Part 10 remains verified and
+awaiting the explicit merge.
 The verified base includes schema v2. Part 10 adds no migration and leaves
 `migrations/0001_initial.sql`, `migrations/0002_discovery_indexes.sql`, the
 normative business specification, OpenAPI, and `Cargo.lock` unchanged.
