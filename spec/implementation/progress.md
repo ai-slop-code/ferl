@@ -14,7 +14,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 04 Authentication and accounts | Complete | Verified implementation `b740bb2d80c1bac590df52b72005efcc6bebb758` and integrated part tip `1aacfbca49b94c000cd7ab17b20a3609b4c740dd` from `implementation/04-authentication-and-accounts` are integrated by this explicit no-ff merge into `main` from base `15d9ddebdc0b15d06a0bea97883a6beaf1b1437a`. The tested implementation tree is unchanged; only this completion handoff is added in the merge commit. |
 | 05 Client IP and rate limits | Complete | Verified implementation `cda4b77866e96b498be144d6f819cd4a113a6896` and integrated part tip `6c21d8ab8a4d05f7c41166da98d8fb3d42ffd7d3` from `implementation/05-client-ip-and-rate-limits`, base `14ec982566c348f6b59e1f7a715f7eefc2ab9b19`, are integrated by this explicit local no-ff merge. Closing gate: 144 tests and 3 compile-fail doctests passed. |
 | 06 Link management | Complete | Verified implementation `264f3f35bcdab2e2f563d779fae6728e50b0c1a8` and integrated part tip `968b4eaaafae7f21723763c7fc76d2e4890ffa70` from `implementation/06-link-management`, based on `bbe53b3b439d961b88e0a56b877ad3e409411f2e`, are integrated by this explicit no-ff merge. |
-| 07 Redirects and visit ingestion | Verified (awaiting merge) | Full Part 07 gate passed on `implementation/07-redirects-and-visit-ingestion`; traceability and final merge recorded below. |
+| 07 Redirects and visit ingestion | Verified (awaiting merge) | Verified implementation `e7d0bb8d39fa22748642a9f9488e21cb505a8598` on `implementation/07-redirects-and-visit-ingestion`; explicit merge handoff remains below. |
 | 08 Link and tag discovery | Planned (next) | Not started; begins only after Part 07 is merged. |
 | 09 Analytics reports | Planned | — |
 | 10 Observability and lifecycle | Planned | — |
@@ -624,9 +624,10 @@ The explicit local merge into `main` is the remaining integration step.
   revert/sequencer operations. Local identity is
   `LubosBa <30705301+LubosBa@users.noreply.github.com>`; no global identity, remote, or push was set.
 - Base commit: `6db4ede67927a24381eddb3889d4479e1b7de17a`.
-- Verified implementation commit: to be recorded in the handoff-only branch
-  follow-up after committing this reviewed implementation.
-- Integrated part-tip commit: to be recorded in the pending no-ff integration.
+- Verified implementation commit: `e7d0bb8d39fa22748642a9f9488e21cb505a8598`
+  (`feat(part-07): add redirects and visit ingestion`).
+- Integrated part-tip commit: to be recorded in the completion-only integration
+  handoff once the branch tip is finalized.
 - Merge commit: reported after creation; its own hash is not embedded in its tree.
 
 ### Delivered Part 07 behavior
