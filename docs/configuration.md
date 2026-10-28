@@ -38,15 +38,19 @@ values are never included in configuration debug output or logs.
 | `FERL_ANALYTICS_OPERATION_TIMEOUT_SECS` | `30` | Integer from 1 through 300 seconds; total bound for each worker persistence attempt, independent of pool, lock and statement deadlines. Must exceed the rollback timeout. |
 | `FERL_ANALYTICS_ROLLBACK_TIMEOUT_SECS` | `2` | Integer from 1 through 300 seconds; bounds explicit rollback after a failed visit transaction. |
 | `FERL_ANALYTICS_DRAIN_TIMEOUT_SECS` | `5` | Integer from 1 through 300 seconds; maximum visit-queue drain before worker cancellation and pool closure. |
+| `FERL_READINESS_WITHDRAWAL_SECS` | `1` | Integer from 0 through 10 seconds. Readiness fails immediately; during this interval the listener continues polling health routes before acceptance is stopped. |
 | `FERL_HTTP_DRAIN_TIMEOUT_SECS` | `30` | Integer from 1 through 300 seconds. |
-| `FERL_SHUTDOWN_TIMEOUT_SECS` | `45` | Integer from 1 through 300 seconds and at least the HTTP drain timeout. |
-| `FERL_OTEL_ENDPOINT` | Unset | Optional HTTP(S) OTLP endpoint. Its absence disables export; collector reachability is never required at startup. |
-| `FERL_OTEL_HEADERS` | Empty | Optional comma-separated `name=value` pairs. Header names/values are validated; commas are not supported inside values. Values are secret and are never logged. |
-| `FERL_OTEL_TIMEOUT_SECS` | `5` | Integer from 1 through 300 seconds. |
-| `FERL_OTEL_TRACE_SAMPLE_RATIO` | `1.0` | Finite number from 0 through 1; parent-based sampling is wired in Part 10. |
-| `FERL_OTEL_RESOURCE_ATTRIBUTES` | Empty | Optional comma-separated `key=value` pairs; keys use ASCII alphanumeric, `.`, `_`, and `-`. Values must be non-sensitive, low-cardinality deployment metadata. |
-| `FERL_ENVIRONMENT` | `local` | Non-empty, at most 128 UTF-8 bytes, with no control characters. |
-| `FERL_INSTANCE_ID` | Random UUID per process | Optional UUID override. Use a distinct value per instance. |
+| `FERL_SHUTDOWN_TIMEOUT_SECS` | `45` | Integer from 1 through 300 seconds and at least the HTTP drain timeout. This is one end-to-end signal/unexpected-exit deadline, not a per-phase timeout. |
+| `FERL_OTEL_SERVICE_NAME` | `ferl` | Safe 1–64 character service identifier. `OTEL_SERVICE_NAME`, when present, takes precedence. |
+| `FERL_OTEL_ENDPOINT` | Unset | Optional HTTP(S) OTLP/HTTP-protobuf base URL. Export is completely disabled when absent; collector reachability/DNS is not required at startup/readiness. Signal paths `/v1/{traces,metrics,logs}` are appended. `OTEL_EXPORTER_OTLP_ENDPOINT` takes precedence. |
+| `FERL_OTEL_HEADERS` | Empty | Optional comma-separated `name=value` pairs. `OTEL_EXPORTER_OTLP_HEADERS`, when present, replaces this setting and is decoded using OTEL percent-encoding. Header values are secret and never logged. |
+| `FERL_OTEL_TIMEOUT_SECS` | `5` | Integer from 1 through 300 seconds. `OTEL_EXPORTER_OTLP_TIMEOUT` takes precedence and is milliseconds (1–300,000). The effective request timeout is further capped by the total shutdown/batch budget. |
+| `FERL_OTEL_TRACE_SAMPLE_RATIO` | `1.0` | Finite number from 0 through 1. Sampling is always parent-based; roots use this ratio. `OTEL_TRACES_SAMPLER_ARG` takes precedence, and only `parentbased_traceidratio` is accepted for `OTEL_TRACES_SAMPLER`. |
+| `FERL_OTEL_QUEUE_CAPACITY` | `1024` | Integer from 1 through 65,536, shared per-process maximum for trace/log batch queues. |
+| `FERL_OTEL_BATCH_SIZE` | `128` | Integer from 1 through the configured queue capacity; maximum spans/log records per batch. Trace export concurrency is 1; log export is serial. |
+| `FERL_OTEL_RESOURCE_ATTRIBUTES` | Empty | Comma-separated allowlisted `key=value` deployment metadata. Only `deployment.environment.name`, `deployment.name`, `service.namespace`, and `cloud.region` are accepted; values are 1–64 ASCII letters/digits/`.`/`_`/`-`. `OTEL_RESOURCE_ATTRIBUTES` overrides duplicate keys. |
+| `FERL_ENVIRONMENT` | `local` | Safe 1–64 character deployment-environment fallback for `deployment.environment.name`; an explicit allowlisted resource attribute wins. |
+| `FERL_INSTANCE_ID` | Generated | Overrides are rejected. `service.instance.id` is a new opaque UUID generated for every process run and shared across all three signals. |
 
 ## Migration command settings
 
@@ -103,13 +107,34 @@ across instances. Part 03's exact cursor version, associated data, resource
 codes, context binding, and decoded/encoded limits are documented in
 [domain and wire contracts](domain-contracts.md).
 
-`FERL_OTEL_ENDPOINT` and the OTLP resource settings are parsed now so malformed
-configuration fails before serving. Part 01 installs safe structured stdout
-logging and a typed, low-cardinality operation/outcome facade. Export providers
-and actual traces, metrics, and OTLP logs are delivered in Part 10. Analytics
-settings configure the bounded visit queue/workers, per-attempt and rollback
-deadlines, idempotent retry budget, and shutdown drain. Abrupt process termination
-can lose events still buffered in memory.
+Standard OTEL settings supported by `serve` are `OTEL_SERVICE_NAME`,
+`OTEL_RESOURCE_ATTRIBUTES`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TIMEOUT`,
+`OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, `OTEL_TRACES_SAMPLER`, and
+`OTEL_TRACES_SAMPLER_ARG`. When both setting families specify a value, standard
+OTEL settings take precedence over their FERL compatibility equivalents.
+Signal-specific endpoint/header/timeout/protocol/compression variables and
+generic compression are rejected rather than being read implicitly by the SDK.
+Unsupported resource attributes (including host/process/instance detector data)
+are rejected. Resource attributes cannot override `service.name`, build-derived
+`service.version`, or generated `service.instance.id`.
+
+No DNS lookup or collector connection occurs during configuration/provider
+construction. With no endpoint, the process keeps structured stdout and valid
+in-process instruments but starts no exporter task and makes no OTLP attempt.
+See [observability.md](observability.md) for SDK versions, metric schema, queue
+bounds, sampling/correlation, and diagnostics. See [operations.md](operations.md)
+for the pinned Collector and shutdown operations.
+
+Compatibility correction: `FERL_INSTANCE_ID` was previously accepted as a UUID
+override, and arbitrary `FERL_OTEL_RESOURCE_ATTRIBUTES` were accepted. Part 10
+now rejects `FERL_INSTANCE_ID` and restricts resources to the explicit allowlist
+above so process identity cannot be reused and environment/resource detectors
+cannot introduce unreviewed host or sensitive metadata.
+
+Analytics settings configure the bounded visit queue/workers, per-attempt and
+rollback deadlines, idempotent retry budget, and graceful drain. Abrupt process
+termination can lose in-memory visits and telemetry; neither is crash durable.
 
 Part 09 adds `FERL_REPORT_OPERATION_TIMEOUT_SECS`, which bounds complete report
 requests independently of the link-operation, account-wrapper, worker, pool, and

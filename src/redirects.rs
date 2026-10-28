@@ -16,6 +16,7 @@ use crate::{
 
 const ALLOW_FOLLOW: &str = "GET, HEAD";
 
+#[tracing::instrument(skip_all, name = "redirect.follow")]
 pub async fn dispatch(state: AppState, request: Request<Body>) -> Response {
     let request_id = request
         .extensions()

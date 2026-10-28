@@ -23,8 +23,11 @@ endpoint/release conformance (Part 11).
 
 The PostgreSQL integration test is required by the ordinary test command. It
 fails with an actionable message if the harness environment is missing; it is
-not silently skipped. Run `scripts/check.sh` to start/verify the test database,
-set the required test variables, execute all four commands, and run doctests.
+not silently skipped. Run `sh scripts/check.sh` to start/verify the owned
+PostgreSQL and Collector fixtures, set required test variables, execute fmt,
+all-target/all-feature build, warning-denied Clippy, all-target tests, and
+doctests. Collector/process tests are mandatory and fail rather than skip if the
+fixture cannot be reached.
 
 ## PostgreSQL with Podman
 
@@ -81,8 +84,8 @@ migrations never bootstrap. Part 04 registers account routes, Part 06 adds
 single-link management routes, Part 07 adds exact public GET/HEAD redirects and
 bounded best-effort visit ingestion, Part 08 adds scoped link listing and tag
 discovery, and Part 09 registers the three authorized per-link analytics reports.
-Part 10 OTLP/lifecycle and Part 11 release verification remain later stages; this
-is not a release-readiness claim.
+Part 10 adds OTLP signals, privacy boundaries, and bounded lifecycle. Part 11
+release verification remains separate; this is not a release-readiness claim.
 Readiness is fail-closed until the production composition verifies migration
 history and required schema objects, then performs a bounded database probe.
 The verifier rechecks for database or schema recovery.
@@ -146,6 +149,9 @@ decision.
 `discovery_process`, `visit_records`, `analytics_authorization`, `report_failures`,
 `report_process`, and migrations. Part 09 also has deterministic real-PostgreSQL
 worker-backed report and production-query-plan tests in `src/analytics/reports/tests.rs`.
+The mandatory `telemetry_signals` suite also runs the production binary against
+PostgreSQL and the pinned Collector and inspects real OTLP and process-shutdown
+evidence.
 Part 08's process test starts independent
 production server executables, captures bounded stdout/stderr, and exercises
 shared CRUD/list/discovery,

@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::{collections::BTreeMap, process::Stdio, time::Duration};
 
 use tokio::{
@@ -12,8 +13,11 @@ use uuid::Uuid;
 pub struct ServingProcess {
     child: Child,
     pub address: std::net::SocketAddr,
+    signalled_at: Option<tokio::time::Instant>,
     stdout: Option<JoinHandle<Vec<u8>>>,
     stderr: Option<JoinHandle<Vec<u8>>>,
+    stdout_shared: Arc<Mutex<Vec<u8>>>,
+    stderr_shared: Arc<Mutex<Vec<u8>>>,
 }
 
 pub struct HttpResult {
@@ -26,6 +30,8 @@ pub struct HttpResult {
 pub struct CapturedOutput {
     pub stdout: String,
     pub stderr: String,
+    pub shutdown_elapsed: Duration,
+    pub exit_success: bool,
 }
 
 impl ServingProcess {
@@ -97,24 +103,81 @@ impl ServingProcess {
         }
         let child = child.spawn().expect("ferl-server process starts");
         let mut child = child;
+        let stdout_shared = Arc::new(Mutex::new(Vec::new()));
+        let stderr_shared = Arc::new(Mutex::new(Vec::new()));
         let stdout = child
             .stdout
             .take()
-            .map(|pipe| tokio::spawn(capture_output(pipe)));
+            .map(|pipe| tokio::spawn(capture_output(pipe, Arc::clone(&stdout_shared))));
         let stderr = child
             .stderr
             .take()
-            .map(|pipe| tokio::spawn(capture_output(pipe)));
+            .map(|pipe| tokio::spawn(capture_output(pipe, Arc::clone(&stderr_shared))));
         let mut process = Self {
             child,
             address,
+            signalled_at: None,
             stdout,
             stderr,
+            stdout_shared,
+            stderr_shared,
         };
         if wait_for_ready {
             process.wait_until_ready().await;
         }
         process
+    }
+
+    #[allow(dead_code)]
+    pub fn stdout_snapshot(&self) -> String {
+        String::from_utf8_lossy(
+            &self
+                .stdout_shared
+                .lock()
+                .expect("stdout capture lock is not poisoned"),
+        )
+        .into_owned()
+    }
+
+    #[allow(dead_code)]
+    pub fn stderr_snapshot(&self) -> String {
+        String::from_utf8_lossy(
+            &self
+                .stderr_shared
+                .lock()
+                .expect("stderr capture lock is not poisoned"),
+        )
+        .into_owned()
+    }
+
+    #[allow(dead_code)]
+    pub async fn signal_terminate(&mut self) {
+        if self
+            .child
+            .try_wait()
+            .expect("child status is readable")
+            .is_some()
+        {
+            return;
+        }
+        if self.signalled_at.is_none() {
+            self.signalled_at = Some(tokio::time::Instant::now());
+        }
+        let pid = self.child.id().expect("running child has a process ID");
+        let status = Command::new("/bin/kill")
+            .args(["-TERM", &pid.to_string()])
+            .status()
+            .await
+            .expect("SIGTERM command starts");
+        assert!(status.success(), "SIGTERM reaches the production process");
+    }
+
+    #[allow(dead_code)]
+    pub fn is_running(&mut self) -> bool {
+        self.child
+            .try_wait()
+            .expect("child status is readable")
+            .is_none()
     }
 
     async fn wait_until_ready(&mut self) {
@@ -152,7 +215,9 @@ impl ServingProcess {
             .try_wait()
             .expect("child status is readable")
             .is_none()
+            && self.signalled_at.is_none()
         {
+            self.signalled_at = Some(tokio::time::Instant::now());
             let pid = self.child.id().expect("running child has a process ID");
             let mut signal = Command::new("/bin/kill");
             signal.kill_on_drop(true).args(["-TERM", &pid.to_string()]);
@@ -166,8 +231,8 @@ impl ServingProcess {
                     .expect("serving child accepts bounded fallback termination");
             }
         }
-        match timeout(Duration::from_secs(12), self.child.wait()).await {
-            Ok(Ok(_)) => {}
+        let status = match timeout(Duration::from_secs(25), self.child.wait()).await {
+            Ok(Ok(status)) => status,
             Ok(Err(error)) => panic!("serving child exit is collected: {error}"),
             Err(_) => {
                 self.child
@@ -176,14 +241,20 @@ impl ServingProcess {
                 timeout(Duration::from_secs(3), self.child.wait())
                     .await
                     .expect("serving child is forcibly reaped before the cleanup deadline")
-                    .expect("serving child exit is collected");
+                    .expect("serving child exit is collected")
             }
-        }
+        };
+        let shutdown_elapsed = self
+            .signalled_at
+            .map(|started| started.elapsed())
+            .unwrap_or_default();
         let stdout = take_capture(&mut self.stdout).await;
         let stderr = take_capture(&mut self.stderr).await;
         CapturedOutput {
             stdout: String::from_utf8_lossy(&stdout).into_owned(),
             stderr: String::from_utf8_lossy(&stderr).into_owned(),
+            shutdown_elapsed,
+            exit_success: status.success(),
         }
     }
 }
@@ -202,7 +273,7 @@ impl Drop for ServingProcess {
     }
 }
 
-async fn capture_output<R>(mut reader: R) -> Vec<u8>
+async fn capture_output<R>(mut reader: R, shared: Arc<Mutex<Vec<u8>>>) -> Vec<u8>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
@@ -216,6 +287,12 @@ where
         };
         let remaining = CAPTURE_LIMIT.saturating_sub(captured.len());
         captured.extend_from_slice(&buffer[..read.min(remaining)]);
+        if remaining > 0 {
+            shared
+                .lock()
+                .expect("test output buffer lock is not poisoned")
+                .extend_from_slice(&buffer[..read.min(remaining)]);
+        }
     }
     captured
 }

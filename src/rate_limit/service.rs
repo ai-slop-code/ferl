@@ -11,6 +11,8 @@ use crate::{
         coordination::{self, CoordinationError},
         error::{DatabaseFailure, OperationStage, classify},
     },
+    telemetry::metrics,
+    telemetry::metrics::{DbOperation, DbTimer},
 };
 
 use super::{RateSubject, maintenance, repository};
@@ -137,6 +139,9 @@ impl CreationService {
             })
         });
         observation.finished = true;
+        if matches!(&result, Err(CreationFailure::RateLimited(_))) {
+            metrics::record_rate_rejection();
+        }
         let outcome = match &result {
             Ok(_) => "charged",
             Err(error) => error.safe_category(),
@@ -236,14 +241,24 @@ impl CreationService {
         subject: RateSubject,
         limit: u32,
     ) -> Result<(), CreationFailure> {
-        repository::configure(connection, self.statement_timeout, self.lock_timeout).await?;
-        let bucket = repository::lock_bucket(connection, subject).await?;
-        let now = repository::sample(connection).await?;
-        if let Some(retry) = repository::allowance(connection, bucket, now, limit).await? {
-            return Err(CreationFailure::RateLimited(retry));
+        let mut timer = DbTimer::new(DbOperation::RateCharge);
+        let result = async {
+            repository::configure(connection, self.statement_timeout, self.lock_timeout).await?;
+            let bucket = repository::lock_bucket(connection, subject).await?;
+            let now = repository::sample(connection).await?;
+            if let Some(retry) = repository::allowance(connection, bucket, now, limit).await? {
+                return Err(CreationFailure::RateLimited(retry));
+            }
+            maintenance::prune(connection, bucket, now).await?;
+            repository::insert(connection, bucket, now).await
         }
-        maintenance::prune(connection, bucket, now).await?;
-        repository::insert(connection, bucket, now).await
+        .await;
+        if result.is_ok() || matches!(&result, Err(CreationFailure::RateLimited(_))) {
+            timer.success();
+        } else {
+            timer.failure();
+        }
+        result
     }
 }
 

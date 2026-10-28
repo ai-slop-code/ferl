@@ -26,6 +26,7 @@ use crate::{
     http::query::{LinkListQuery, LinkSort},
     pagination::{CursorBoundary, CursorCodec, CursorContext},
     rate_limit::{ChargedAttempt, Creator},
+    telemetry::metrics::{self, DbOperation, DbTimer, Operation, Outcome},
 };
 
 use super::{allocation, list_repository, repository};
@@ -98,17 +99,48 @@ impl LinkService {
 
     /// Takes the successful Part 05 charge capability by ownership. No identity
     /// or previously observed role can be supplied independently.
+    #[tracing::instrument(skip_all, name = "link.create")]
     pub async fn create(
         &self,
         attempt: ChargedAttempt,
         input: CreateLinkRequest,
     ) -> Result<CreatedLink, LinkFailure> {
-        self.with_deadline(self.create_inner(attempt.into_creator(), input))
-            .await
+        let mut timer = DbTimer::new(DbOperation::LinkCreate);
+        let result = self
+            .with_deadline(self.create_inner(attempt.into_creator(), input))
+            .await;
+        let outcome = match &result {
+            Ok(_) => {
+                timer.success();
+                Outcome::Success
+            }
+            Err(
+                LinkFailure::StorageUnavailable
+                | LinkFailure::CommitOutcomeUnknown
+                | LinkFailure::CodeGenerationUnavailable,
+            ) => Outcome::Unavailable,
+            Err(LinkFailure::Internal) => Outcome::Failure,
+            Err(_) => Outcome::Rejected,
+        };
+        metrics::record_operation(Operation::LinkCreate, outcome);
+        if matches!(
+            &result,
+            Err(LinkFailure::StorageUnavailable
+                | LinkFailure::CommitOutcomeUnknown
+                | LinkFailure::Internal)
+        ) {
+            timer.failure();
+        } else if result.is_err() {
+            // Validation, concealed absence, permission rejection, rate-limited
+            // creation, and random-source failures are not SQL failures.
+            timer.success();
+        }
+        result
     }
 
     /// List a bounded page using one PostgreSQL statement snapshot for the
     /// candidate page, owner state, canonical tags and cursor ordering values.
+    #[tracing::instrument(skip_all, name = "link.list")]
     pub async fn list(
         &self,
         codec: &CursorCodec,
@@ -281,6 +313,7 @@ impl LinkService {
 
     /// Metadata, owner state and tag names are read from one PostgreSQL statement
     /// snapshot, so a response cannot combine separate committed tag versions.
+    #[tracing::instrument(skip_all, name = "link.get")]
     pub async fn get(&self, principal: &Principal, code: &str) -> Result<LinkDto, LinkFailure> {
         self.with_deadline(async {
             let snapshot = repository::find_snapshot_by_code(&self.pool, code)
@@ -443,6 +476,7 @@ impl LinkService {
         .await
     }
 
+    #[tracing::instrument(skip_all, name = "link.update")]
     pub async fn patch(
         &self,
         principal: &Principal,
@@ -533,6 +567,7 @@ impl LinkService {
         .await
     }
 
+    #[tracing::instrument(skip_all, name = "link.delete")]
     pub async fn delete(&self, principal: &Principal, code: &str) -> Result<(), LinkFailure> {
         self.with_deadline(async {
             let (mut transaction, record, tags, owner_enabled) =
@@ -556,6 +591,7 @@ impl LinkService {
         .await
     }
 
+    #[tracing::instrument(skip_all, name = "credential.rotate_management_token")]
     pub async fn rotate_token(
         &self,
         principal: &Principal,
@@ -875,10 +911,12 @@ pub async fn resolve_active_link(
     code: &str,
     deadline: Duration,
 ) -> Result<Option<ActiveLinkSnapshot>, LinkFailure> {
+    let mut timer = DbTimer::new(DbOperation::RedirectLookup);
     let result = tokio::time::timeout(deadline, repository::active_resolution(pool, code))
         .await
         .map_err(|_| LinkFailure::StorageUnavailable)?
         .map_err(map_sql)?;
+    timer.success();
     let Some(row) = result else {
         return Ok(None);
     };

@@ -57,6 +57,9 @@ pub async fn dispatch(state: AppState, request: Request<Body>) -> Response {
     {
         Ok(Some(principal)) => principal,
         Ok(None) => {
+            crate::telemetry::metrics::record_auth_failure(
+                crate::telemetry::metrics::AuthFailureCategory::MissingCredential,
+            );
             return error::response(
                 request_id,
                 ErrorCode::AuthenticationRequired,
@@ -269,6 +272,18 @@ pub(crate) fn authentication_error(request_id: Uuid, failure: AuthFailure) -> Re
 }
 
 pub(crate) fn link_error(request_id: Uuid, failure: LinkFailure) -> Response {
+    match failure {
+        LinkFailure::AuthenticationRequired => crate::telemetry::metrics::record_auth_failure(
+            crate::telemetry::metrics::AuthFailureCategory::MissingCredential,
+        ),
+        LinkFailure::InvalidCredentials => crate::telemetry::metrics::record_auth_failure(
+            crate::telemetry::metrics::AuthFailureCategory::InvalidCredential,
+        ),
+        LinkFailure::Forbidden => crate::telemetry::metrics::record_auth_failure(
+            crate::telemetry::metrics::AuthFailureCategory::ForbiddenScope,
+        ),
+        _ => {}
+    }
     let (code, message) = match failure {
         LinkFailure::AuthenticationRequired => (
             ErrorCode::AuthenticationRequired,

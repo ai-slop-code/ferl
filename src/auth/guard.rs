@@ -11,6 +11,7 @@ use crate::{
         ids::{AccountId, LinkId},
         secret::SecretDigest,
     },
+    telemetry::metrics::{DbOperation, DbTimer},
 };
 
 use super::{AccountPrincipal, AccountRole, ManagementPrincipal, Principal};
@@ -112,12 +113,14 @@ impl LinkMutationGuard {
 
 /// Begin an account-authenticated link mutation under the shared authority
 /// gate. Fresh credential/status/role lookup occurs as a later SQL statement.
+#[tracing::instrument(skip_all, name = "db.account.shared_authority_guard")]
 pub async fn begin_account_mutation(
     pool: &PgPool,
     principal: &Principal,
     lock_timeout: Duration,
 ) -> Result<AccountMutationGuard, GuardFailure> {
     let account = principal.account().ok_or(GuardFailure::Forbidden)?;
+    let mut timer = DbTimer::new(DbOperation::AccountMutation);
     let mut transaction = begin(pool).await?;
     if let Err(error) =
         coordination::acquire_account_authority_shared_bounded(&mut transaction, lock_timeout).await
@@ -127,10 +130,12 @@ pub async fn begin_account_mutation(
     let caller = match revalidate_account(&mut transaction, account.digest()).await {
         Ok(Some(caller)) => caller,
         Ok(None) => {
+            timer.success();
             return rollback_after_error(transaction, GuardFailure::InvalidCredentials).await;
         }
         Err(error) => return rollback_after_error(transaction, error).await,
     };
+    timer.success();
     Ok(AccountMutationGuard {
         transaction,
         caller,
@@ -139,12 +144,14 @@ pub async fn begin_account_mutation(
 
 /// Begin an account write under the exclusive gate, then revalidate the
 /// presented credential and current enabled state/role in a fresh statement.
+#[tracing::instrument(skip_all, name = "db.account.exclusive_authority_guard")]
 pub async fn begin_account_write(
     pool: &PgPool,
     principal: &Principal,
     lock_timeout: Duration,
 ) -> Result<AccountMutationGuard, GuardFailure> {
     let account = principal.account().ok_or(GuardFailure::Forbidden)?;
+    let mut timer = DbTimer::new(DbOperation::AccountMutation);
     let mut transaction = begin(pool).await?;
     if let Err(error) =
         coordination::acquire_account_authority_exclusive_bounded(&mut transaction, lock_timeout)
@@ -155,10 +162,12 @@ pub async fn begin_account_write(
     let caller = match revalidate_account(&mut transaction, account.digest()).await {
         Ok(Some(caller)) => caller,
         Ok(None) => {
+            timer.success();
             return rollback_after_error(transaction, GuardFailure::InvalidCredentials).await;
         }
         Err(error) => return rollback_after_error(transaction, error).await,
     };
+    timer.success();
     Ok(AccountMutationGuard {
         transaction,
         caller,
@@ -168,6 +177,7 @@ pub async fn begin_account_write(
 /// Lock and revalidate the presented anonymous credential's live link row.
 /// Asking to mutate another link remains a concealed 404 once this token has
 /// proved valid; the lock is held through the caller's transaction.
+#[tracing::instrument(skip_all, name = "db.link.anonymous_authority_guard")]
 pub async fn begin_anonymous_link_mutation(
     pool: &PgPool,
     principal: &Principal,
@@ -177,6 +187,7 @@ pub async fn begin_anonymous_link_mutation(
     let token = principal
         .management_token()
         .ok_or(GuardFailure::Forbidden)?;
+    let mut timer = DbTimer::new(DbOperation::LinkMutation);
     let mut transaction = begin(pool).await?;
     set_transaction_lock_deadline(&mut transaction, lock_timeout).await?;
     let row = sqlx::query(
@@ -190,6 +201,7 @@ pub async fn begin_anonymous_link_mutation(
     let row = match row {
         Ok(Some(row)) => row,
         Ok(None) => {
+            timer.success();
             return rollback_after_error(transaction, GuardFailure::InvalidCredentials).await;
         }
         Err(error) => return rollback_after_error(transaction, error).await,
@@ -202,11 +214,14 @@ pub async fn begin_anonymous_link_mutation(
         return rollback_after_error(transaction, GuardFailure::Internal).await;
     };
     if &stored != token.digest() {
+        timer.success();
         return rollback_after_error(transaction, GuardFailure::InvalidCredentials).await;
     }
     if requested_link != token.link_id() {
+        timer.success();
         return rollback_after_error(transaction, GuardFailure::NotFound).await;
     }
+    timer.success();
     Ok(LinkMutationGuard {
         transaction,
         token: ManagementPrincipal::from_database(token.link_id(), token.digest().clone()),

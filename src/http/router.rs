@@ -80,8 +80,29 @@ async fn admit_requests(
             None,
         );
     };
-    let _in_flight = admission.acquire_in_flight().await;
-    next.run(request).await
+    let cancellation = admission.force_cancel_token();
+    let _in_flight = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => {
+            return error::response(
+                request_id,
+                ErrorCode::ServiceUnavailable,
+                "The server is temporarily unable to accept additional work.",
+                None,
+            );
+        }
+        permit = admission.acquire_in_flight() => permit,
+    };
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => error::response(
+            request_id,
+            ErrorCode::ServiceUnavailable,
+            "The server is temporarily unable to accept additional work.",
+            None,
+        ),
+        response = next.run(request) => response,
+    }
 }
 
 async fn liveness(request: Request) -> axum::response::Response {

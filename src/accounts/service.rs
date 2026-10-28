@@ -35,6 +35,7 @@ pub enum AccountFailure {
     Internal,
 }
 
+#[tracing::instrument(skip_all, name = "account.current")]
 pub async fn current_account(pool: &PgPool, id: AccountId) -> Result<AccountDto, AccountFailure> {
     let record = repository::find_by_id(pool, id)
         .await
@@ -43,6 +44,7 @@ pub async fn current_account(pool: &PgPool, id: AccountId) -> Result<AccountDto,
     account_dto(&record)
 }
 
+#[tracing::instrument(skip_all, name = "account.get")]
 pub async fn get_account(pool: &PgPool, id: AccountId) -> Result<AccountDto, AccountFailure> {
     let record = repository::find_by_id(pool, id)
         .await
@@ -51,6 +53,7 @@ pub async fn get_account(pool: &PgPool, id: AccountId) -> Result<AccountDto, Acc
     account_dto(&record)
 }
 
+#[tracing::instrument(skip_all, name = "account.list")]
 pub async fn list_accounts(
     pool: &PgPool,
     cursor_codec: &CursorCodec,
@@ -99,6 +102,7 @@ pub async fn list_accounts(
     Ok(CollectionDto::new(items, next_cursor))
 }
 
+#[tracing::instrument(skip_all, name = "account.create")]
 pub async fn create_account(
     pool: &PgPool,
     principal: &Principal,
@@ -139,6 +143,7 @@ pub async fn create_account(
     Ok(AccountCreationDto::new(account, secret))
 }
 
+#[tracing::instrument(skip_all, name = "account.update")]
 pub async fn update_account(
     pool: &PgPool,
     principal: &Principal,
@@ -209,6 +214,7 @@ pub async fn update_account(
     Ok(account)
 }
 
+#[tracing::instrument(skip_all, name = "account.delete")]
 pub async fn delete_account(
     pool: &PgPool,
     principal: &Principal,
@@ -239,6 +245,7 @@ pub async fn delete_account(
     guard.commit().await.map_err(map_guard)
 }
 
+#[tracing::instrument(skip_all, name = "credential.rotate_account_key")]
 pub async fn rotate_current_key(
     pool: &PgPool,
     principal: &Principal,
@@ -259,6 +266,7 @@ pub async fn rotate_current_key(
     Ok(ApiKeyReplacementDto::new(secret))
 }
 
+#[tracing::instrument(skip_all, name = "credential.reset_account_key")]
 pub async fn reset_account_key(
     pool: &PgPool,
     principal: &Principal,
