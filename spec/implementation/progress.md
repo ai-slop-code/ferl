@@ -781,9 +781,9 @@ not a Complete status until that merge is committed.
   handoff references in this progress record and acceptance map are corrected to
   that real hash; no commit history was rewritten.
 - Base commit: `9bcf7c0c021c994e76d0696633fe822f0a49a5e1`.
-- Verified implementation commit: to be recorded in the handoff-only follow-up
-  after the reviewed implementation commit exists (a commit does not embed its
-  own hash).
+- Verified implementation commit: `1526f60527ac7fd9206fbbdef2b51a11b87d5af8`
+  (`feat(part-08): add link and tag discovery`). The implementation hash is
+  recorded by this handoff-only follow-up; it is not embedded in its own commit.
 - Part branch tip integrated and merge parents will be recorded in the final
   Complete handoff inside the pending no-ff merge. The tested implementation
   must remain unchanged; only handoff metadata may differ during integration.
