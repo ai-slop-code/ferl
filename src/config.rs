@@ -38,6 +38,10 @@ impl CursorKey {
     pub fn bytes_for_crypto(&self) -> &[u8; 32] {
         &self.0
     }
+
+    pub(crate) const fn copy_bytes(&self) -> [u8; 32] {
+        self.0
+    }
 }
 
 impl std::fmt::Debug for CursorKey {
@@ -79,6 +83,29 @@ pub struct MigrationConfig {
     pub statement_timeout: Duration,
     pub total_timeout: Duration,
     pub lock_poll_interval: Duration,
+}
+
+/// Minimal bounded configuration for the one-time bootstrap command. Serving
+/// settings are intentionally not parsed by this profile.
+pub struct BootstrapConfig {
+    pub database_url: DatabaseUrl,
+    pub connect_timeout: Duration,
+    pub lock_timeout: Duration,
+    pub statement_timeout: Duration,
+    pub total_timeout: Duration,
+}
+
+impl std::fmt::Debug for BootstrapConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BootstrapConfig")
+            .field("database_url", &"[REDACTED DATABASE URL]")
+            .field("connect_timeout", &self.connect_timeout)
+            .field("lock_timeout", &self.lock_timeout)
+            .field("statement_timeout", &self.statement_timeout)
+            .field("total_timeout", &self.total_timeout)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for MigrationConfig {
@@ -323,6 +350,73 @@ impl MigrationConfig {
             lock_poll_interval: Duration::from_millis(poll_ms),
         })
     }
+}
+
+impl BootstrapConfig {
+    pub fn from_env() -> Result<Self, ConfigError> {
+        let mut values = BTreeMap::new();
+        for name in [
+            "FERL_DATABASE_URL",
+            "FERL_BOOTSTRAP_CONNECT_TIMEOUT_SECS",
+            "FERL_BOOTSTRAP_LOCK_TIMEOUT_SECS",
+            "FERL_BOOTSTRAP_STATEMENT_TIMEOUT_SECS",
+            "FERL_BOOTSTRAP_TOTAL_TIMEOUT_SECS",
+        ] {
+            match env::var(name) {
+                Ok(value) => {
+                    values.insert(name.to_owned(), value);
+                }
+                Err(env::VarError::NotPresent) => {}
+                Err(env::VarError::NotUnicode(_)) => {
+                    return Err(ConfigError::new(name, "must be valid UTF-8"));
+                }
+            }
+        }
+        Self::from_map(values)
+    }
+
+    pub fn from_map(values: BTreeMap<String, String>) -> Result<Self, ConfigError> {
+        let url = required(&values, "FERL_DATABASE_URL")?;
+        let parsed = Url::parse(url).map_err(|_| {
+            ConfigError::new("FERL_DATABASE_URL", "must be a PostgreSQL connection URL")
+        })?;
+        if !matches!(parsed.scheme(), "postgres" | "postgresql")
+            || sqlx::postgres::PgConnectOptions::from_str(url).is_err()
+        {
+            return Err(ConfigError::new(
+                "FERL_DATABASE_URL",
+                "must be a valid PostgreSQL connection URL",
+            ));
+        }
+        let connect_timeout =
+            bootstrap_seconds(&values, "FERL_BOOTSTRAP_CONNECT_TIMEOUT_SECS", 10)?;
+        let lock_timeout = bootstrap_seconds(&values, "FERL_BOOTSTRAP_LOCK_TIMEOUT_SECS", 5)?;
+        let statement_timeout =
+            bootstrap_seconds(&values, "FERL_BOOTSTRAP_STATEMENT_TIMEOUT_SECS", 10)?;
+        let total_timeout = bootstrap_seconds(&values, "FERL_BOOTSTRAP_TOTAL_TIMEOUT_SECS", 30)?;
+        if total_timeout < connect_timeout || total_timeout < lock_timeout {
+            return Err(ConfigError::new(
+                "FERL_BOOTSTRAP_TOTAL_TIMEOUT_SECS",
+                "must be at least the connection and lock timeouts",
+            ));
+        }
+        Ok(Self {
+            database_url: DatabaseUrl(url.to_owned()),
+            connect_timeout,
+            lock_timeout,
+            statement_timeout,
+            total_timeout,
+        })
+    }
+}
+
+fn bootstrap_seconds(
+    values: &BTreeMap<String, String>,
+    name: &'static str,
+    default: u64,
+) -> Result<Duration, ConfigError> {
+    let value = parse_bounded(values, name, default, 1_u64, MAX_TIMEOUT_SECS)?;
+    Ok(Duration::from_secs(value))
 }
 
 fn migration_seconds(
@@ -757,6 +851,38 @@ mod tests {
         );
         let error = Config::from_map(values).expect_err("endpoint user info is invalid");
         assert_eq!(error.setting, "FERL_OTEL_ENDPOINT");
+    }
+
+    #[test]
+    fn bootstrap_profile_is_database_only_bounded_and_redacted() {
+        let url = "postgres://operator:bootstrap-secret@localhost/ferl";
+        let config = BootstrapConfig::from_map(BTreeMap::from([
+            ("FERL_DATABASE_URL".to_owned(), url.to_owned()),
+            (
+                "FERL_PUBLIC_BASE_URL".to_owned(),
+                "not-an-origin".to_owned(),
+            ),
+            ("FERL_CURSOR_KEY".to_owned(), "not-a-cursor-key".to_owned()),
+            ("FERL_LISTEN_ADDR".to_owned(), "invalid-listener".to_owned()),
+        ]))
+        .expect("bootstrap ignores serving-only settings");
+        let debug = format!("{config:?}");
+        assert!(debug.contains("BootstrapConfig"));
+        assert!(!debug.contains("bootstrap-secret"));
+        assert_eq!(config.connect_timeout, Duration::from_secs(10));
+        assert_eq!(config.lock_timeout, Duration::from_secs(5));
+        assert_eq!(config.total_timeout, Duration::from_secs(30));
+
+        let invalid = BootstrapConfig::from_map(BTreeMap::from([
+            ("FERL_DATABASE_URL".to_owned(), url.to_owned()),
+            (
+                "FERL_BOOTSTRAP_LOCK_TIMEOUT_SECS".to_owned(),
+                "0".to_owned(),
+            ),
+        ]))
+        .expect_err("bootstrap lock wait is positively bounded");
+        assert_eq!(invalid.setting, "FERL_BOOTSTRAP_LOCK_TIMEOUT_SECS");
+        assert!(!invalid.to_string().contains("bootstrap-secret"));
     }
 
     #[test]

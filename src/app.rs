@@ -11,6 +11,7 @@ use crate::{
         pool,
     },
     http,
+    pagination::CursorCodec,
 };
 
 #[derive(Clone)]
@@ -18,6 +19,8 @@ pub struct AppState {
     pub pool: PgPool,
     pub readiness: Arc<ReadinessState>,
     pub acquire_timeout: Duration,
+    pub lock_timeout: Duration,
+    pub(crate) cursor_codec: CursorCodec,
     pub(crate) http_admission: HttpAdmission,
 }
 
@@ -27,6 +30,8 @@ impl AppState {
         Ok(Self::new(
             pool,
             config.database.acquire_timeout,
+            config.database.lock_timeout,
+            CursorCodec::new(config.cursor_key.copy_bytes()),
             config.http_max_in_flight,
             config.http_max_waiting,
         ))
@@ -35,6 +40,8 @@ impl AppState {
     pub fn new(
         pool: PgPool,
         acquire_timeout: Duration,
+        lock_timeout: Duration,
+        cursor_codec: CursorCodec,
         http_max_in_flight: usize,
         http_max_waiting: usize,
     ) -> Self {
@@ -42,6 +49,8 @@ impl AppState {
             pool,
             readiness: Arc::new(ReadinessState::new_accepting()),
             acquire_timeout,
+            lock_timeout,
+            cursor_codec,
             http_admission: HttpAdmission::new(http_max_in_flight, http_max_waiting),
         }
     }

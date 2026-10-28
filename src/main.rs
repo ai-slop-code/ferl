@@ -1,4 +1,4 @@
-use std::{future::IntoFuture, process::ExitCode, time::Instant};
+use std::{future::IntoFuture, io::Write, process::ExitCode, time::Instant};
 
 use clap::{Parser, Subcommand};
 use tokio::{net::TcpListener, time::timeout};
@@ -6,8 +6,9 @@ use tokio_util::sync::CancellationToken;
 
 use ferl_server::{
     BUILD_VERSION,
+    accounts::bootstrap::{self, BootstrapFailure},
     app::{self, AppState},
-    config::{Config, ConfigError, MigrationConfig},
+    config::{BootstrapConfig, Config, ConfigError, MigrationConfig},
     db::migrate::{self, MigrationFailure},
     db::pool::PoolBuildError,
     shutdown,
@@ -36,8 +37,12 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    logging::init_stdout();
     let command = Cli::parse().command.unwrap_or(Command::Serve);
+    if matches!(&command, Command::BootstrapAdmin { .. }) {
+        logging::init_stderr();
+    } else {
+        logging::init_stdout();
+    }
     match command {
         Command::Serve => match Config::from_env() {
             Ok(config) => match serve(config).await {
@@ -56,7 +61,7 @@ async fn main() -> ExitCode {
             }
         },
         Command::Migrate => migrate().await,
-        Command::BootstrapAdmin { username: _ } => unavailable_operator_command("bootstrap-admin"),
+        Command::BootstrapAdmin { username } => bootstrap_admin(&username).await,
     }
 }
 
@@ -94,18 +99,70 @@ fn log_migration_error(error: MigrationFailure) {
     );
 }
 
-fn unavailable_operator_command(command: &'static str) -> ExitCode {
-    eprintln!("{command} is not available in this implementation stage; no database was modified");
-    tracing::warn!(
-        command,
-        category = "operator_command_unavailable",
-        "operator command is not implemented"
-    );
-    ExitCode::from(2)
+async fn bootstrap_admin(username: &str) -> ExitCode {
+    let config = match BootstrapConfig::from_env() {
+        Ok(config) => config,
+        Err(error) => {
+            log_config_error(&error);
+            eprintln!("bootstrap-admin configuration rejected ({})", error.setting);
+            return ExitCode::from(2);
+        }
+    };
+    match bootstrap::run(&config, username).await {
+        Ok(result) => {
+            tracing::info!(
+                target: "ferl_server",
+                category = "bootstrap_committed",
+                "bootstrap transaction committed; writing one-time operator result"
+            );
+            eprintln!("bootstrap-admin committed; writing the one-time operator result to stdout");
+            let mut bytes = match serde_json::to_vec(&result) {
+                Ok(bytes) => bytes,
+                Err(_) => {
+                    tracing::error!(
+                        target: "ferl_server",
+                        category = "bootstrap_result_serialization_failed",
+                        "committed bootstrap result could not be serialized"
+                    );
+                    eprintln!("bootstrap committed but operator result could not be written");
+                    return ExitCode::FAILURE;
+                }
+            };
+            bytes.push(b'\n');
+            let stdout = std::io::stdout();
+            let mut result_stream = stdout.lock();
+            let write_result = result_stream
+                .write_all(&bytes)
+                .and_then(|()| result_stream.flush());
+            if write_result.is_err() {
+                tracing::error!(
+                    target: "ferl_server",
+                    category = "bootstrap_result_output_failed",
+                    "bootstrap committed but the one-time result stream failed"
+                );
+                eprintln!(
+                    "bootstrap committed but operator result output failed; recover through the documented operator procedure"
+                );
+                return ExitCode::FAILURE;
+            }
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            let category = error.safe_category();
+            tracing::error!(category, "bootstrap-admin failed with a sanitized category");
+            eprintln!("bootstrap-admin failed ({category})");
+            if error == BootstrapFailure::InvalidUsername {
+                ExitCode::from(2)
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+    }
 }
 
 fn log_config_error(error: &ConfigError) {
     tracing::error!(
+        target: "ferl_server",
         category = "configuration_invalid",
         setting = error.setting,
         reason = error.reason,

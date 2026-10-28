@@ -22,11 +22,20 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health/live", any(liveness))
         .route("/api/health/ready", any(readiness))
+        .route("/api", any(account_api_dispatch))
+        .route("/{*path}", any(account_api_dispatch))
         .fallback(not_found)
         .with_state(state)
         .layer(DefaultBodyLimit::max(MAX_API_REQUEST_BODY_BYTES))
         .layer(middleware::from_fn_with_state(admission, admit_requests))
         .layer(middleware::from_fn(request_id::envelope))
+}
+
+async fn account_api_dispatch(
+    State(state): State<AppState>,
+    request: Request,
+) -> axum::response::Response {
+    crate::accounts::handlers::dispatch(state, request).await
 }
 
 async fn admit_requests(

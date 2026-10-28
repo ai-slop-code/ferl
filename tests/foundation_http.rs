@@ -23,7 +23,14 @@ fn app_with_unreachable_database() -> axum::Router {
         .max_connections(1)
         .acquire_timeout(Duration::from_millis(100))
         .connect_lazy_with(options);
-    router(AppState::new(pool, Duration::from_millis(100), 16, 16))
+    router(AppState::new(
+        pool,
+        Duration::from_millis(100),
+        Duration::from_millis(100),
+        ferl_server::pagination::CursorCodec::new([0x42; 32]),
+        16,
+        16,
+    ))
 }
 
 #[tokio::test]

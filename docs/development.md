@@ -68,13 +68,15 @@ restarts the harness-owned PostgreSQL container.
 ## Current stage boundaries
 
 `ferl-server` (or no subcommand) runs the HTTP server. `migrate` applies the
-embedded, versioned schema using only database and migration settings;
-`bootstrap-admin --username ...` remains clearly unavailable until Part 04.
-The health endpoints are implemented; other paths return the structured 404
-envelope until their implementation part. Readiness is fail-closed until the
-production composition verifies migration history and required schema objects,
-then performs a bounded database probe. The verifier rechecks for database or
-schema recovery; startup never runs migrations or creates an administrator.
+embedded, versioned schema using only database and migration settings.
+`bootstrap-admin --username ...` uses its own bounded configuration profile,
+requires a migrated compatible schema, and emits one account-creation JSON DTO
+to stdout only after commit; its sanitized diagnostics use stderr. Startup and
+migrations never bootstrap. Part 04 registers the account routes; later
+business routes remain structured 404s until their implementation part.
+Readiness is fail-closed until the production composition verifies migration
+history and required schema objects, then performs a bounded database probe.
+The verifier rechecks for database or schema recovery.
 See [database operations](database.md) for schema versioning, lock keys,
 isolation, and the migration procedure.
 
