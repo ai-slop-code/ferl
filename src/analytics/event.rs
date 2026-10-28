@@ -56,8 +56,47 @@ impl VisitEvent {
         // response-issuance boundary, never later in the background worker.
         let occurred_at = Timestamp::from_database(now)
             .expect("the current UTC time is inside the supported database range");
+        Self::with_timestamp(
+            snapshot,
+            VisitId::new(Uuid::new_v4()),
+            method,
+            client_ip,
+            headers,
+            occurred_at,
+        )
+    }
+
+    /// Deterministic event-time input for in-crate PostgreSQL report fixtures.
+    /// It still enters the ordinary bounded worker and atomic persistence path.
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        snapshot: &ActiveLinkSnapshot,
+        id: Uuid,
+        occurred_at: Timestamp,
+        method: VisitMethod,
+        client_ip: CanonicalIp,
+        headers: &HeaderMap,
+    ) -> Self {
+        Self::with_timestamp(
+            snapshot,
+            VisitId::new(id),
+            method,
+            client_ip,
+            headers,
+            occurred_at,
+        )
+    }
+
+    fn with_timestamp(
+        snapshot: &ActiveLinkSnapshot,
+        id: VisitId,
+        method: VisitMethod,
+        client_ip: CanonicalIp,
+        headers: &HeaderMap,
+        occurred_at: Timestamp,
+    ) -> Self {
         Self {
-            id: VisitId::new(Uuid::new_v4()),
+            id,
             link_id: snapshot.link_id(),
             short_code: snapshot.short_code().clone(),
             redirect_url: snapshot.destination_url().clone(),

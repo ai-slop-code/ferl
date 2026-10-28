@@ -16,7 +16,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 06 Link management | Complete | Verified implementation `264f3f30af32d4e1b8460504f7d0abed62590d6e` and integrated part tip `968b4eaaafae7f21723763c7fc76d2e4890ffa70` from `implementation/06-link-management`, based on `bbe53b3b439d961b88e0a56b877ad3e409411f2e`, are integrated by this explicit no-ff merge. |
 | 07 Redirects and visit ingestion | Complete | Verified implementation `e7d0bb8d39fa22748642a9f9488e21cb505a8598` and integrated part tip `5f9fe68d8d8c171808fb4e3db9c1dddb6306d1c7` are integrated into local `main` by the explicit no-ff Part 07 merge recorded below. |
 | 08 Link and tag discovery | Complete | Verified implementation `1526f60527ac7fd9206fbbdef2b51a11b87d5af8`, integrated branch tip `fd9f4d35bda58b82a81834891d95f318fa3cc913`, based on Part 07 merge `9bcf7c0c021c994e76d0696633fe822f0a49a5e1`, is integrated by the explicit no-ff merge recorded in the Part 08 handoff below. The closing gate passed; only this completion handoff differs in the merge commit. |
-| 09 Analytics reports | Planned (next) | Part 08 is complete and merged; reports are the next implementation increment. |
+| 09 Analytics reports | Verified (awaiting merge) | `implementation/09-analytics-reports` is based on Part 08 merge `12c10c234c492dcbdf554a3cc6e1321d83474361`; the full gate and complete diff review passed. The verified implementation commit and explicit local integration handoff are being recorded below. |
 | 10 Observability and lifecycle | Planned | — |
 | 11 Release verification | Planned | — |
 
@@ -940,6 +940,92 @@ implementation and handoff-only commits.
 - No required Part 08 check remains unexecuted and no blocker remains. Part 08 is
   complete and merged. **Part 09 — Analytics reports** is next; no report query,
   exporter, or release/deployment machinery is claimed here.
+
+## Part 09 execution checklist — 2026-10-28
+
+Status: **Verified (awaiting merge)** on `implementation/09-analytics-reports`, created from
+clean `main` base `12c10c234c492dcbdf554a3cc6e1321d83474361`. The base has the
+expected Part 08 merge parents `9bcf7c0c021c994e76d0696633fe822f0a49a5e1`
+and `fd9f4d35bda58b82a81834891d95f318fa3cc913`; retained Part 08 and earlier
+branches remain present. The configured local identity is
+`LubosBa <30705301+LubosBa@users.noreply.github.com>`. No other worktree or pending Git operation was
+found. Podman is available; the owned PostgreSQL 17.6 harness is accepting
+connections, and `scripts/postgres.sh start` / `ready` both pass. On 2026-10-28,
+`sh scripts/check.sh` completed successfully with Rust/Cargo 1.99.1: 95 library,
+118 integration, and 0 binary tests plus 3 doctests (216 total, none ignored).
+The closing output is
+`$TMPDIR`.
+The complete tracked and untracked diff was reviewed against the Part 08 base;
+`git diff --check main` passed. Rust 1.94 was not run.
+
+Endpoint scope is exactly `GET /api/v1/links/{code}/visits`, `GET
+/api/v1/links/{code}/stats`, and `GET /api/v1/links/{code}/stats/breakdown`;
+unsupported methods, including HEAD, are explicit bodyless 405 responses with
+`Allow: GET`. No Part 10 or Part 11 work is in scope.
+
+Concrete prerequisites observed before implementation:
+
+- `VisitRecord.occurred_at` currently decodes directly as `DateTime<Utc>`, unlike
+  `LinkRecord` timestamps, which use `DatabaseTimestamp`. The report path must
+  use checked PostgreSQL-microsecond decoding and separately enforce the narrower
+  RFC 3339 wire range; infinity, out-of-range finite values, and formatting need
+  regression evidence.
+- The locked transport stack is Axum 0.8.9 / Hyper 1.12.0. Hyper's HTTP/1
+  `DEFAULT_MAX_BUFFER_SIZE` is `8192 + 4096 * 100` (417,792 bytes), including
+  the request line and headers, with 100 headers by default. The existing cursor
+  codec caps tokens at 87,387 bytes. No transport change is proposed unless an
+  actual production TCP request-target test disproves interoperability.
+- `/api` dispatch currently wraps account/API dispatch in a fixed 45-second
+  timeout; discovery has a separate link-operation timeout, and analytics workers
+  have their own persistence timeout. Reports need an explicit configured total
+  deadline and must be dispatched outside the unrelated 45-second wrapper so a
+  report timeout cannot be overridden or mislabeled.
+- Existing `Principal` credentials have private fields, but a UUID alone is not
+  authority. Report service entry points will accept `&Principal`, perform a
+  precedence-preserving read-only authority preflight, then revalidate the
+  authenticated credential and object authority in the report snapshot.
+- The current schema is v2. It already has
+  `visits_link_occurred_id_idx (link_id, occurred_at DESC, id DESC)`, and its
+  links/code/credential indexes are verified by the production schema checker.
+  No new index or migration is assumed; 8,192-byte header grouping values will
+  not receive B-tree keys.
+
+Proposed per-response policy: use the primary pool and one explicitly held
+`REPEATABLE READ READ ONLY` transaction/connection for final credential/object
+revalidation and report SQL. A small preflight read establishes object-authority
+precedence before query decoding; it returns no analytics data and is repeated
+inside the final snapshot. No link row lock is taken. A deletion committed before
+the final snapshot yields concealed 404; a deletion after that snapshot may let
+the in-flight response finish from its old consistent snapshot, while every later
+request reauthenticates and reauthorizes. Lifetime counter and matching visit rows
+are read from the same snapshot. Connection ownership and cancellation remain
+bounded; composition must pass with `FERL_DB_POOL_MAX=1`.
+
+Initial query/transport direction: raw pages use the existing visit ordering index
+and `(occurred_at, id) < boundary`; summary counts use the persisted counter plus
+interval count within the same snapshot; all eight breakdowns use static SQL
+expressions, complete aggregation before null-aware C-collated keyset pagination,
+and canonical rendered IP strings. The legal encoded cursor fits below the
+observed Hyper buffer, but valid maximum-size header capture, escaped/UTF-8 cursor
+continuation over production TCP, and A/B/replacement-C use remain mandatory
+evidence.
+
+Execution checklist:
+
+1. [x] Fresh authentication, object authority, and strict query precedence.
+2. [x] Consistent per-response snapshot, timeout composition, bounded single
+   connection, and `FERL_DB_POOL_MAX=1` composition.
+3. [x] Checked raw visit DTOs, historical destinations, and exact keyset pages.
+4. [x] Lifetime/interval summaries and worker/counter snapshot correctness.
+5. [x] All eight breakdown dimensions, null/string boundaries, and complete
+   group counts independent of page size.
+6. [x] Maximum legal cursor over actual TCP, across instances and replacement.
+7. [x] Production query-plan evidence; v2 migration/compatibility decision.
+8. [x] Real HTTP/PostgreSQL/concurrency/process/privacy/fault/OpenAPI evidence.
+9. [x] Full gate and complete tracked/untracked diff review; whitespace/error
+   checks pass.
+10. [ ] Verified implementation commit, handoff-only follow-up, explicit local
+    no-ff merge, and clean final Git/handoff state.
 
 ## Per-part handoff template
 

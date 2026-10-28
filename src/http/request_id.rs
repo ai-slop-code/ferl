@@ -151,11 +151,22 @@ fn safe_route_template(path: &str) -> &'static str {
         _ if account_item_path(path) => "/api/v1/admin/accounts/{id}",
         _ if account_key_path(path) => "/api/v1/admin/accounts/{id}/api-key",
         _ if link_token_path(path) => "/api/v1/links/{code}/management-token",
+        _ if link_report_path(path, "visits") => "/api/v1/links/{code}/visits",
+        _ if link_report_path(path, "stats") => "/api/v1/links/{code}/stats",
+        _ if link_report_path(path, "stats/breakdown") => "/api/v1/links/{code}/stats/breakdown",
         _ if link_item_path(path) => "/api/v1/links/{code}",
         _ if path.starts_with("/api/") => "/api/{unmatched}",
         _ if one_public_segment(path) => "/{short_code}",
         _ => "/{unmatched}",
     }
+}
+
+fn link_report_path(path: &str, suffix: &str) -> bool {
+    path.strip_prefix("/api/v1/links/")
+        .and_then(|tail| tail.split_once('/'))
+        .is_some_and(|(code, operation)| {
+            !code.is_empty() && !code.contains('/') && operation == suffix
+        })
 }
 
 fn one_public_segment(path: &str) -> bool {

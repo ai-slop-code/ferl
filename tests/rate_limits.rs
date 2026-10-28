@@ -246,7 +246,7 @@ async fn rotation_role_changes_and_username_reuse_keep_correct_bucket_identity()
 }
 
 #[tokio::test]
-async fn health_account_and_unimplemented_routes_do_not_charge() {
+async fn health_account_and_report_routes_do_not_charge() {
     let db = migrated_database().await;
     db.verify(|db| {
         Box::pin(async move {
@@ -261,7 +261,7 @@ async fn health_account_and_unimplemented_routes_do_not_charge() {
                 (http::Method::GET, "/api/v1/links", 200),
                 (http::Method::GET, "/api/v1/tags", 200),
                 (http::Method::POST, "/api/v1/me/api-key", 200),
-                (http::Method::POST, "/api/v1/links/unknown/visits", 404),
+                (http::Method::POST, "/api/v1/links/unknown/visits", 405),
                 (http::Method::GET, "/api/v1/unknown", 404),
                 (http::Method::HEAD, "/api/v1/links", 405),
             ] {
@@ -271,6 +271,9 @@ async fn health_account_and_unimplemented_routes_do_not_charge() {
                 )
                 .await;
                 assert_eq!(response.status().as_u16(), status);
+                if path == "/api/v1/links/unknown/visits" {
+                    assert_eq!(response.headers()["allow"], "GET");
+                }
                 if method == http::Method::HEAD {
                     assert!(account_support::bytes(response).await.is_empty());
                 }

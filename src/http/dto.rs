@@ -577,9 +577,13 @@ impl VisitDto {
             "unknown" => DeviceClass::Unknown,
             _ => return Err(RecordConversionError("stored device class is invalid")),
         };
-        if record.browser.is_empty() || record.os.is_empty() {
+        if record.browser.is_empty()
+            || record.os.is_empty()
+            || record.browser.len() > 8_192
+            || record.os.len() > 8_192
+        {
             return Err(RecordConversionError(
-                "stored browser or OS family is empty",
+                "stored browser or OS family is invalid",
             ));
         }
         for header in [&record.referrer, &record.user_agent].into_iter().flatten() {
@@ -594,8 +598,14 @@ impl VisitDto {
             link_id: LinkId::new(record.link_id),
             short_code: short_code.as_str().to_owned(),
             redirect_url: redirect_url.as_str().to_owned(),
-            occurred_at: Timestamp::from_database(record.occurred_at)
-                .map_err(|_| RecordConversionError("stored visit time is invalid"))?,
+            occurred_at: Timestamp::from_unix_micros(
+                record
+                    .occurred_at
+                    .postgres_micros()
+                    .checked_add(946_684_800_000_000)
+                    .ok_or(RecordConversionError("stored visit time is invalid"))?,
+            )
+            .map_err(|_| RecordConversionError("stored visit time is invalid"))?,
             method,
             client_ip: canonical_host_ip(&record.client_ip)
                 .map_err(|_| RecordConversionError("stored client IP is not a host address"))?,

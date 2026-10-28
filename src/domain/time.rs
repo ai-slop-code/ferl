@@ -1,6 +1,6 @@
 use std::{fmt, str::FromStr};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use serde::{Serialize, Serializer};
 
 use super::{ValidationError, invalid};
@@ -25,6 +25,7 @@ impl Timestamp {
         if utc.timestamp_subsec_nanos() >= 1_000_000_000 {
             return Err(invalid("leap-second timestamps are unsupported"));
         }
+        ensure_wire_year(utc.year())?;
         let micros = utc.timestamp_micros();
         DateTime::from_timestamp_micros(micros)
             .ok_or(invalid("timestamp is outside the supported range"))?;
@@ -32,15 +33,14 @@ impl Timestamp {
     }
 
     pub fn from_database(value: DateTime<Utc>) -> Result<Self, ValidationError> {
-        let micros = value.timestamp_micros();
-        DateTime::from_timestamp_micros(micros)
-            .ok_or(invalid("stored timestamp is outside the supported range"))?;
-        Ok(Self(micros))
+        Self::from_unix_micros(value.timestamp_micros())
+            .map_err(|_| invalid("stored timestamp is outside the supported range"))
     }
 
     pub fn from_unix_micros(value: i64) -> Result<Self, ValidationError> {
-        DateTime::from_timestamp_micros(value)
+        let timestamp = DateTime::from_timestamp_micros(value)
             .ok_or(invalid("timestamp is outside the supported range"))?;
+        ensure_wire_year(timestamp.year())?;
         Ok(Self(value))
     }
 
@@ -54,6 +54,14 @@ impl Timestamp {
 
     pub fn to_wire(self) -> String {
         self.as_utc().to_rfc3339_opts(SecondsFormat::Micros, true)
+    }
+}
+
+fn ensure_wire_year(year: i32) -> Result<(), ValidationError> {
+    if (0..=9_999).contains(&year) {
+        Ok(())
+    } else {
+        Err(invalid("timestamp is outside the RFC 3339 wire range"))
     }
 }
 
