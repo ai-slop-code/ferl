@@ -44,7 +44,7 @@ mkdir -p "$OUT"
 podman run --rm --pull=never --platform "$PLATFORM" \
     --memory 1536m --cpus 3 --pids-limit 512 \
     --volume "$ROOT:/workspace:ro" \
-    --volume "$CARGO_REGISTRY:/usr/local/cargo/registry:ro" \
+    --volume "$CARGO_REGISTRY:/usr/local/cargo/registry:rw" \
     --volume "$OUT:/out:rw" \
     --workdir /workspace \
     --env CARGO_HOME=/usr/local/cargo \

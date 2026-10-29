@@ -204,6 +204,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         "ready",
                     )
                     .await;
+                    let probe_proxy = SocketAddr::from(([127, 0, 0, 1], probe_proxy_port));
                     let proxy = SocketAddr::from(([127, 0, 0, 1], proxy_port));
                     let nginx_container = format!("ferl-part11-proxy-{probe_proxy_id}");
                     let upstream_probe = podman_server::command_output(
@@ -234,17 +235,17 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     .unwrap();
                     assert_eq!(direct_api.status, 201, "packaged API works directly over its published port");
 
-                    let root = send(proxy, "GET", "/", None, "").await.unwrap();
+                    let root = send(probe_proxy, "GET", "/", None, "").await.unwrap();
                     assert_eq!(root.status, 200);
                     assert!(String::from_utf8_lossy(&root.body).contains("Separate static fixture"));
-                    let asset = send(proxy, "GET", "/assets/example.js", None, "")
+                    let asset = send(probe_proxy, "GET", "/assets/example.js", None, "")
                         .await
                         .unwrap();
                     assert_eq!(asset.status, 200);
                     assert!(String::from_utf8_lossy(&asset.body).contains("static asset served outside"));
 
                     let observed = send_with_headers(
-                        proxy,
+                        probe_proxy,
                         "GET",
                         "/proxy-observe",
                         None,

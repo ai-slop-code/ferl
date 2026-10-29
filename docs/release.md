@@ -77,9 +77,9 @@ owner-authorized local intercepting-registry environment, the fixture scripts
 may use `--tls-verify=false` only for fully qualified, digest-pinned image pulls;
 this does not change runtime TLS. `scripts/package-release.sh` checks clean Git
 provenance before the build; the builder runs `cargo fetch --locked`, then uses
-the reusable Cargo registry
-cache read-only and an isolated Cargo target under ignored `target/`. A fresh
-target directory therefore does not imply a cold registry. The script refuses to
+the reusable Cargo registry cache (writable so Cargo can unpack locked sources)
+and an isolated Cargo target under ignored `target/`. A fresh target directory
+therefore does not imply a cold registry. The script refuses to
 silently substitute another builder digest. Set `FERL_RELEASE_OUTPUT_DIR` to
 choose another local output directory. Verify both the archive and its internal
 inventory:
