@@ -318,11 +318,26 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     )
                     .await;
                     let backend_ip = container_ip(&server_b).await.to_string();
+                    let backend_health = podman_server::command_output(
+                        "podman",
+                        &[
+                            "exec",
+                            &nginx_container,
+                            "wget",
+                            "-qO-",
+                            &format!("http://{backend_ip}:8080/api/health/ready"),
+                        ],
+                        Duration::from_secs(10),
+                    )
+                    .await;
+                    assert!(backend_health.status.success(),
+                        "the retained NGINX container reaches replacement backend IP {backend_ip}: {}",
+                        String::from_utf8_lossy(&backend_health.stderr));
                     proxy_action(
                         &proxy_id,
                         proxy_port,
                         "8080",
-                        "ferl-backend",
+                        &backend_ip,
                         Some(&network_for_test),
                         &proxy_runtime,
                         "reload",
@@ -332,6 +347,10 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         "the actual proxy instance observed before trust remains alive for assertions");
                     assert_eq!(container_ip(&nginx_container).await, nginx_ip,
                         "the forwarding proxy's peer address cannot pass by replacement-address reuse");
+                    let proxy_ready = send(proxy, "GET", "/api/health/ready", None, "").await.unwrap();
+                    assert_eq!(proxy_ready.status, 200,
+                        "reloaded retained NGINX forwards to the replacement backend before business assertions");
+                    assert_headers(&proxy_ready);
 
                     for (code, destination) in [
                         ("assets", "https://proxy-assets.example/path"),
