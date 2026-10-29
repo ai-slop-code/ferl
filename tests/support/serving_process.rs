@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, process::Stdio, time::Duration};
 
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{TcpListener, TcpSocket, TcpStream},
     process::{Child, Command},
     task::JoinHandle,
     time::{sleep, timeout},
@@ -70,6 +70,44 @@ impl ServingProcess {
         Self::start_binary(binary, database_url, cursor_key, extra, false).await
     }
 
+    /// Start a real production executable on all host interfaces so a local
+    /// Podman proxy can connect to it. Readiness probes still use loopback.
+    #[allow(dead_code)]
+    pub async fn start_with_host_listener(
+        database_url: &str,
+        cursor_key: &str,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("reserve a local process-test port");
+        let loopback = listener.local_addr().unwrap();
+        drop(listener);
+        Self::start_with_host_listener_on_port(database_url, cursor_key, loopback.port(), extra)
+            .await
+    }
+
+    #[allow(dead_code)]
+    pub async fn start_with_host_listener_on_port(
+        database_url: &str,
+        cursor_key: &str,
+        port: u16,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        let loopback = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let bind = std::net::SocketAddr::new(std::net::IpAddr::from([0, 0, 0, 0]), port);
+        Self::start_binary_at(
+            env!("CARGO_BIN_EXE_ferl-server"),
+            database_url,
+            cursor_key,
+            extra,
+            true,
+            bind,
+            loopback,
+        )
+        .await
+    }
+
     async fn start_binary(
         binary: &str,
         database_url: &str,
@@ -82,13 +120,34 @@ impl ServingProcess {
             .expect("reserve a local process-test port");
         let address = listener.local_addr().unwrap();
         drop(listener);
+        Self::start_binary_at(
+            binary,
+            database_url,
+            cursor_key,
+            extra,
+            wait_for_ready,
+            address,
+            address,
+        )
+        .await
+    }
+
+    async fn start_binary_at(
+        binary: &str,
+        database_url: &str,
+        cursor_key: &str,
+        extra: &[(&str, &str)],
+        wait_for_ready: bool,
+        bind_address: std::net::SocketAddr,
+        probe_address: std::net::SocketAddr,
+    ) -> Self {
         let mut child = Command::new(binary);
         child
             .env_clear()
             .env("FERL_DATABASE_URL", database_url)
             .env("FERL_PUBLIC_BASE_URL", "https://short.example.test")
             .env("FERL_CURSOR_KEY", cursor_key)
-            .env("FERL_LISTEN_ADDR", address.to_string())
+            .env("FERL_LISTEN_ADDR", bind_address.to_string())
             .env("FERL_DB_POOL_MAX", "4")
             .env("FERL_DB_ACQUIRE_TIMEOUT_SECS", "2")
             .env("FERL_DB_LOCK_TIMEOUT_SECS", "10")
@@ -115,7 +174,7 @@ impl ServingProcess {
             .map(|pipe| tokio::spawn(capture_output(pipe, Arc::clone(&stderr_shared))));
         let mut process = Self {
             child,
-            address,
+            address: probe_address,
             signalled_at: None,
             stdout,
             stderr,
@@ -355,6 +414,53 @@ pub async fn send_with_headers(
     })
     .await
     .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "HTTP test deadline exceeded"))?
+}
+
+/// Send real HTTP over TCP with an explicitly bound client address. Release
+/// proxy tests use a second loopback source so an untrusted direct peer remains
+/// distinguishable from the container-observed proxy peer.
+#[allow(dead_code)]
+pub async fn send_from(
+    address: std::net::SocketAddr,
+    local_ip: std::net::IpAddr,
+    method: &str,
+    path: &str,
+    credential: Option<&str>,
+    body: &str,
+    extra_headers: &[(&str, &str)],
+) -> std::io::Result<HttpResult> {
+    timeout(Duration::from_secs(8), async {
+        let socket = match local_ip {
+            std::net::IpAddr::V4(_) => TcpSocket::new_v4()?,
+            std::net::IpAddr::V6(_) => TcpSocket::new_v6()?,
+        };
+        socket.bind(std::net::SocketAddr::new(local_ip, 0))?;
+        let mut stream = socket.connect(address).await?;
+        let mut request = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\nContent-Length: {}\r\n",
+            body.len()
+        );
+        if let Some(credential) = credential {
+            request.push_str(&format!("Authorization: Bearer {credential}\r\n"));
+        }
+        if !body.is_empty() {
+            request.push_str("Content-Type: application/json\r\n");
+        }
+        for (name, value) in extra_headers {
+            request.push_str(name);
+            request.push_str(": ");
+            request.push_str(value);
+            request.push_str("\r\n");
+        }
+        request.push_str("\r\n");
+        request.push_str(body);
+        stream.write_all(request.as_bytes()).await?;
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).await?;
+        parse_response(&bytes)
+    })
+    .await
+    .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "bound-peer HTTP deadline exceeded"))?
 }
 
 /// Send an actual HTTP/1.1 chunked body over TCP, with no Content-Length. The

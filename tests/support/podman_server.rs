@@ -1,0 +1,418 @@
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener},
+    path::{Path, PathBuf},
+    process::Output,
+    time::Duration,
+};
+
+use tokio::{process::Command, time::timeout};
+use url::Url;
+
+use super::serving_process::send;
+
+pub const IMAGE: &str = "docker.io/library/rust@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8";
+pub const POSTGRES_CONTAINER: &str = "ferl-stage01-postgres";
+
+pub struct ContainerServer {
+    pub name: String,
+    pub address: SocketAddr,
+}
+
+pub struct ExitedServer {
+    pub logs: String,
+    pub exit_code: i32,
+    pub shutdown_elapsed: Duration,
+    pub oom_killed: bool,
+}
+
+pub async fn container_database_url(host_schema_url: &str) -> String {
+    let mut url = Url::parse(host_schema_url).expect("isolated PostgreSQL URL parses");
+    url.set_host(Some("ferl-postgres"))
+        .expect("custom network resolves the owned database alias");
+    url.set_port(Some(5432))
+        .expect("container PostgreSQL uses its internal port");
+    url.to_string()
+}
+
+pub async fn create_network(run_id: &str) -> String {
+    let network = format!("ferl-part11-net-{run_id}");
+    let created = command_output(
+        "podman",
+        &[
+            "network",
+            "create",
+            "--label",
+            "io.ferl.harness=part11-network",
+            &network,
+        ],
+        Duration::from_secs(30),
+    )
+    .await;
+    assert!(created.status.success(), "owned Podman network is created");
+    let connected = command_output(
+        "podman",
+        &[
+            "network",
+            "connect",
+            "--alias",
+            "ferl-postgres",
+            &network,
+            POSTGRES_CONTAINER,
+        ],
+        Duration::from_secs(30),
+    )
+    .await;
+    assert!(
+        connected.status.success(),
+        "only the verified PostgreSQL harness joins the isolated test network"
+    );
+    network
+}
+
+pub async fn remove_network(network: &str) -> Output {
+    let inspect = command_output(
+        "podman",
+        &[
+            "network",
+            "inspect",
+            "--format",
+            "{{ index .Labels \"io.ferl.harness\" }}",
+            network,
+        ],
+        Duration::from_secs(20),
+    )
+    .await;
+    assert!(inspect.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&inspect.stdout).trim(),
+        "part11-network"
+    );
+    let disconnected = command_output(
+        "podman",
+        &["network", "disconnect", network, POSTGRES_CONTAINER],
+        Duration::from_secs(20),
+    )
+    .await;
+    assert!(disconnected.status.success());
+    command_output(
+        "podman",
+        &["network", "rm", network],
+        Duration::from_secs(20),
+    )
+    .await
+}
+
+pub async fn migrate(binary: &Path, network: &str, database_url: &str) -> Output {
+    one_shot(
+        binary,
+        network,
+        database_url,
+        &[],
+        "migrate",
+        Duration::from_secs(120),
+    )
+    .await
+}
+
+pub async fn bootstrap(binary: &Path, network: &str, database_url: &str, username: &str) -> Output {
+    one_shot(
+        binary,
+        network,
+        database_url,
+        &[],
+        &format!("bootstrap-admin --username {username}"),
+        Duration::from_secs(60),
+    )
+    .await
+}
+
+async fn one_shot(
+    binary: &Path,
+    network: &str,
+    database_url: &str,
+    environment: &[(&str, &str)],
+    command: &str,
+    limit: Duration,
+) -> Output {
+    let binary = binary
+        .canonicalize()
+        .expect("packaged ferl-server executable resolves");
+    let mut child = Command::new("podman");
+    child
+        .args([
+            "run",
+            "--rm",
+            "--pull=never",
+            "--network",
+            network,
+            "--volume",
+        ])
+        .arg(format!("{}:/opt/ferl-server:ro", binary.display()))
+        .args([
+            "--user",
+            "65532:65532",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,nodev,size=16m",
+            "--env",
+            &format!("FERL_DATABASE_URL={database_url}"),
+        ]);
+    for (name, value) in environment {
+        child.arg("--env").arg(format!("{name}={value}"));
+    }
+    child
+        .args(["--entrypoint", "/opt/ferl-server", IMAGE])
+        .args(command.split_whitespace())
+        .kill_on_drop(true);
+    timeout(limit, child.output())
+        .await
+        .unwrap_or_else(|_| panic!("packaged ferl-server {command} exceeded its deadline"))
+        .expect("Podman executes packaged ferl-server command")
+}
+
+impl ContainerServer {
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start(
+        binary: &Path,
+        name: &str,
+        network: &str,
+        database_url: &str,
+        cursor_key: &str,
+        trusted_proxies: &str,
+        host_port: u16,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        let binary = binary
+            .canonicalize()
+            .expect("packaged ferl-server executable resolves");
+        let name = name.to_owned();
+        let host_port_text = host_port.to_string();
+        let mut child = Command::new("podman");
+        child
+            .args([
+                "run",
+                "--detach",
+                "--pull=never",
+                "--name",
+                &name,
+                "--label",
+                "io.ferl.harness=part11-server",
+                "--network",
+                network,
+                "--network-alias",
+                "ferl-backend",
+                "--publish",
+            ])
+            .arg(format!("127.0.0.1:{host_port_text}:8080"))
+            .args(["--volume"])
+            .arg(format!("{}:/opt/ferl-server:ro", binary.display()))
+            .args([
+                "--user",
+                "65532:65532",
+                "--read-only",
+                "--cap-drop=ALL",
+                "--security-opt=no-new-privileges",
+                "--tmpfs",
+                "/tmp:rw,noexec,nosuid,nodev,size=16m",
+                "--env",
+                &format!("FERL_DATABASE_URL={database_url}"),
+                "--env",
+                "FERL_PUBLIC_BASE_URL=https://short.example.test",
+                "--env",
+                &format!("FERL_CURSOR_KEY={cursor_key}"),
+                "--env",
+                "FERL_LISTEN_ADDR=0.0.0.0:8080",
+                "--env",
+                &format!("FERL_TRUSTED_PROXIES={trusted_proxies}"),
+                "--env",
+                "FERL_DB_POOL_MAX=4",
+                "--env",
+                "FERL_DB_ACQUIRE_TIMEOUT_SECS=2",
+                "--env",
+                "FERL_DB_LOCK_TIMEOUT_SECS=5",
+                "--env",
+                "FERL_HTTP_MAX_IN_FLIGHT=64",
+                "--env",
+                "FERL_HTTP_MAX_WAITING=32",
+                "--env",
+                "FERL_ANONYMOUS_CREATION=true",
+                "--env",
+                "FERL_ANONYMOUS_CREATE_LIMIT=100",
+                "--env",
+                "FERL_ACCOUNT_CREATE_LIMIT=100",
+                "--env",
+                "FERL_READINESS_WITHDRAWAL_SECS=1",
+                "--env",
+                "FERL_HTTP_DRAIN_TIMEOUT_SECS=5",
+                "--env",
+                "FERL_SHUTDOWN_TIMEOUT_SECS=20",
+            ]);
+        for (key, value) in extra {
+            child.arg("--env").arg(format!("{key}={value}"));
+        }
+        child
+            .args(["--entrypoint", "/opt/ferl-server", IMAGE, "serve"])
+            .kill_on_drop(true);
+        let output = timeout(Duration::from_secs(30), child.output())
+            .await
+            .expect("Podman server container starts before deadline")
+            .expect("Podman run starts");
+        assert!(
+            output.status.success(),
+            "packaged server container starts: {}",
+            safe_output(&output)
+        );
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), host_port);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = container_exit_code(&name).await {
+                panic!("packaged server exited before readiness with status {status}");
+            }
+            if matches!(
+                timeout(
+                    Duration::from_secs(1),
+                    send(address, "GET", "/api/health/ready", None, ""),
+                )
+                .await,
+                Ok(Ok(response)) if response.status == 200
+            ) {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "packaged server container does not become ready before deadline"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let uid = command_output(
+            "podman",
+            &["exec", &name, "id", "-u"],
+            Duration::from_secs(10),
+        )
+        .await;
+        assert!(uid.status.success());
+        assert_eq!(String::from_utf8_lossy(&uid.stdout).trim(), "65532");
+        Self { name, address }
+    }
+
+    pub async fn stop_naturally(self) -> ExitedServer {
+        let started = tokio::time::Instant::now();
+        let signal = command_output(
+            "podman",
+            &["kill", "--signal", "TERM", &self.name],
+            Duration::from_secs(10),
+        )
+        .await;
+        assert!(
+            signal.status.success(),
+            "SIGTERM reaches the packaged server process"
+        );
+        let waited = command_output("podman", &["wait", &self.name], Duration::from_secs(25)).await;
+        assert!(
+            waited.status.success(),
+            "packaged server exits before forced cleanup"
+        );
+        let inspect = command_output(
+            "podman",
+            &[
+                "inspect",
+                "--format",
+                "{{.State.ExitCode}}|{{.State.OOMKilled}}",
+                &self.name,
+            ],
+            Duration::from_secs(10),
+        )
+        .await;
+        assert!(inspect.status.success());
+        let result = String::from_utf8_lossy(&inspect.stdout);
+        let (exit, oom) = result
+            .trim()
+            .split_once('|')
+            .expect("inspect returns exit and OOM state");
+        let logs = command_output("podman", &["logs", &self.name], Duration::from_secs(10)).await;
+        assert!(logs.status.success());
+        let cleanup = command_output("podman", &["rm", &self.name], Duration::from_secs(10)).await;
+        assert!(
+            cleanup.status.success(),
+            "naturally exited harness server is removed"
+        );
+        ExitedServer {
+            logs: safe_output(&logs),
+            exit_code: exit.parse().expect("container exit code is numeric"),
+            shutdown_elapsed: started.elapsed(),
+            oom_killed: oom == "true",
+        }
+    }
+}
+
+pub async fn cleanup_server(name: &str) -> Output {
+    let inspect = command_output(
+        "podman",
+        &[
+            "inspect",
+            "--format",
+            "{{ index .Config.Labels \"io.ferl.harness\" }}",
+            name,
+        ],
+        Duration::from_secs(10),
+    )
+    .await;
+    if !inspect.status.success() {
+        return inspect;
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&inspect.stdout).trim(),
+        "part11-server"
+    );
+    command_output("podman", &["rm", "--force", name], Duration::from_secs(15)).await
+}
+
+pub async fn command_output(program: &str, arguments: &[&str], limit: Duration) -> Output {
+    let mut command = Command::new(program);
+    command.args(arguments).kill_on_drop(true);
+    timeout(limit, command.output())
+        .await
+        .unwrap_or_else(|_| panic!("{program} command exceeds its bound: {arguments:?}"))
+        .unwrap_or_else(|error| panic!("{program} command cannot start: {error}"))
+}
+
+async fn container_exit_code(name: &str) -> Option<String> {
+    let inspect = command_output(
+        "podman",
+        &[
+            "inspect",
+            "--format",
+            "{{.State.Running}}|{{.State.ExitCode}}",
+            name,
+        ],
+        Duration::from_secs(10),
+    )
+    .await;
+    if !inspect.status.success() {
+        return None;
+    }
+    let result = String::from_utf8_lossy(&inspect.stdout);
+    let (running, exit_code) = result.trim().split_once('|')?;
+    (running == "false").then(|| exit_code.to_owned())
+}
+
+fn safe_output(output: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+pub fn host_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("reserve a local published port");
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    port
+}
+
+pub fn absolute(path: &Path) -> PathBuf {
+    path.canonicalize().expect("packaged release path resolves")
+}

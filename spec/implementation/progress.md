@@ -1,6 +1,6 @@
 # Implementation progress and agent handoff
 
-Handoff summary: Parts 01–10 are complete and merged into local `main`. Part 11 — Release verification is next and remains separate.
+Handoff summary: Parts 01–10 are complete and merged into local `main`. Part 11 — Release verification is in progress on `implementation/11-release-verification` from verified main baseline `71d77b3f3838081add13d46cdefe0a91cdd70efd`.
 
 Status lifecycle: Planned → In progress → Verified (awaiting merge) → Complete. Use Blocked when a required implementation, verification or Git integration step cannot finish. Complete requires a committed merge into local `main`, as defined in [git-workflow.md](git-workflow.md).
 
@@ -18,7 +18,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 08 Link and tag discovery | Complete | Verified implementation `1526f60527ac7fd9206fbbdef2b51a11b87d5af8`, integrated branch tip `fd9f4d35bda58b82a81834891d95f318fa3cc913`, based on Part 07 merge `9bcf7c0c021c994e76d0696633fe822f0a49a5e1`, is integrated by the explicit no-ff merge recorded in the Part 08 handoff below. The closing gate passed; only this completion handoff differs in the merge commit. |
 | 09 Analytics reports | Complete | Verified implementation `178e297` and handoff-only part tip `f08b805` from `implementation/09-analytics-reports`, based on Part 08 merge `12c10c234c492dcbdf554a3cc6e1321d83474361`, are integrated by the explicit no-ff merge recorded below. |
 | 10 Observability and lifecycle | Complete | Verified implementation `1d84f0a` and handoff-only branch tip `3f21bb4` are integrated from `implementation/10-observability-and-lifecycle` by the explicit no-ff merge from base `6153b768`; see the Part 10 handoff below. |
-| 11 Release verification | Planned | — |
+| 11 Release verification | In progress | Branch `implementation/11-release-verification`, base `71d77b3f3838081add13d46cdefe0a91cdd70efd`; full independent-process, OpenAPI, proxy, package, and acceptance audit underway. |
 
 ## Recorded decisions
 

@@ -314,7 +314,9 @@ observes the old binary's sanitized newer-schema incompatibility/unready state,
 and then verifies a new v2 server is ready and serves the list endpoint. The
 temporary worktree and target are removed by bounded cleanup. This is executable
 evidence for the stop/migrate/deploy order above, not a claim of mixed-version
-rolling compatibility.
+rolling compatibility. The isolated cold build deadline is 600 seconds; CI
+must fetch complete repository history because the retained commit is not
+available from a shallow checkout.
 
 The independent-process Part 08 test also stops/restarts only the owned PostgreSQL
 container while `IsolatedTestDatabase` holds the shared harness lock; v2 schema,

@@ -13,7 +13,7 @@ if [ -z "${FERL_COLLECTOR_PORT:-}" ]; then
     FERL_COLLECTOR_PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 fi
 export FERL_COLLECTOR_RUN_ID FERL_COLLECTOR_PORT
-trap 'sh scripts/collector.sh stop >/dev/null 2>&1 || true' EXIT HUP INT TERM
+trap 'sh scripts/collector.sh cleanup >/dev/null 2>&1 || true' EXIT HUP INT TERM
 sh scripts/collector.sh start
 sh scripts/collector.sh ready
 export FERL_TEST_OTEL_ENDPOINT="http://127.0.0.1:$FERL_COLLECTOR_PORT"
@@ -25,13 +25,17 @@ export FERL_TEST_POSTGRES_CONTAINER=ferl-stage01-postgres
 export FERL_TEST_POSTGRES_PORT="$PORT"
 
 cargo fmt --all -- --check
-cargo check --workspace --all-targets --all-features
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo check --locked --workspace --all-targets --all-features
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+# Release/proxy suites run the packaged Linux executable, never a stale target/
+# binary. The pinned builder and NGINX images must be present before the gate.
+sh scripts/proxy.sh pull
+. scripts/prepare-release-package.sh
 # Child workers execute the rate_limit_process test binary, never a production
 # CLI test command. Clear only worker dispatch inputs for this parent gate.
 unset FERL_RATE_TEST_WORKER_URL FERL_RATE_TEST_CREDENTIAL
 # Includes IP/allowance, link management/discovery/reports, migrations/query
 # plans, redirect/visit ingestion, concurrency, fault/privacy, OpenAPI, and
 # independent production-process suites.
-cargo test --workspace --all-targets
-cargo test --doc
+cargo test --locked --workspace --all-targets
+cargo test --locked --doc
