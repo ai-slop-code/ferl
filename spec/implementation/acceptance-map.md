@@ -24,7 +24,7 @@ Parts are linked from [the implementation index](README.md).
 | 16 | Default per-IP/account/admin rolling thresholds/Retry-After | 05, 06, 11 | Service and default public route: `tests/rate_limits.rs::{defaults_independent_subjects_and_single_connection_composition,reduced_startup_limits_and_independent_statement_bounds_are_composed}`, `tests/creation_order.rs::default_public_create_limits_charge_five_anonymous_and_sixty_account_attempts`, and `src/rate_limit/tests.rs::exact_microsecond_window_rounding_equal_times_and_reduced_limits`. A/B public HTTP combined limits and Retry-After are `tests/multi_instance_process.rs::production_http_allowances_are_one_durable_account_and_peer_budget_across_a_b_c`. |
 | 17 | Eligible invalid attempts charged; other rejections/rollback | 05, 06 | `tests/rate_limits.rs::eligibility_and_body_order_preserve_independently_committed_charges` and actual endpoint `tests/creation_order.rs::every_eligible_invalid_attempt_is_charged_after_prepare`; independent production HTTP attempts, malformed body, custom-code conflict, exact durable charges, and no charge after 429 are verified across A/B in `tests/multi_instance_process.rs::production_http_allowances_are_one_durable_account_and_peer_budget_across_a_b_c`. |
 | 18 | Concurrent allowance, exact expiry, rotation/restart | 05, 11 | Database boundaries: `tests/rate_limit_concurrency.rs::concurrent_first_use_shared_guards_and_unique_buckets_admit_exact_limit`, `tests/rate_limits.rs::rotation_role_changes_and_username_reuse_keep_correct_bucket_identity`, and `src/rate_limit/tests.rs::{exact_microsecond_window_rounding_equal_times_and_reduced_limits,accounting_clock_handles_postgres_range_without_chrono_panics}`. Test-worker process proof: `tests/rate_limit_process.rs::independent_processes_share_allowance_and_restarts_preserve_durable_charges`. Public production createLink HTTP split across A/B, exact combined account/IP charges, Retry-After, add/restart C, key rotation, and untrusted spoof are in `tests/multi_instance_process.rs::production_http_allowances_are_one_durable_account_and_peer_budget_across_a_b_c`. |
-| 19 | Proxy trust, full-chain failure, mapped IPv4 identity | 03, 05, 07, 11 | `tests/client_ip.rs::{trust_walk_validates_the_complete_chain_and_ignores_other_headers,malformed_duplicate_missing_and_oversized_chains_fall_back_atomically,mapped_configuration_preserves_exact_prefix_membership,real_tcp_peer_reaches_the_production_resolver_and_missing_context_fails_closed}` and `tests/visit_ingestion.rs::optional_headers_obey_complete_utf8_duplicate_and_byte_limit_rules` cover resolver rules. `tests/proxy_routing.rs::pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries_real_cursors` records the macOS host-gateway loopback peer, separately observes NGINX and direct peers on a user network, trusts only the observed NGINX peer, verifies overwritten XFF, and rejects direct spoof influence. |
+| 19 | Proxy trust, full-chain failure, mapped IPv4 identity | 03, 05, 07, 11 | `tests/client_ip.rs::{trust_walk_validates_the_complete_chain_and_ignores_other_headers,malformed_duplicate_missing_and_oversized_chains_fall_back_atomically,mapped_configuration_preserves_exact_prefix_membership,real_tcp_peer_reaches_the_production_resolver_and_missing_context_fails_closed}` and `tests/visit_ingestion.rs::optional_headers_obey_complete_utf8_duplicate_and_byte_limit_rules` cover resolver rules. The final `tests/proxy_routing.rs::pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries_real_cursors` uses a separate run-owned network client; it asserts actual client, NGINX/backend peer, and attacker-spoof IP are distinct, verifies NGINX replacement and stable identity through upstream reload, and proves both trusted-forwarded selection and direct-untrusted peer fallback from persisted visits. The separate macOS host-gateway loopback observation is not trusted. The earlier `7309ea5` proxy log did not distinguish forwarded selection from peer fallback; see the correction addendum below. |
 | 20 | Restart preserves all authoritative data without local state | 02, 04, 08, 11 | `tests/discovery_process.rs::discovery_cursors_and_fresh_state_cross_independent_servers_and_volume_restart` preserves schema v2, links/tags/counters and cursor continuation across the owned named-volume restart. The packaged binary's `tests/release_smoke.rs::packaged_binary_migrates_bootstraps_serves_rotates_deletes_and_restarts_without_reseeding` restarts against its populated isolated schema without fixture reseeding. |
 | 21 | Healthy GET/HEAD/bot/repeat ingestion; nonredirect exclusion | 07, 09, 11 | `tests/redirects.rs::{redirect_and_visit_use_one_immutable_resolution_snapshot,enablement_suspension_and_deletion_apply_to_fresh_public_resolutions}`, `tests/visit_records.rs::actual_redirect_snapshots_and_visit_pages_are_reported_after_delayed_worker_persistence`, `tests/report_process.rs::report_authority_history_and_maximum_breakdown_cursors_cross_tcp_instances_and_volume_restart`, and `tests/multi_instance_process.rs::independent_a_b_workers_keep_counters_atomic_and_delete_b_queued_events`. |
 | 22 | Full optional headers/raw IP, null handling and authorization | 07, 09, 11 | `tests/visit_ingestion.rs::optional_headers_obey_complete_utf8_duplicate_and_byte_limit_rules`, `tests/visit_records.rs::actual_redirect_snapshots_and_visit_pages_are_reported_after_delayed_worker_persistence`, and `tests/report_process.rs::report_authority_history_and_maximum_breakdown_cursors_cross_tcp_instances_and_volume_restart` assert null/empty, canonical IP, exact 8,192-byte UTF-8 and quote-expanded values. `tests/proxy_routing.rs::pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries_real_cursors` verifies max header/cursor transit over NGINX. |
@@ -56,7 +56,7 @@ Parts are linked from [the implementation index](README.md).
 | 48 | Invalid/forbidden filters, multiplicity, no widened scope | 03, 08 | `tests/http_decoding.rs::query_decoders_are_operation_scoped_and_errors_remain_sanitized`, `tests/link_listing.rs::listing_uses_fresh_account_authority_and_complete_visible_link_snapshots`, `tests/link_filters.rs::filters_are_literal_canonical_and_composed_before_distinct_keyset_selection`, and tag authority precedence in `tests/tag_discovery.rs::tag_counts_cover_visible_live_links_and_cursor_pages_groups_not_links`. |
 | 49 | All sort/direction/null/tie cursors, deletion/context/scaling | 03, 08, 11 | Golden six-direction/tie/null traversal, changed limits/context, boundary deletion, tampering, rotation, demotion and account recreation: `tests/link_pagination.rs::{all_sorts_directions_have_golden_keyset_order_and_stable_stateless_continuations,each_page_renews_role_and_account_identity_before_decoding_its_cursor}`. A/B/C continuation is `tests/discovery_process.rs::discovery_cursors_and_fresh_state_cross_independent_servers_and_volume_restart`. |
 | 50 | Exact A/B historical snapshots, retries/deletion/privacy | 07, 09, 10 | Delayed A→B worker snapshot and retry: `tests/visit_records.rs::actual_redirect_snapshots_and_visit_pages_are_reported_after_delayed_worker_persistence`; cross-TCP/volume history: `tests/report_process.rs::report_authority_history_and_maximum_breakdown_cursors_cross_tcp_instances_and_volume_restart`; OTLP/stdout privacy: `tests/telemetry_signals.rs::production_otlp_privacy_sampling_outage_drain_and_replacement_are_verified`. |
-| 51 | OpenAPI 3.1 validation, representative schemas/routes/headers | 01, 03–09, 11 | `tests/openapi_release.rs::{whole_openapi_document_and_every_json_schema_root_are_valid,documented_method_path_operation_ids_match_the_reviewed_inventory,production_executable_routes_and_global_method_errors_match_openapi}` validates the whole checked-in document with the pinned official OAS 3.1 schema, Draft 2020-12 schema roots, local refs, complete 22-entry method/path/operationId inventory, actual production TCP routes, common Allow/bodyless HEAD, and invalid controls. Existing `tests/openapi_contracts.rs::{actual_bootstrap_dto_and_account_http_responses_match_openapi_components,actual_redirect_head_and_failure_responses_match_openapi_components,actual_analytics_report_responses_and_errors_match_openapi_with_invalid_controls,actual_discovery_responses_and_errors_match_openapi_components}` validate family response schemas, headers, errors, bodyless 204/HEAD, nullability, and invalid fixtures. Exact command: `sh scripts/check-openapi.sh`. |
+| 51 | OpenAPI 3.1 validation, representative schemas/routes/headers | 01, 03–09, 11 | `tests/openapi_release.rs::{whole_openapi_document_and_every_json_schema_root_are_valid,public_schema_resolvers_validate_referenced_dialects_and_preserve_instance_data,documented_method_path_operation_ids_match_the_reviewed_inventory,production_executable_routes_and_global_method_errors_match_openapi}` validates the whole checked-in document with the pinned official OAS 3.1 schema, Draft 2020-12 schema roots, supplied-document references, direct and second-hop effective dialect rejection through public resolvers, boolean schemas, conjunctive `$ref` siblings, schema-position-aware instance data, complete 22-entry method/path/operationId inventory, actual production TCP routes, common Allow/bodyless HEAD, and invalid controls. Existing `tests/openapi_contracts.rs::{actual_bootstrap_dto_and_account_http_responses_match_openapi_components,actual_redirect_head_and_failure_responses_match_openapi_components,actual_analytics_report_responses_and_errors_match_openapi_with_invalid_controls,actual_discovery_responses_and_errors_match_openapi_components}` validate family response schemas, headers, errors, bodyless 204/HEAD, nullability, and invalid fixtures. Exact command: `sh scripts/check-openapi.sh`. |
 
 ## Part 11 final audit — 2026-10-29
 
@@ -158,6 +158,46 @@ library, 0 binary, 129 integration across 52 binaries) plus **3 doctests**, with
 all-target test command and a separate doctest command. The focused OpenAPI gate
 passed 3; proxy passed 1; release passed 7 Rust plus 8 Python controls; TLS
 passed 2. Hosted CI and native Linux/amd64 runtime remain unverified.
+
+## Final verification corrections addendum — 2026-10-29
+
+The verification-integrity closure above remains historically complete, but its
+two affected assertions were too strong for the evidence then retained:
+
+- **19:** in the retained `7309ea5` proxy log, backend peer, NGINX IP, persisted
+  IP, and NGINX-observed IP were all `10.89.0.4`. That run did not distinguish
+  correct forwarded-client selection from ignoring forwarding and recording the
+  backend peer. The corrected `tests/proxy_routing.rs::pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries_real_cursors`
+  starts a run-owned client container on the isolated network and observes
+  client `10.89.0.6`, NGINX/backend peer `10.89.0.4`, and spoof `198.51.100.240`.
+  It proves the proxied visit stores the real client, a direct untrusted spoofed
+  request stores its actual peer, and an NGINX-originated no-XFF request still
+  identifies the same peer after upstream reload. The same NGINX ID/IP is
+  asserted through the requests. The macOS host-gateway loopback probe remains
+  separate and untrusted.
+- **51:** previous dialect controls covered supplied roots and inline schemas,
+  but did not call a public resolver on a reference target declaring an
+  unsupported or ill-typed `$schema`. Resolution could adapt and overwrite that
+  unchecked declaration. The added
+  `tests/openapi_release.rs::public_schema_resolvers_validate_referenced_dialects_and_preserve_instance_data`
+  directly verifies rejection at one and two reference hops, restrictive
+  `$ref` siblings, boolean schemas, and ordinary example/default/const values.
+  The whole-document control also verifies inline `example` payloads containing
+  schema-like keys remain data.
+
+On final implementation revision `25f077f6fde044d41a665e100309e421bcdb7cb9`,
+all required local consolidated gates passed: OpenAPI 4 tests; the full gate 227
+all-target cases (97 library, 0 binary, 130 integration cases across 52 binaries)
+plus 3 separate doctests; proxy 1; release 8 Rust plus 8 Python controls; TLS 2.
+The actual Rust/Cargo/Rustdoc 1.94.0 MSRV command and clean-checkout packaged
+release smoke passed. Complete evidence and the artifact identity are in
+[`docs/release-verification.md`](../../docs/release-verification.md#final-verification-corrections-and-acceptance).
+
+The local correction gates passed; native CI acceptance is **Pending
+authorization**, as are staging and restore. These external statuses are not
+passes; local Git integration status is tracked in `progress.md`. Parts 01–11
+and the recorded maintenance milestones remain historically complete; this
+addendum corrects evidence scope and does not reopen feature implementation.
 
 ## Additional derived checks
 
@@ -336,8 +376,10 @@ output and asserts they remain within each configured total deadline.
 Part 10 is a scoped contribution, not the independent release-wide
 rollout/OpenAPI/packaging verification in Part 11.
 
-## Release audit record
+## Historical release-audit placeholder
 
-Status: **not executed**.
-
-When part 11 completes, record the date, build/toolchain/schema versions, supported PostgreSQL version, exact suite commands/results and the concrete evidence locations for every row. A map of intended tests is not a substitute for executed verification.
+The original placeholder recorded “not executed” before the later Part 11,
+post-release-hardening, and verification-integrity handoffs. Those historical
+records and their original evidence are preserved above. The later final
+verification-corrections addendum records the current local gate; hosted/native
+CI and staging/restore remain separately authorization-gated.

@@ -262,6 +262,125 @@ means this is not cold-cache or cross-machine reproducibility evidence. The
 available host/Podman VM is macOS/aarch64 and Linux/arm64; no native Linux/amd64
 runtime verification is claimed. No hosted workflow was dispatched.
 
+## Final verification corrections and acceptance — 2026-10-29
+
+Parts 01–11 and the recorded maintenance milestones remain historically complete;
+this bounded follow-up corrects two overstatements in the preceding
+verification-integrity evidence and does not add backend behavior.
+
+### Corrected claims and controls
+
+- **Trusted-proxy identity (scenario 19):** the retained
+  `target/verification-integrity/7309ea5/check-proxy.log` reports backend peer,
+  NGINX address, persisted IP, and NGINX-observed IP all as `10.89.0.4`. That
+  observation could not distinguish forwarded-client selection from ignoring
+  forwarding and recording the NGINX peer. The corrected test starts an actual
+  client process in a separate run-owned container on the isolated network. It
+  records distinct client `10.89.0.6`, NGINX/backend peer `10.89.0.4`, and
+  attacker-supplied spoof `198.51.100.240`; the proxied and direct untrusted
+  visits both persist the actual client `10.89.0.6`, while an NGINX-originated
+  no-XFF request after upstream reload persists peer `10.89.0.4`. The backend's
+  configured trust list is inspected and contains only the observed NGINX peer.
+  The same NGINX container ID/IP is checked before and after reload and through
+  the assertions. The host-gateway loopback probe remains separate and untrusted.
+- **Referenced JSON Schema dialects (scenario 51):** prior negative controls
+  checked supplied roots and inline positions but did not call a public resolver
+  with a referenced target introducing `$schema`. A resolver could check its
+  supplied root, resolve references, and then have adaptation overwrite an
+  unchecked target dialect. The added public-resolver controls reject an
+  unsupported direct target, invalid `$schema` type, and second-hop target before
+  adaptation. Supported `$ref` sibling conjunctions and referenced true/false
+  schemas are preserved; examples, defaults, and constant instance values with
+  schema-like members remain data. Whole-document checks also cover inline
+  `example` values.
+- **Proxy reload prerequisite:** the committed proxy test now asserts the reload
+  command's exit status. A failed gate run exposed `scripts/proxy.sh` checking
+  Podman mounts in a fixed output order; the required mounts were present but
+  Podman returned them in another order. The ownership/configuration guard now
+  verifies each required mount independently. The final clean-source proxy gate
+  passed with the retained NGINX instance and the original bounded readiness
+  deadline.
+
+### Final local gates and separated counts
+
+Final verified implementation revision:
+`25f077f6fde044d41a665e100309e421bcdb7cb9` on
+`maintenance/release-readiness-acceptance`, based on starting `main`
+`487cc04749e1d391ba04a4a4d45d2afaa0b83aab`.
+
+| Exact gate | Result | Retained evidence |
+|---|---|---|
+| `sh scripts/check-openapi.sh` | 4 passed; 0 failed/ignored. | `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/gate-accepted-check-openapi-5048d12ae75d4989b128dddfd61f496e/` |
+| `sh scripts/check.sh` | 227 all-target cases: 97 library, 0 binary, 130 integration cases across 52 integration binaries; separate `cargo test --workspace --doc`: 3 doctests. 0 failed/ignored. | `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/gate-accepted-check-full-e8c3514747f14d2798d274492a708d48/` |
+| `sh scripts/check-proxy.sh` | 1 packaged production TCP test passed with three distinguishable identities and complete existing path/method/header/cursor assertions. | `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/gate-accepted-check-proxy-9c80b6d657a14f869198395df40803e8/` |
+| `sh scripts/check-release.sh` | 8 packaged Rust tests and 8 Python release-verifier controls passed. | `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/gate-accepted-check-release-264f73b0e75c4acc9567e26f8aee4ca0/` |
+| `sh scripts/check-tls.sh` | 2 packaged TLS/lifecycle tests passed; the Collector decoded 10 traces, 14 metrics, and 11 logs from the intended process. | `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/gate-accepted-check-tls-e08c20d1eda1423685fc1eb0eef1c25d/` |
+| `FERL_MSRV_TOOLCHAIN_DIR=$PWD/target/toolchains/rust-1.94.0 sh scripts/check-msrv.sh` | Actual Rust/Cargo/Rustdoc 1.94.0 passed the locked all-target/all-feature check and production release build on `aarch64-apple-darwin`. | `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/gate-accepted-check-msrv-215ef2bb5fb74668afafd49e20852d35/` |
+
+The focused development executions are separate and are not added to those
+counts. The new referenced-schema test first failed against the old resolver
+(showing all three bad references returned adapted `Ok` schemas), then passed
+after correction. Eight filtered proxy-test executions were retained during
+debugging (four passes/four failures); the failures exposed harness/control
+issues corrected above. The final `check.sh`, dedicated proxy/release/TLS gates,
+and clean-checkout run are the passing evidence for the final committed inputs.
+The first committed full-gate attempt also remains preserved: warning-denied
+Clippy found an unnecessary test-only clone; the narrow fix is commit
+`4f4936a83107251b385806b2afaadd8cce3e2958`, and all final gates were rerun on
+`25f077f`.
+
+### Clean-checkout package and cache conditions
+
+Clean-checkout `sh scripts/check-release.sh` passed at the exact implementation
+commit in detached worktree
+`$TMPDIR`.
+The repository was not shallow (58 commits); retained legacy commit
+`9bcf7c0c021c994e76d0696633fe822f0a49a5e1` was present and an ancestor. The
+release-test and Linux-builder Cargo target directories were initially absent
+and isolated under the run evidence directory. The pre-existing Cargo registry
+cache was reused (warm, not cold). The packaged executable was verified from the
+17-file archive and ran as UID 65532 in the same pinned Debian Bookworm
+`linux/arm64` image used by its builder.
+
+- Artifact:
+  `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/clean-checkout-final/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`
+- Archive SHA-256: `f968bd5babd6098b202ae505a45ecf3f59dcfedcf9ffccd42acd234384e773d7`
+- Binary SHA-256: `76fb42bffd1e224c616b87ca19b22ec52201e9fe101d4a7954a247bab3c32919`
+- Source revision/tree: `25f077f6fde044d41a665e100309e421bcdb7cb9` /
+  `248e28e1a542bbd18d4eb7ede72e061666c4555d`; `source_tree_clean=true`.
+- Target/runtime: `aarch64-unknown-linux-gnu`; Debian Bookworm Linux/arm64,
+  UID 65532; schema v2; exact OpenAPI and both committed migrations.
+- Builder: `docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`
+  (Rust/Cargo 1.99.1, Debian Bookworm, linux/arm64).
+
+Each package-producing gate used a unique output directory. Their archive hashes
+are retained in its `invocation.json` and raw log:
+
+| Package invocation | Artifact | Archive SHA-256 |
+|---|---|---|
+| `check.sh` | `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/check-full-accepted/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz` | `a5fbea2f573e8b1b14b89912fdb1fa092850b95527394d74526bdae4d6d5a74e` |
+| `check-proxy.sh` | `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/check-proxy-accepted/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz` | `0cae03083e2ceee5f3d6f62510724a9d97efdfe75d78b474b8b4f1a963a2acfc` |
+| `check-release.sh` | `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/check-release-accepted/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz` | `b328f9a36378958793c535a5f47dc523888cd9b8475f50156e6fa090ea7fde94` |
+| `check-tls.sh` | `target/release-tls/1d47b7f323b7453e92e9b83e16eb8687/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz` | `08250a1af88c5aa7a00bb41b8adeea487f58a8d1305f375e52a1b299da3147ef` |
+| Clean-checkout `check-release.sh` | `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/clean-checkout-final/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz` | `f968bd5babd6098b202ae505a45ecf3f59dcfedcf9ffccd42acd234384e773d7` |
+
+These are warm-registry local measurements, not a cold-cache, cross-machine, or
+bit-for-bit reproducibility claim. The disposable clean-checkout worktree has
+been removed; its artifact/evidence remain under `target/release-readiness/`.
+
+### External acceptance status
+
+| Outcome | Status | Evidence/blocker |
+|---|---|---|
+| Local correction gate | **Passed**. | All required local gates, actual MSRV, and clean-checkout package/runtime passed at the verified implementation revision; local Git integration status is in `progress.md`. |
+| Native CI acceptance | **Pending authorization**; not passed. | No remote is configured and neither pushing nor hosted workflow execution was authorized. Repository scripts advertise both aarch64 and x86_64 Linux targets; only native Linux/arm64 package execution is evidenced. No CI run URL exists. The intended supported architecture decision remains outstanding; no QEMU result is treated as native. |
+| Staging and backup/restore acceptance | **Pending authorization**; not passed. | No approved staging environment/operations, private credential/evidence method, isolated restore target, or separate cursor-key recovery mechanism was provided. No staging, backup, restore, or production operation was performed. |
+
+Accordingly, local verification integrity is closed after the local integration,
+but this evidence does **not** establish release readiness for every advertised
+platform or production readiness. See the [implementation progress handoff](../spec/implementation/progress.md#release-readiness-acceptance--worklist-recorded-before-implementation)
+for the exact authorization prerequisites.
+
 ## Scenario-by-scenario gap matrix
 
 `sh scripts/check.sh` is the consolidated gate for Rust, PostgreSQL, account,

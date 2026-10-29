@@ -3,10 +3,13 @@
 ## Release-readiness acceptance — worklist recorded before implementation
 
 Branch `maintenance/release-readiness-acceptance`; verified starting `main`
-baseline `487cc04749e1d391ba04a4a4d45d2afaa0b83aab`. Starting inspection found
-a clean index/tree, no pending Git operation, no remote, one worktree, configured
-identity `LubosBa <30705301+LubosBa@users.noreply.github.com>`, both retained maintenance branches, and
-the required Part 07 compatibility commit reachable from `main`. The pinned
+baseline `487cc04749e1d391ba04a4a4d45d2afaa0b83aab`, whose merge parents are
+`960f7a422f593c42383d2b8fe719ffd8aaee9ae4` and
+`ea961a30bceca87b75c5ca969656dce5791565ea`.
+Starting inspection also found a clean index/tree, no pending Git operation or
+remote, one worktree, configured identity `LubosBa <30705301+LubosBa@users.noreply.github.com>`, both
+retained maintenance branches, and the required Part 07 compatibility commit
+reachable from `main`. The pinned
 Stage 01 PostgreSQL container and volume were running and label-verified; their
 identities are preserved for use and neither is task-owned. Initial container ID:
 `272ce0848e0d7f0e8da96139e80b31dfec0b31d785bffd690007f1e2296bd1ea`; pinned
@@ -27,36 +30,116 @@ Outcome status at worklist creation:
 - Native CI acceptance: **Pending authorization** (not a pass).
 - Staging and restore acceptance: **Pending authorization** (not a pass).
 
-Current status: Local verification corrections are **In progress**. Focused
-controls have reproduced and corrected the two false greens; the implementation
-and regression tests are not yet committed, and consolidated gates remain
-pending. Native CI and staging/restore remain **Pending authorization**.
+Current outcome status after verification:
 
-Development evidence (not part of the final consolidated counts):
+- Local verification corrections: **Verified** on implementation commit
+  `25f077f6fde044d41a665e100309e421bcdb7cb9`; local `main` integration is the
+  remaining authorized step.
+- Native CI acceptance: **Pending authorization** (not a pass).
+- Staging and restore acceptance: **Pending authorization** (not a pass).
+
+Implementation-input commit sequence on this branch:
+
+- `54461e7157377ca4f0037c89a6e5a3d9f5e0f875` — focused implementation and
+  regression controls.
+- `4f4936a83107251b385806b2afaadd8cce3e2958` — warning-denied Clippy correction
+  for the proxy trust-list assertion.
+- `25f077f6fde044d41a665e100309e421bcdb7cb9` — order-independent proxy mount
+  checks, asserted reload success, and final verified implementation inputs.
+
+No normative contract, migration, dependency version, or release platform
+declaration changed.
+
+Development and failed-run evidence (all raw logs/metadata are preserved and are
+not included in the consolidated test counts):
 
 - The new referenced-dialect test was first run against the uncorrected resolver
   at starting revision `487cc04749e1d391ba04a4a4d45d2afaa0b83aab`. It failed as
   intended: unsupported string dialect, invalid-type dialect, and second-hop
   dialect all returned `Ok` schemas with `$schema` rewritten to Draft 2020-12.
   Raw log: `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/before-fix-2ca84701cb424fdebdbbaa9f89e4c4a3/`.
-- After the focused resolver correction, the same test passed (1 passed, 0
-  failed): `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/openapi-regression-df15ecff42ac42de869fe5c08e36da8e/`.
-- After extending the whole-document data control to an inline `example` payload
-  containing `$schema`, `$ref`, and `$dynamicRef`, the focused OpenAPI-document
-  test passed (1 passed, 0 failed):
-  `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/openapi-document-regression-adb55688d57e4a30873404056df59e77/`.
-- The proxy regression ran one test against the retained packaged backend from
-  the preceding verification-integrity artifact. A separate pinned NGINX-image
-  client produced client `10.89.0.6`, NGINX/backend peer `10.89.0.4`, and spoofed
-  IP `198.51.100.240`; proxied and direct spoofed visits both persisted
-  `10.89.0.6`, and the post-reload peer-fallback visit persisted `10.89.0.4`.
-  The test passed: `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/proxy-regression-peer-stability-f40b52c46da14f01a3ec5dd2aa36cc8e/`.
-  This focused harness run is not the committed clean-source proxy gate.
-- Earlier focused proxy retries are retained separately in the same evidence
-  directory; one exposed an assertion against the wrong NGINX config file and
-  another exposed the immediate reload-probe race. The final focused retry
-  passed after checking the included header config and awaiting the existing
-  deadline-bound backend readiness before the internal probe.
+- After the resolver correction, the same filtered test passed (1 passed); the
+  whole-document example-data control passed separately (1 passed). Logs:
+  `.../openapi-regression-df15ecff42ac42de869fe5c08e36da8e/` and
+  `.../openapi-document-regression-adb55688d57e4a30873404056df59e77/` under
+  `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/`.
+- The focused proxy binary was executed 8 times during development: 4 passed and
+  4 failed while the harness was being corrected. The failures exposed a config
+  path assertion error, an immediate readiness probe, and finally the concrete
+  Podman mount-order check that rejected an otherwise valid NGINX reload. The
+  reload command's failure had also been ignored by the test. The final focused
+  pass with the corrected mount verification and an asserted successful reload
+  is `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/proxy-reload-mounted-15s-665b90ee817c4511a78b6d625605f0e0/`.
+- The first committed full-gate attempt at `54461e7` failed warning-denied
+  Clippy on an unnecessary test-only clone; the correction is a separate commit
+  `4f4936a83107251b385806b2afaadd8cce3e2958`. The raw failed gate is
+  `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/gate-check-full-1c9ce03118b947bc9e5bbefc8b72929a/`.
+- A later proxy-gate attempt at `4f4936a` exposed the ignored reload failure and
+  mount-order issue. The focused raw failure is
+  `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/proxy-reload-assert-run-5c461e32a8874e7793bcaacc28fed79d/`; the consolidated failed gate
+  is `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/gate-final-check-proxy-8a8cdbe21ab94b0b837d242c2c15c782/`.
+  The order-independent mount check and reload assertion are in final input
+  commit `25f077f`. Both failed consolidated-run directories remain intact.
+
+Final consolidated gates on `25f077f6fde044d41a665e100309e421bcdb7cb9` all
+passed. The evidence root is
+`target/release-readiness/36effbe1b5e845dab684df60c98bf51e/`; each invocation
+directory contains `invocation.json` plus raw stdout/stderr logs.
+
+| Exact gate | Result and separated counts | Evidence directory |
+|---|---|---|
+| `sh scripts/check-openapi.sh` | 4 passed; 0 failed/ignored. | `gate-accepted-check-openapi-5048d12ae75d4989b128dddfd61f496e/` |
+| `sh scripts/check.sh` | 227 all-target cases: 97 library, 0 binary, 130 integration cases across 52 integration binaries; separate `cargo test --workspace --doc`: 3 doctests. 0 failed/ignored. | `gate-accepted-check-full-e8c3514747f14d2798d274492a708d48/` |
+| `sh scripts/check-proxy.sh` | 1 packaged production TCP test passed. The test recorded client `10.89.0.6`, NGINX/backend peer `10.89.0.4`, spoof `198.51.100.240`; forwarded and direct spoofed visits persisted `10.89.0.6`; the post-reload NGINX peer fallback persisted `10.89.0.4`. | `gate-accepted-check-proxy-9c80b6d657a14f869198395df40803e8/` |
+| `sh scripts/check-release.sh` | 8 packaged Rust tests and 8 Python release-verifier controls passed. | `gate-accepted-check-release-264f73b0e75c4acc9567e26f8aee4ca0/` |
+| `sh scripts/check-tls.sh` | 2 packaged TLS/lifecycle tests passed; the Collector decoded 10 traces, 14 metrics, and 11 logs from the intended process. | `gate-accepted-check-tls-e08c20d1eda1423685fc1eb0eef1c25d/` |
+
+The consolidated Rust suite used Rust/Cargo/Rustdoc 1.99.1 on
+`aarch64-apple-darwin`; Podman 6.1.4's Linux VM reported `arm64`; the database
+fixture was PostgreSQL 17.6 and the proxy fixture NGINX 1.30.6. `check.sh` reused
+the existing Cargo build/registry caches; package/builder output directories
+were unique for the runs. No task-owned proxy/client/server/collector containers
+or networks remained after the gates. The only labeled container left was the
+preserved `ferl-stage01-postgres`, with the same initial ID
+`272ce0848e0d7f0e8da96139e80b31dfec0b31d785bffd690007f1e2296bd1ea`; its
+`ferl-stage01-postgres-data` volume and mountpoint were unchanged. The detached
+clean-checkout worktree was removed after its artifact and evidence were retained
+under `target/release-readiness/`.
+
+MSRV verification ran in the same detached clean-checkout worktree at the exact
+implementation commit with initially absent MSRV target directories:
+`FERL_MSRV_TOOLCHAIN_DIR=$PWD/target/toolchains/rust-1.94.0 sh scripts/check-msrv.sh`.
+Actual `rustc`, Cargo, and Rustdoc were all 1.94.0 on `aarch64-apple-darwin`; the
+locked all-target/all-feature check and production release build passed. Its
+raw evidence is `gate-accepted-check-msrv-215ef2bb5fb74668afafd49e20852d35/`.
+
+Clean-checkout release verification ran `sh scripts/check-release.sh` at
+`25f077f6fde044d41a665e100309e421bcdb7cb9` in detached worktree
+`$TMPDIR`.
+The checkout was not shallow (58 commits) and retained compatibility commit
+`9bcf7c0c021c994e76d0696633fe822f0a49a5e1`; separate release-test and builder
+target directories were initially absent. The existing Cargo registry cache was
+reused (warm, not cold). The verified 17-file package was run as UID 65532 in
+the same digest-pinned Debian Bookworm `linux/arm64` image used by the build.
+
+- Artifact:
+  `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/clean-checkout-final/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`
+- Archive SHA-256: `f968bd5babd6098b202ae505a45ecf3f59dcfedcf9ffccd42acd234384e773d7`
+- Binary SHA-256: `76fb42bffd1e224c616b87ca19b22ec52201e9fe101d4a7954a247bab3c32919`
+- Source revision/tree: `25f077f6fde044d41a665e100309e421bcdb7cb9` /
+  `248e28e1a542bbd18d4eb7ede72e061666c4555d`; target
+  `aarch64-unknown-linux-gnu`; schema v2; `source_tree_clean=true`.
+- Builder: `docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`
+  (Rust/Cargo 1.99.1, Debian Bookworm, linux/arm64).
+
+The current release scripts advertise both `aarch64-unknown-linux-gnu` and
+`x86_64-unknown-linux-gnu`. The local packaged runtime result is Linux/arm64
+only; native Linux/amd64 and hosted workflow acceptance are not claimed. There
+is no configured remote, approved push/hosted-workflow authorization, approved
+platform decision, staging target/operation authorization, private credential
+and evidence-retention method, backup/restore target, or cursor-key recovery
+mechanism. Native CI and staging/restore therefore remain **Pending
+authorization**; this does not negate the verified local correction gate.
 
 The post-release task does not mutate production behavior, schemas, migrations,
 dependencies, or normative business/OpenAPI contracts.
@@ -188,7 +271,7 @@ These are verification-integrity gaps in those two assertions, not unfinished
 business features or a change to the historical milestone record. The current
 release-readiness acceptance work adds direct public-resolver controls and a
 run-owned network client with distinct observed identities; its final committed
-gate results are recorded below after execution.
+gate results are recorded in the release-readiness section above.
 
 Branch `maintenance/verification-integrity-closure`; base `main` commit
 `960f7a422f593c42383d2b8fe719ffd8aaee9ae4`. Initial inspection found a clean
