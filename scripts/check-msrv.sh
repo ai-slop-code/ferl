@@ -13,13 +13,15 @@ else
     exit 2
 fi
 
-if [ ! -x "$TOOLCHAIN_BIN/rustc" ] || [ ! -x "$TOOLCHAIN_BIN/cargo" ]; then
-    echo "Rust/Cargo 1.94.0 binaries are missing from $TOOLCHAIN_BIN" >&2
+if [ ! -x "$TOOLCHAIN_BIN/rustc" ] || [ ! -x "$TOOLCHAIN_BIN/cargo" ] \
+    || [ ! -x "$TOOLCHAIN_BIN/rustdoc" ]; then
+    echo "Rust/Cargo/Rustdoc 1.94.0 binaries are missing from $TOOLCHAIN_BIN" >&2
     exit 2
 fi
 
 export PATH="$TOOLCHAIN_BIN:$PATH"
 export RUSTC="$TOOLCHAIN_BIN/rustc"
+export RUSTDOC="$TOOLCHAIN_BIN/rustdoc"
 RUSTC_VERSION=$("$TOOLCHAIN_BIN/rustc" --version)
 case "$RUSTC_VERSION" in
     "rustc 1.94.0 "*) ;;
@@ -27,6 +29,12 @@ case "$RUSTC_VERSION" in
 esac
 "$TOOLCHAIN_BIN/rustc" --version
 "$TOOLCHAIN_BIN/rustc" -vV
+RUSTDOC_VERSION=$("$TOOLCHAIN_BIN/rustdoc" --version)
+case "$RUSTDOC_VERSION" in
+    "rustdoc 1.94.0 "*) ;;
+    *) echo "MSRV check requires rustdoc 1.94.0; found $RUSTDOC_VERSION" >&2; exit 1 ;;
+esac
+"$TOOLCHAIN_BIN/rustdoc" --version
 CARGO_VERSION=$("$TOOLCHAIN_BIN/cargo" --version)
 case "$CARGO_VERSION" in
     "cargo 1.94.0 "*) ;;

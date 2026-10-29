@@ -12,12 +12,18 @@ pub fn document() -> Value {
 #[allow(dead_code)]
 pub fn resolve_schema(name: &str) -> Value {
     let root = document();
-    let schema = root["components"]["schemas"][name]
-        .as_object()
-        .unwrap_or_else(|| panic!("OpenAPI schema {name} exists"));
-    let expanded = resolve_refs(&Value::Object(schema.clone()), &root, &mut Vec::new())
-        .unwrap_or_else(|_| panic!("OpenAPI schema {name} has resolvable local references"));
-    with_draft(expanded)
+    resolve_component_schema_in_document(&root, name)
+        .unwrap_or_else(|error| panic!("OpenAPI schema {name}: {error}"))
+}
+
+/// Resolve an object or boolean component Schema Object using the dialect
+/// declared by this supplied OpenAPI document.
+#[allow(dead_code)]
+pub fn resolve_component_schema_in_document(doc: &Value, name: &str) -> Result<Value, String> {
+    let schema = doc["components"]["schemas"]
+        .get(name)
+        .ok_or_else(|| format!("component schema {name} does not exist"))?;
+    resolve_schema_value_in_document(doc, schema)
 }
 
 /// Resolve one OpenAPI Schema Object using JSON Schema 2020-12 `$ref`
@@ -35,8 +41,15 @@ pub fn resolve_schema_value_in_document(doc: &Value, schema: &Value) -> Result<V
         return Err("schema declares an unsupported JSON Schema dialect".to_owned());
     }
     resolve_refs(schema, doc, &mut Vec::new())
-        .map(with_draft)
-        .map_err(|()| "schema contains an unresolved, external, or cyclic reference".to_owned())
+        .map(adapt_to_draft_2020_12)
+        .map_err(|error| match error {
+            ReferenceError::DynamicReference => {
+                "JSON Schema $dynamicRef semantics are not supported by this validator".to_owned()
+            }
+            ReferenceError::Unresolved => {
+                "schema contains an unresolved, external, or cyclic $ref".to_owned()
+            }
+        })
 }
 
 /// Confirm the effective OpenAPI 3.1 dialect before adapting its JSON Schema
@@ -49,23 +62,151 @@ pub fn document_schema_dialects_supported(doc: &Value) -> bool {
         return false;
     };
 
+    schema_roots(doc)
+        .into_iter()
+        .all(|schema| schema_dialect_supported(schema, document_dialect))
+}
+
+/// Return only Schema Objects at OpenAPI-defined locations, not arbitrary
+/// example payloads that happen to contain a member named `schema`.
+#[allow(dead_code)]
+pub fn schema_roots(doc: &Value) -> Vec<&Value> {
     let mut roots = Vec::new();
     if let Some(schemas) = doc["components"]["schemas"].as_object() {
         roots.extend(schemas.values());
     }
-    collect_schema_roots(&doc["paths"], &mut roots);
-    collect_schema_roots(&doc["webhooks"], &mut roots);
-    if let Some(components) = doc["components"].as_object() {
-        for (name, component) in components {
-            if name != "schemas" {
-                collect_schema_roots(component, &mut roots);
+    if let Some(components) = doc.get("components") {
+        collect_component_schema_roots(components, &mut roots);
+    }
+    collect_path_item_schema_roots(&doc["paths"], &mut roots);
+    collect_path_item_schema_roots(&doc["webhooks"], &mut roots);
+    roots
+}
+
+fn collect_component_schema_roots<'a>(components: &'a Value, roots: &mut Vec<&'a Value>) {
+    for kind in ["parameters", "headers"] {
+        if let Some(entries) = components[kind].as_object() {
+            for entry in entries.values() {
+                collect_parameter_or_header_schema(entry, roots);
             }
         }
     }
+    if let Some(entries) = components["requestBodies"].as_object() {
+        for entry in entries.values() {
+            collect_content_schema_roots(&entry["content"], roots);
+        }
+    }
+    if let Some(entries) = components["responses"].as_object() {
+        for entry in entries.values() {
+            collect_response_schema_roots(entry, roots);
+        }
+    }
+    if let Some(callbacks) = components["callbacks"].as_object() {
+        for callback in callbacks.values() {
+            if let Some(expressions) = callback.as_object() {
+                for path_item in expressions.values() {
+                    collect_path_item_schema_roots(path_item, roots);
+                }
+            }
+        }
+    }
+}
 
-    roots
-        .into_iter()
-        .all(|schema| schema_dialect_supported(schema, document_dialect))
+fn collect_path_item_schema_roots<'a>(value: &'a Value, roots: &mut Vec<&'a Value>) {
+    let items = match value {
+        Value::Object(object) => object.values().collect::<Vec<_>>(),
+        Value::Array(items) => items.iter().collect(),
+        _ => return,
+    };
+    for item in items {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        if let Some(parameters) = object.get("parameters").and_then(Value::as_array) {
+            for parameter in parameters {
+                collect_parameter_or_header_schema(parameter, roots);
+            }
+        }
+        for (name, operation) in object {
+            if !matches!(
+                name.as_str(),
+                "get" | "put" | "post" | "delete" | "options" | "head" | "patch" | "trace"
+            ) {
+                continue;
+            }
+            let Some(operation) = operation.as_object() else {
+                continue;
+            };
+            if let Some(parameters) = operation.get("parameters").and_then(Value::as_array) {
+                for parameter in parameters {
+                    collect_parameter_or_header_schema(parameter, roots);
+                }
+            }
+            if let Some(content) = operation
+                .get("requestBody")
+                .and_then(|body| body.get("content"))
+            {
+                collect_content_schema_roots(content, roots);
+            }
+            if let Some(responses) = operation.get("responses") {
+                collect_response_schema_roots(responses, roots);
+            }
+            if let Some(callbacks) = operation.get("callbacks").and_then(Value::as_object) {
+                for callback in callbacks.values() {
+                    if let Some(expressions) = callback.as_object() {
+                        for path_item in expressions.values() {
+                            collect_path_item_schema_roots(path_item, roots);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collect_parameter_or_header_schema<'a>(value: &'a Value, roots: &mut Vec<&'a Value>) {
+    if let Some(schema) = value.get("schema") {
+        roots.push(schema);
+    }
+    if let Some(content) = value.get("content") {
+        collect_content_schema_roots(content, roots);
+    }
+}
+
+fn collect_response_schema_roots<'a>(value: &'a Value, roots: &mut Vec<&'a Value>) {
+    match value {
+        Value::Object(object)
+            if object.contains_key("content") || object.contains_key("headers") =>
+        {
+            collect_content_schema_roots(&value["content"], roots);
+            if let Some(headers) = value["headers"].as_object() {
+                for header in headers.values() {
+                    collect_parameter_or_header_schema(header, roots);
+                }
+            }
+        }
+        Value::Object(object) => {
+            for response in object.values() {
+                collect_response_schema_roots(response, roots);
+            }
+        }
+        Value::Array(items) => {
+            for response in items {
+                collect_response_schema_roots(response, roots);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_content_schema_roots<'a>(content: &'a Value, roots: &mut Vec<&'a Value>) {
+    if let Some(media_types) = content.as_object() {
+        for media_type in media_types.values() {
+            if let Some(schema) = media_type.get("schema") {
+                roots.push(schema);
+            }
+        }
+    }
 }
 
 fn document_schema_dialect(doc: &Value) -> Result<&'static str, String> {
@@ -82,98 +223,123 @@ fn document_schema_dialect(doc: &Value) -> Result<&'static str, String> {
     }
 }
 
-#[allow(dead_code)]
-fn collect_schema_roots<'a>(value: &'a Value, roots: &mut Vec<&'a Value>) {
-    match value {
-        Value::Object(object) => {
-            for (key, nested) in object {
-                if key == "schema" {
-                    roots.push(nested);
-                } else {
-                    collect_schema_roots(nested, roots);
-                }
-            }
-        }
-        Value::Array(values) => {
-            for nested in values {
-                collect_schema_roots(nested, roots);
-            }
-        }
-        _ => {}
-    }
-}
-
 fn schema_dialect_supported(schema: &Value, inherited: &str) -> bool {
-    const NESTED_SCHEMA_KEYWORDS: &[&str] = &[
-        "$defs",
+    const SINGLE_SCHEMA_KEYWORDS: &[&str] = &[
         "additionalItems",
         "additionalProperties",
-        "allOf",
-        "anyOf",
         "contains",
         "contentSchema",
-        "definitions",
-        "dependencies",
-        "dependentSchemas",
-        "else",
-        "if",
         "items",
         "not",
-        "oneOf",
-        "patternProperties",
-        "prefixItems",
-        "properties",
         "propertyNames",
-        "then",
         "unevaluatedItems",
         "unevaluatedProperties",
+        "if",
+        "then",
+        "else",
+    ];
+    const SCHEMA_ARRAY_KEYWORDS: &[&str] = &["allOf", "anyOf", "oneOf", "prefixItems"];
+    const SCHEMA_MAP_KEYWORDS: &[&str] = &[
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+        "patternProperties",
+        "properties",
     ];
 
-    match schema {
-        Value::Object(object) => {
-            let effective = match object.get("$schema") {
-                None => inherited,
-                Some(Value::String(dialect))
-                    if dialect == OAS_31_BASE_DIALECT || dialect == DRAFT_2020_12_DIALECT =>
-                {
-                    dialect
-                }
-                Some(_) => return false,
-            };
-            NESTED_SCHEMA_KEYWORDS.iter().all(|keyword| {
-                object
-                    .get(*keyword)
-                    .is_none_or(|nested| schema_dialect_supported(nested, effective))
-            })
+    let Value::Object(object) = schema else {
+        return schema.is_boolean();
+    };
+    let effective = match object.get("$schema") {
+        None => inherited,
+        Some(Value::String(dialect))
+            if dialect == OAS_31_BASE_DIALECT || dialect == DRAFT_2020_12_DIALECT =>
+        {
+            dialect
         }
-        Value::Array(values) => values
-            .iter()
-            .all(|nested| schema_dialect_supported(nested, inherited)),
-        Value::Bool(_) => true,
-        _ => true,
+        Some(_) => return false,
+    };
+    // This small gate does not implement dynamic scope/anchors. Reject the
+    // keyword even when its text happens to name an existing JSON pointer.
+    if object.contains_key("$dynamicRef") {
+        return false;
     }
+    for keyword in SINGLE_SCHEMA_KEYWORDS {
+        if let Some(nested) = object.get(*keyword)
+            && !schema_dialect_supported(nested, effective)
+        {
+            return false;
+        }
+    }
+    for keyword in SCHEMA_ARRAY_KEYWORDS {
+        if let Some(values) = object.get(*keyword) {
+            let Some(values) = values.as_array() else {
+                return false;
+            };
+            if !values
+                .iter()
+                .all(|nested| schema_dialect_supported(nested, effective))
+            {
+                return false;
+            }
+        }
+    }
+    for keyword in SCHEMA_MAP_KEYWORDS {
+        if let Some(entries) = object.get(*keyword) {
+            let Some(entries) = entries.as_object() else {
+                return false;
+            };
+            if !entries
+                .values()
+                .all(|nested| schema_dialect_supported(nested, effective))
+            {
+                return false;
+            }
+        }
+    }
+    if let Some(entries) = object.get("dependencies") {
+        let Some(entries) = entries.as_object() else {
+            return false;
+        };
+        if !entries
+            .values()
+            .all(|nested| !nested.is_object() || schema_dialect_supported(nested, effective))
+        {
+            return false;
+        }
+    }
+    true
 }
 
-/// OpenAPI 3.1 inherits JSON Schema 2020-12 reference semantics: `$ref` and
-/// sibling assertions are conjunctive, not object-merge overrides.
-fn resolve_refs(schema: &Value, root: &Value, stack: &mut Vec<String>) -> Result<Value, ()> {
+#[derive(Clone, Copy)]
+enum ReferenceError {
+    Unresolved,
+    DynamicReference,
+}
+
+/// Resolve one OpenAPI Schema Object using JSON Schema 2020-12 `$ref`
+/// semantics. `$dynamicRef` is rejected rather than reduced to pointer
+/// existence, which would not implement dynamic scope/anchor resolution.
+fn resolve_refs(
+    schema: &Value,
+    root: &Value,
+    stack: &mut Vec<String>,
+) -> Result<Value, ReferenceError> {
     match schema {
         Value::Object(object) => {
-            if let Some(dynamic_reference) = object.get("$dynamicRef") {
-                let Some(reference) = dynamic_reference.as_str() else {
-                    return Err(());
-                };
-                if !reference.starts_with("#/")
-                    || root.pointer(reference.trim_start_matches('#')).is_none()
-                {
-                    return Err(());
-                }
+            if object.contains_key("$dynamicRef") {
+                return Err(ReferenceError::DynamicReference);
             }
-            if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+            if let Some(reference_value) = object.get("$ref") {
+                let Some(reference) = reference_value.as_str() else {
+                    return Err(ReferenceError::Unresolved);
+                };
                 if !reference.starts_with("#/") || stack.iter().any(|entry| entry == reference) {
-                    return Err(());
+                    return Err(ReferenceError::Unresolved);
                 }
-                let target = root.pointer(reference.trim_start_matches('#')).ok_or(())?;
+                let target = root
+                    .pointer(reference.trim_start_matches('#'))
+                    .ok_or(ReferenceError::Unresolved)?;
                 stack.push(reference.to_owned());
                 let target = resolve_refs(target, root, stack)?;
                 stack.pop();
@@ -181,7 +347,7 @@ fn resolve_refs(schema: &Value, root: &Value, stack: &mut Vec<String>) -> Result
                     .iter()
                     .filter(|(key, _)| key.as_str() != "$ref")
                     .map(|(key, value)| Ok((key.clone(), resolve_refs(value, root, stack)?)))
-                    .collect::<Result<serde_json::Map<_, _>, ()>>()?;
+                    .collect::<Result<serde_json::Map<_, _>, ReferenceError>>()?;
                 if siblings.is_empty() {
                     Ok(target)
                 } else {
@@ -191,7 +357,7 @@ fn resolve_refs(schema: &Value, root: &Value, stack: &mut Vec<String>) -> Result
                 object
                     .iter()
                     .map(|(key, value)| Ok((key.clone(), resolve_refs(value, root, stack)?)))
-                    .collect::<Result<serde_json::Map<_, _>, ()>>()
+                    .collect::<Result<serde_json::Map<_, _>, ReferenceError>>()
                     .map(Value::Object)
             }
         }
@@ -204,6 +370,65 @@ fn resolve_refs(schema: &Value, root: &Value, stack: &mut Vec<String>) -> Result
     }
 }
 
+fn adapt_to_draft_2020_12(schema: Value) -> Value {
+    const SINGLE_SCHEMA_KEYWORDS: &[&str] = &[
+        "additionalItems",
+        "additionalProperties",
+        "contains",
+        "contentSchema",
+        "items",
+        "not",
+        "propertyNames",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+        "if",
+        "then",
+        "else",
+    ];
+    const SCHEMA_ARRAY_KEYWORDS: &[&str] = &["allOf", "anyOf", "oneOf", "prefixItems"];
+    const SCHEMA_MAP_KEYWORDS: &[&str] = &[
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+        "patternProperties",
+        "properties",
+    ];
+    match schema {
+        Value::Object(mut object) => {
+            for keyword in SINGLE_SCHEMA_KEYWORDS {
+                if let Some(nested) = object.get_mut(*keyword) {
+                    *nested = adapt_to_draft_2020_12(nested.take());
+                }
+            }
+            for keyword in SCHEMA_ARRAY_KEYWORDS {
+                if let Some(values) = object.get_mut(*keyword).and_then(Value::as_array_mut) {
+                    for nested in values {
+                        *nested = adapt_to_draft_2020_12(nested.take());
+                    }
+                }
+            }
+            for keyword in SCHEMA_MAP_KEYWORDS {
+                if let Some(entries) = object.get_mut(*keyword).and_then(Value::as_object_mut) {
+                    for nested in entries.values_mut() {
+                        *nested = adapt_to_draft_2020_12(nested.take());
+                    }
+                }
+            }
+            if let Some(entries) = object
+                .get_mut("dependencies")
+                .and_then(Value::as_object_mut)
+            {
+                for nested in entries.values_mut().filter(|value| value.is_object()) {
+                    *nested = adapt_to_draft_2020_12(nested.take());
+                }
+            }
+            object.insert("$schema".to_owned(), json!(DRAFT_2020_12_DIALECT));
+            Value::Object(object)
+        }
+        boolean_schema => boolean_schema,
+    }
+}
+
 #[allow(dead_code)]
 pub fn validates(schema_name: &str, value: &Value) -> bool {
     validates_schema(&resolve_schema(schema_name), value)
@@ -211,29 +436,16 @@ pub fn validates(schema_name: &str, value: &Value) -> bool {
 
 pub fn validates_ref_with_siblings(schema: &Value, value: &Value) -> bool {
     let root = document();
-    let resolved = resolve_refs(schema, &root, &mut Vec::new())
-        .expect("OpenAPI schema references and siblings resolve");
-    validates_schema(&with_draft(resolved), value)
-}
-
-fn with_draft(schema: Value) -> Value {
-    match schema {
-        Value::Object(mut object) => {
-            object.insert("$schema".to_owned(), json!(DRAFT_2020_12_DIALECT));
-            Value::Object(object)
-        }
-        // Boolean Schema Objects are valid in OpenAPI 3.1. Preserve their
-        // allow-all/deny-all semantics while declaring the validator dialect.
-        boolean_schema => json!({
-            "$schema": DRAFT_2020_12_DIALECT,
-            "allOf": [boolean_schema]
-        }),
-    }
+    let Ok(resolved) = resolve_schema_value_in_document(&root, schema) else {
+        return false;
+    };
+    validates_schema(&resolved, value)
 }
 
 fn validates_schema(schema: &Value, value: &Value) -> bool {
     jsonschema::options()
         .should_validate_formats(true)
+        .with_draft(jsonschema::Draft::Draft202012)
         .build(schema)
         .expect("OpenAPI schema is valid Draft 2020-12 JSON Schema")
         .is_valid(value)

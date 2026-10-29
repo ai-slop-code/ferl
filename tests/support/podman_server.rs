@@ -332,7 +332,7 @@ impl ContainerServer {
     }
 
     pub async fn stop_naturally(self) -> ExitedServer {
-        let started = tokio::time::Instant::now();
+        let signal_started = tokio::time::Instant::now();
         let signal = command_output(
             "podman",
             &["kill", "--signal", "TERM", &self.name],
@@ -348,6 +348,10 @@ impl ContainerServer {
             waited.status.success(),
             "packaged server exits before forced cleanup"
         );
+        // Stop timing at observed process exit, before inspect, log collection,
+        // or container removal. The measurement conservatively includes the
+        // bounded Podman signal-delivery command.
+        let shutdown_elapsed = signal_started.elapsed();
         let inspect = command_output(
             "podman",
             &[
@@ -375,7 +379,7 @@ impl ContainerServer {
         ExitedServer {
             logs: safe_output(&logs),
             exit_code: exit.parse().expect("container exit code is numeric"),
-            shutdown_elapsed: started.elapsed(),
+            shutdown_elapsed,
             oom_killed: oom == "true",
         }
     }

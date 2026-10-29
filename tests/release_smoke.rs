@@ -243,13 +243,27 @@ async fn packaged_binary_migrates_bootstraps_serves_rotates_deletes_and_restarts
                         second.address,
                         "GET",
                         "/api/v1/me",
-                        Some(&current_key),
+                        Some(&initial_key),
                         "",
                     )
                     .await
                     .unwrap();
                     assert_headers(&after_restart);
-                    assert_eq!(after_restart.status, 200);
+                    assert_eq!(after_restart.status, 401,
+                        "the formerly revoked API key remains revoked after process restart");
+                    assert_eq!(json(&after_restart)["error"]["code"], "invalid_credentials");
+                    let current_after_restart = send(
+                        second.address,
+                        "GET",
+                        "/api/v1/me",
+                        Some(&current_key),
+                        "",
+                    )
+                    .await
+                    .unwrap();
+                    assert_headers(&current_after_restart);
+                    assert_eq!(current_after_restart.status, 200,
+                        "the replacement API key remains valid after process restart");
                     let old_code = send(second.address, "GET", "/release-smoke", None, "")
                         .await
                         .unwrap();

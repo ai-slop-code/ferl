@@ -1,5 +1,131 @@
 # Implementation progress and agent handoff
 
+## Verification-integrity closure — Complete
+
+### Verified implementation and results — 2026-10-29
+
+Status: **Complete**. Branch
+`maintenance/verification-integrity-closure`; base `960f7a422f593c42383d2b8fe719ffd8aaee9ae4`;
+verified implementation commit `7309ea5ead2279b6ea01470c8382abed6013a177`;
+handoff-only follow-up commit `ea961a30bceca87b75c5ca969656dce5791565ea`.
+Integrated into local `main` by an explicit no-ff merge with parents
+`960f7a422f593c42383d2b8fe719ffd8aaee9ae4` and
+`ea961a30bceca87b75c5ca969656dce5791565ea`. The merge commit hash is reported
+after creation, not embedded here. The maintenance branch is retained.
+No normative contract, migration, production feature, or dependency version
+changed; this milestone closes evidence-integrity gaps for existing behavior.
+
+Confirmed findings and fixes:
+
+- **Historical counts:** Listing-only inventory at retained hardening commit
+  `9755fb61a42fa8d328ca5723a0cec1927afe0541` is 97 library + 0 binary + 128
+  integration cases in 52 integration binaries = 225 all-target cases, plus 3
+  doctests. This confirms 225 + 3 = 228 distinct cases. The original hardening
+  raw gate log is absent; the retained evidence directory contains artifacts
+  and repackages only. Original pass/fail/ignored output therefore remains
+  unverified; the previous Complete status is preserved.
+- **OpenAPI:** Normative and malformed documents share one complete OAS
+  3.1/JSON Schema validation path. Resolvers use supplied documents; inline,
+  component, and webhook schema roots are discovered structurally; nested
+  map-keyword dialects are checked before adaptation; boolean schemas and
+  conjunctive `$ref` siblings are preserved. `$dynamicRef` is rejected because
+  dynamic-scope/anchor semantics are not implemented. Route ownership now uses
+  valid authorization and operation-specific outcomes, plus exact Allow sets,
+  received headers, and body bytes.
+- **Proxy:** The observed NGINX instance and peer IP are retained through
+  upstream replacement. Its config is directory-mounted so reload observes the
+  new backend. The TCP test checks raw/encoded/trailing/multi-segment paths,
+  GET/HEAD, zero redirect bytes, exact query+fragment Location, common headers,
+  unsupported-method behavior, maximum legal analytics headers, and all issued
+  large-cursor pages through explicit null termination. Host-gateway loopback
+  remains distinct from the safely trusted bridge peer and direct caller.
+- **TLS/lifecycle:** Positive/negative CA files are parsed and readable; both
+  hostname alias pairs resolve to their run-owned servers. PostgreSQL rejection
+  is bracketed by successful migrations on the same fixture. OTLP rejection is
+  bracketed by positive same-Collector recovery; received records are decoded,
+  checked for meaningful content, and attributed to the actual process by
+  `service.instance.id`. Process output and TLS-exported payloads are scanned
+  for privacy canaries. Absence no longer relies on arbitrary sleep. Owned
+  cleanup is synchronous on cancellation; a controlled cancellation test proves
+  owned containers/networks are removed while Stage 01 container/volume
+  identities survive. Shutdown timing ends at process exit before later
+  inspection/log collection/removal.
+- **Packaging:** Archive validation precedes extraction and checks canonical
+  unique paths, links/special entries, exact directories/files, checksums,
+  committed migration inventory, source blobs/tree, target ELF, and builder
+  receipt. A Git-archive source snapshot is checked path/mode/byte-for-byte and
+  made read-only before the locked build. Build receipt binds binary hash,
+  target, source tree, invocation, command, and observed builder. Archive and
+  sidecar writes and staging extraction are atomic. Packaged restart smoke now
+  checks the revoked credential after restart along with code reservation and
+  absence of reseeding.
+- **CI/MSRV:** Workflow passes the toolchain prefix rather than a path already
+  ending in `/bin`; the script pins/checks Rust, Rustdoc, and Cargo 1.94.0.
+  Rust 1.99.1 remains the normal toolchain.
+
+Post-commit verification on implementation `7309ea5ead2279b6ea01470c8382abed6013a177`:
+
+| Command | Observed result |
+|---|---|
+| `sh scripts/check-openapi.sh` | Passed 3 tests, 0 failures/ignored; whole document, focused mutation controls, authorized route ownership, exact Allow sets, received headers, and bodyless behavior. |
+| `sh scripts/check.sh` | Passed **226 all-target cases** (97 library, 0 binary, 129 integration cases across 52 binaries) plus **3 doctests**, 0 failures/ignored. Includes fmt, locked check, warning-denied Clippy, PostgreSQL, process, Collector, proxy, release smoke, and TLS. Log: `target/verification-integrity/7309ea5/full-gate.log`. |
+| `sh scripts/check-proxy.sh` | Passed 1 packaged production TCP proxy test. Observed host-gateway peer `127.0.0.1`, NGINX/backend peer `10.89.0.4`, direct untrusted peer `10.89.0.3`. Log: `target/verification-integrity/7309ea5/check-proxy.log`. |
+| `sh scripts/check-release.sh` | Passed 7 packaged Rust tests (3 OpenAPI, proxy, release smoke, 2 TLS) and 8 Python release-verifier controls; 0 failures/ignored. Log: `target/verification-integrity/7309ea5/check-release.log`. |
+| `sh scripts/check-tls.sh` | Passed 2 packaged TLS/lifecycle tests. PostgreSQL `verify-full` migration/bootstrap/recovery and TLS rejection controls passed; Collector decoded 10 traces, 14 metrics, 11 logs from the intended process. Log: `target/verification-integrity/7309ea5/check-tls.log`. |
+| MSRV/CI invocation shape | `TOOLCHAIN_BIN="$PWD/target/toolchains/rust-1.94.0/bin"; TOOLCHAIN_PREFIX="$(dirname "$TOOLCHAIN_BIN")"; FERL_MSRV_TOOLCHAIN_DIR="$TOOLCHAIN_PREFIX" sh scripts/check-msrv.sh` passed locked all-target/all-feature check and production release build using `rustc/rustdoc 1.94.0 (4a4ef493e 2026-03-02)` and `cargo 1.94.0 (85eff7c80 2026-01-15)` on `aarch64-apple-darwin`. Local installed prefix used because rustup is unavailable. Log: `target/verification-integrity/7309ea5/check-msrv-ci-shape.log`. |
+
+The consolidated count above contains one all-target invocation and one separate
+doctest invocation. Focused OpenAPI/TLS/cleanup tests and historical `--list`
+inventory controls were run separately and are not added to the 226 + 3.
+
+Clean-checkout release proof ran `sh scripts/check-release.sh` in detached
+worktree `$TMPDIR`
+at the exact implementation commit, with complete history and legacy commit
+`9bcf7c0c021c994e76d0696633fe822f0a49a5e1` reachable. Cargo test and builder
+target directories were initially fresh; the registry cache was reused (warm,
+not cold). The package verified 17 files, exact OpenAPI and both migrations,
+schema v2, `source_tree_clean=true`, and ran as UID 65532 in the same pinned
+Debian Bookworm arm64 image used for its build. Packaged migrate/bootstrap/
+create/list/GET/HEAD/reports/rotate/delete/restart-without-reseeding passed.
+
+- Artifact: `target/verification-integrity/7309ea5/clean-checkout/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`
+- Archive SHA-256: `16ca864fe57e62400edd141837cc1cbd0cd569f1cc5edf110a5d36606598b9a5`
+- Binary SHA-256: `76fb42bffd1e224c616b87ca19b22ec52201e9fe101d4a7954a247bab3c32919`
+- OpenAPI SHA-256: `45677d0d0c0afda4687fada791ce492682ad546f2fbc612113890cffecbb6b5e`
+- Source tree: `2f5d020db52daf1404d4c1014ec779e48a7a50ca`; build invocation:
+  `0c232a81f0ee42b2870cebb8a0784562`; build-receipt SHA-256:
+  `096eac7f93d6cabeb37ea2c2fefe0044c4bb35bfd36c5347fddbbf3edb80b65b`; builder image:
+  `docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`.
+
+Two repackages of identical binary/source/build-receipt inputs produced the
+same archive checksum as the clean-checkout package. Separate fresh-target
+builds on this same host and pinned builder also produced the same binary hash;
+the warm registry was shared, so this is not a cold-cache or cross-machine
+reproducibility claim. Hosted CI was not run. The available host/Podman VM is
+macOS/aarch64 and Linux/arm64; native Linux/amd64 runtime verification is not
+claimed. No blocker remains; awaiting local Git integration.
+
+Branch `maintenance/verification-integrity-closure`; base `main` commit
+`960f7a422f593c42383d2b8fe719ffd8aaee9ae4`. Initial inspection found a clean
+index/tree, no pending Git operation or remote, configured identity
+`LubosBa <30705301+LubosBa@users.noreply.github.com>`, no `AGENTS.md`, the expected hardening merge
+parents, and the retained legacy compatibility commit. The pre-existing
+`ferl-stage01-postgres` container and `ferl-stage01-postgres-data` volume are
+label-verified and running; they must remain untouched except for authorized
+fixture use that preserves the volume.
+
+### Evidence-based worklist (before implementation)
+
+| Location | Demonstrated defect or hypothesis; plausible false green | Focused control | Acceptance condition |
+|---|---|---|---|
+| Historical gate records / `progress.md`, `acceptance-map.md`, `docs/release-verification.md` | The reported 228 all-target count may include the 3-doctest result that is then listed again. The retained hardening artifact directory has packages/repackages but no raw gate log, so original per-binary arithmetic cannot currently be independently reconstructed. | Search retained evidence; preserve the limitation. Capture fresh `cargo test --workspace --all-targets` and `cargo test --workspace --doc` output separately and count each binary/result without repeated filtered runs. | New counts are disjoint and exact; historical correction is explicit and does not invent missing original output. |
+| `tests/support/openapi.rs`, `tests/openapi_release.rs` | Schema-root helpers can overwrite/check dialects inconsistently, `$dynamicRef` pointer existence is mistaken for semantics, map-valued schema keywords may hide nested dialects, and malformed documents do not all use one document validator. | Mutate supplied documents at operation responses, nested `properties`/`$defs`, boolean schemas, `$ref` siblings, and `$dynamicRef`; call the same complete validation entry point. | Normative document passes; each plausible malformed variant fails before adaptation, and unsupported dynamic-reference semantics are accurately rejected. |
+| `tests/openapi_release.rs` route probes | Unauthenticated 401 or 403 can establish that some protected route claimed a path without proving the intended handler owns it. | Use existing authorized database fixtures and operation-specific responses/effects for route ownership; retain exact response/header/body assertions. | All reviewed operations have distinct executable evidence; `Allow`, received headers, and body bytes match actual behavior. |
+| `tests/proxy_routing.rs`, `scripts/proxy.sh` | The peer-observation NGINX is removed before a different instance forwards trusted assertions; the test does not bind later identity to the observed peer. Several claimed GET/HEAD, redirect-byte, exact Location, method-error, and final cursor-page assertions are incomplete. | Keep one observed NGINX instance for forwarding, verify its network identity across upstream reconfiguration, and traverse all actual proxy pages including termination. | Trusted address belongs to the proxy used for assertions; paths, GET/HEAD, headers, unsupported method, maximum analytics headers, and every cursor bucket are checked over TCP. |
+| `tests/release_tls.rs`, `tests/support/podman_server.rs` | TLS negatives can pass for non-TLS causes; the CA/preflight does not prove parsing/use; telemetry identity/privacy and absence-of-export use incomplete evidence; cleanup fallback is detached and shutdown timing includes later collection/removal. | Add same-fixture positive recovery, explicit CA/hostname checks, run-scoped decoded signal/privacy checks, bounded export-settling evidence, synchronous owned-resource cleanup regression, and signal-to-exit timing. | Positive and negative cases isolate TLS validation; telemetry belongs to this process/run; cleanup is complete before test exit and leaves unrelated fixtures intact. |
+| `scripts/prepare-release-package.sh`, `scripts/verify-release.py`, `scripts/package_release.py`, `scripts/build-linux.sh` | `tar` extraction precedes verification; normalized duplicate paths and special members need adversarial controls; caller metadata can outlive/bypass its build invocation; provenance migration inventory must be tied to the committed source. | Pre-validate every archive member/checksum before writing files; reject path aliases/links/special/unexpected entries; bind an observed build receipt and committed source tree; test plausible substitution/corruption/interruption cases. | No unverified archive is extracted or accepted; source, target, binary, migrations, and observed builder evidence agree; partial output cannot verify as complete. |
+| `.github/workflows/ci.yml`, `scripts/check-msrv.sh`, docs | CI passes a `.../bin` path to an interface that appends `/bin`, so the hosted MSRV command shape likely resolves `bin/bin`. | Execute the documented prefix form and the exact CI invocation shape locally with actual Rust/Cargo 1.94.0; compare target/build prerequisites. | Both intended interfaces select Rust/Cargo 1.94.0 and complete the locked check/release build; no hosted CI success is claimed. |
+
 Handoff summary: Parts 01–11 are complete and merged into local `main`. Part 11 — Release verification was verified on `implementation/11-release-verification` from baseline `71d77b3f3838081add13d46cdefe0a91cdd70efd` and integrated by the explicit no-ff merge recorded below.
 
 ## Post-release hardening milestone — 2026-10-29
@@ -61,8 +187,18 @@ Final local gates on the committed implementation:
   10 traces, 14 metrics, and 11 log records; invalid CA and hostname controls
   rejected export while API/readiness stayed healthy and shutdown stayed under
   the configured 20-second total bound.
-- `sh scripts/check.sh` — **228 all-target tests plus 3 doctests passed**, with
-  0 failures and 0 ignored tests. This includes formatting, locked check,
+- `sh scripts/check.sh` — the handoff's **historical count correction** is an
+  inventory of 225 all-target test cases plus 3 doctests (228 distinct cases),
+  not 228 all-target cases plus 3 doctests. Listing-only controls at retained
+  implementation `9755fb61a42fa8d328ca5723a0cec1927afe0541` ran
+  `cargo test --locked --workspace --all-targets -- --list` (97 library, 0
+  binary, 128 integration cases across 52 integration binaries) and
+  `cargo test --locked --workspace --doc -- --list` (3 doctests): 225 + 3.
+  These enumerate test cases and do not execute tests. The original hardening
+  raw gate log was not retained: `target/hardening-evidence/9755fb6-clean-checkout/`
+  contains packages/repackages but no gate output, so original pass/fail and
+  ignored status cannot be independently re-established. The historical
+  handoff recorded no failures/ignored tests. Its gate included formatting, locked check,
   warning-denied Clippy, PostgreSQL, independent-process, Collector, proxy,
   packaged release, and TLS suites.
 - `FERL_MSRV_TOOLCHAIN_DIR=target/toolchains/rust-1.94.0 sh scripts/check-msrv.sh`

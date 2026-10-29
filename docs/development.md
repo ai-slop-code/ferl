@@ -27,7 +27,11 @@ Run the declared compiler floor with `sh scripts/check-msrv.sh` after installing
 Rust 1.94.0. It uses separate `target/msrv-1.94/` directories for the locked
 all-target/all-feature workspace check and production release build. If the
 compiler is installed in an isolated prefix rather than through rustup, set
-`FERL_MSRV_TOOLCHAIN_DIR` to that prefix. This is a real compiler gate, not
+`FERL_MSRV_TOOLCHAIN_DIR` to the **toolchain prefix** (the directory containing
+`bin/`); the script appends `/bin` and selects matching `rustc`, `rustdoc`, and
+`cargo` 1.94.0. Do not pass the result of `dirname rustup which rustc` directly,
+because that path already ends in `/bin`. CI resolves `rustc` and takes its
+parent's parent before calling the script. This is a real compiler gate, not
 `cargo metadata` evidence.
 
 The PostgreSQL integration test is required by the ordinary test command. It

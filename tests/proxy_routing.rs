@@ -42,18 +42,11 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
     let database = migrated_database().await;
     let run_id = Uuid::new_v4().simple().to_string();
     let host_probe_id = format!("part11-hostprobe-{run_id}");
-    let probe_proxy_id = format!("part11-networkprobe-{run_id}");
     let proxy_id = format!("part11-proxy-{run_id}");
     let network = format!("ferl-part11-net-{run_id}");
     let host_proxy_port = reserve_port().await;
     let proxy_port = reserve_distinct_port(&[host_proxy_port]).await;
-    let probe_proxy_port = reserve_distinct_port(&[host_proxy_port, proxy_port]).await;
     assert_ne!(host_proxy_port, proxy_port);
-    assert_ne!(host_proxy_port, probe_proxy_port);
-    assert_ne!(
-        probe_proxy_port, proxy_port,
-        "host-gateway probe and trusted proxy replacement use independent ports"
-    );
     let host_runtime = std::env::current_dir()
         .unwrap()
         .join("target/proxy")
@@ -62,20 +55,14 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
         .unwrap()
         .join("target/proxy")
         .join(&proxy_id);
-    let probe_runtime = std::env::current_dir()
-        .unwrap()
-        .join("target/proxy")
-        .join(&probe_proxy_id);
     let server_a = format!("ferl-part11-proxy-a-{run_id}");
     let server_b = format!("ferl-part11-proxy-b-{run_id}");
     let cleanup_server_a_name = server_a.clone();
     let cleanup_server_b_name = server_b.clone();
     let cleanup_network = network.clone();
     let cleanup_host_id = host_probe_id.clone();
-    let cleanup_probe_proxy_id = probe_proxy_id.clone();
     let cleanup_proxy_id = proxy_id.clone();
     let cleanup_host_runtime = host_runtime.clone();
-    let cleanup_probe_runtime = probe_runtime.clone();
     let cleanup_proxy_runtime = proxy_runtime.clone();
     let result = AssertUnwindSafe(async {
         let network_for_test = podman_server::create_network(&run_id).await;
@@ -185,28 +172,27 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     )
                     .await;
                     proxy_action(
-                        &probe_proxy_id,
-                        probe_proxy_port,
+                        &proxy_id,
+                        proxy_port,
                         "8080",
                         "ferl-backend",
                         Some(&network_for_test),
-                        &probe_runtime,
+                        &proxy_runtime,
                         "start",
                     )
                     .await;
                     proxy_action(
-                        &probe_proxy_id,
-                        probe_proxy_port,
+                        &proxy_id,
+                        proxy_port,
                         "8080",
                         "ferl-backend",
                         Some(&network_for_test),
-                        &probe_runtime,
+                        &proxy_runtime,
                         "ready",
                     )
                     .await;
-                    let probe_proxy = SocketAddr::from(([127, 0, 0, 1], probe_proxy_port));
                     let proxy = SocketAddr::from(([127, 0, 0, 1], proxy_port));
-                    let nginx_container = format!("ferl-part11-proxy-{probe_proxy_id}");
+                    let nginx_container = format!("ferl-part11-proxy-{proxy_id}");
                     let upstream_probe = podman_server::command_output(
                         "podman",
                         &[
@@ -235,17 +221,17 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     .unwrap();
                     assert_eq!(direct_api.status, 201, "packaged API works directly over its published port");
 
-                    let root = send(probe_proxy, "GET", "/", None, "").await.unwrap();
+                    let root = send(proxy, "GET", "/", None, "").await.unwrap();
                     assert_eq!(root.status, 200);
                     assert!(String::from_utf8_lossy(&root.body).contains("Separate static fixture"));
-                    let asset = send(probe_proxy, "GET", "/assets/example.js", None, "")
+                    let asset = send(proxy, "GET", "/assets/example.js", None, "")
                         .await
                         .unwrap();
                     assert_eq!(asset.status, 200);
                     assert!(String::from_utf8_lossy(&asset.body).contains("static asset served outside"));
 
                     let observed = send_with_headers(
-                        probe_proxy,
+                        proxy,
                         "GET",
                         "/proxy-observe",
                         None,
@@ -274,6 +260,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     assert_ne!(proxy_peer, IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
                     let nginx_ip = container_ip(&nginx_container).await;
                     assert_eq!(proxy_peer, nginx_ip, "DB proves NGINX's actual container peer");
+                    let nginx_identity = container_id(&nginx_container).await;
 
                     // Observe the direct peer before granting proxy trust. It
                     // must differ from the NGINX bridge peer; otherwise this
@@ -316,17 +303,6 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     let server_a_exit = backend_a.stop_naturally().await;
                     assert_eq!(server_a_exit.exit_code, 0);
                     assert!(!server_a_exit.oom_killed);
-                    let probe_cleanup = proxy_action(
-                        &probe_proxy_id,
-                        probe_proxy_port,
-                        "8080",
-                        "ferl-backend",
-                        Some(&network_for_test),
-                        &probe_runtime,
-                        "cleanup",
-                    )
-                    .await;
-                    assert!(probe_cleanup.status.success());
 
                     let trusted = proxy_peer.to_string();
                     let settings = [("FERL_TRUSTED_PROXIES", trusted.as_str())];
@@ -342,6 +318,21 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     )
                     .await;
                     let backend_ip = container_ip(&server_b).await.to_string();
+                    let backend_health = podman_server::command_output(
+                        "podman",
+                        &[
+                            "exec",
+                            &nginx_container,
+                            "wget",
+                            "-qO-",
+                            &format!("http://{backend_ip}:8080/api/health/ready"),
+                        ],
+                        Duration::from_secs(10),
+                    )
+                    .await;
+                    assert!(backend_health.status.success(),
+                        "the retained NGINX container reaches replacement backend IP {backend_ip}: {}",
+                        String::from_utf8_lossy(&backend_health.stderr));
                     proxy_action(
                         &proxy_id,
                         proxy_port,
@@ -349,25 +340,36 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         &backend_ip,
                         Some(&network_for_test),
                         &proxy_runtime,
-                        "start",
+                        "reload",
                     )
                     .await;
-                    proxy_action(
-                        &proxy_id,
-                        proxy_port,
-                        "8080",
-                        &backend_ip,
-                        Some(&network_for_test),
-                        &proxy_runtime,
-                        "ready",
-                    )
-                    .await;
+                    let effective_config = podman_server::command_output(
+                        "podman",
+                        &["exec", &nginx_container, "nginx", "-T"],
+                        Duration::from_secs(10),
+                    ).await;
+                    assert!(effective_config.status.success());
+                    assert!(String::from_utf8_lossy(&effective_config.stdout).contains(&backend_ip),
+                        "running NGINX config uses the replacement backend's observed address");
+                    assert_eq!(container_id(&nginx_container).await, nginx_identity,
+                        "the actual proxy instance observed before trust remains alive for assertions");
+                    assert_eq!(container_ip(&nginx_container).await, nginx_ip,
+                        "the forwarding proxy's peer address cannot pass by replacement-address reuse");
+                    let nginx_health = podman_server::command_output(
+                        "podman",
+                        &["exec", &nginx_container, "wget", "-qO-", "http://127.0.0.1:8080/api/health/ready"],
+                        Duration::from_secs(10),
+                    ).await;
+                    assert!(nginx_health.status.success(),
+                        "reloaded NGINX forwards health to its replacement backend");
+                    let proxy_ready = wait_for_reloaded_backend(proxy).await;
+                    assert_headers(&proxy_ready);
 
                     for (code, destination) in [
                         ("assets", "https://proxy-assets.example/path"),
                         ("health", "https://proxy-health.example/path"),
                         ("api-sale", "https://proxy-api-sale.example/path"),
-                        ("proxyraw", "https://proxy-raw.example/path"),
+                        ("proxyraw", "https://proxy-raw.example/path?edition=2#section"),
                         ("proxyquote", "https://proxy-quote.example/path"),
                         ("proxyutf8", "https://proxy-utf8.example/path"),
                     ] {
@@ -414,6 +416,16 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                             .unwrap();
                         assert_headers(&response);
                         assert_eq!(response.status, 302, "/{code} belongs to short-link routing");
+                        assert!(response.body.is_empty(), "redirect responses have zero body bytes");
+                    }
+                    for method in ["GET", "HEAD"] {
+                        let response = send(proxy, method, "/proxyraw?incoming=ignored", None, "")
+                            .await
+                            .unwrap();
+                        assert_headers(&response);
+                        assert_eq!(response.status, 302);
+                        assert_eq!(response.headers["location"], "https://proxy-raw.example/path?edition=2#section");
+                        assert!(response.body.is_empty(), "NGINX-forwarded {method} redirect is bodyless");
                     }
                     let static_missing = send(proxy, "GET", "/assets/missing.js", None, "")
                         .await
@@ -444,6 +456,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         "/definitely-missing/extra",
                     ] {
                         let response = send(proxy, "GET", path, None, "").await.unwrap();
+                        assert_headers(&response);
                         assert_eq!(response.status, 404, "raw path {path} is never normalized to a redirect");
                         assert!(!response.headers.contains_key("location"));
                         assert!(!String::from_utf8_lossy(&response.body)
@@ -452,8 +465,11 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     let unsupported = send(proxy, "POST", "/proxyraw", None, "")
                         .await
                         .unwrap();
+                    assert_headers(&unsupported);
                     assert_eq!(unsupported.status, 405);
                     assert_eq!(unsupported.headers["allow"], "GET, HEAD");
+                    assert_eq!(json(&unsupported)["error"]["code"], "method_not_allowed");
+                    assert_eq!(unsupported.headers["content-type"], "application/json");
 
                     let too_large_body = "x".repeat(65_537);
                     let too_large = send(
@@ -566,6 +582,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                             .await
                             .unwrap();
                             assert_eq!(redirect.status, 302);
+                            assert!(redirect.body.is_empty(), "redirect through NGINX has no body bytes");
                         }
                     }
                     wait_for_user_agent(database.pool(), "proxyquote", &quote_value).await;
@@ -586,6 +603,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         assert_headers(&first_page);
                         assert_eq!(first_page.status, 200);
                         let page = json(&first_page);
+                        assert_eq!(page["items"].as_array().unwrap().len(), 2);
                         assert_eq!(page["items"][0]["value"], "A");
                         assert_eq!(page["items"][1]["value"], maximum);
                         let cursor = page["next_cursor"].as_str().unwrap();
@@ -601,7 +619,21 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         .unwrap();
                         assert_headers(&next_page);
                         assert_eq!(next_page.status, 200, "actual issued cursor traverses NGINX");
-                        assert_eq!(json(&next_page)["items"][0]["value"], "N");
+                        let next_body = json(&next_page);
+                        assert_eq!(next_body["items"], serde_json::json!([{"value":"N","visits":1}]));
+                        let next_cursor = next_body["next_cursor"].as_str().unwrap();
+                        let final_page = send(
+                            proxy,
+                            "GET",
+                            &format!("/api/v1/links/{code}/stats/breakdown?group_by=user_agent&limit=1&cursor={next_cursor}"),
+                            Some(&key),
+                            "",
+                        ).await.unwrap();
+                        assert_headers(&final_page);
+                        assert_eq!(final_page.status, 200);
+                        let final_body = json(&final_page);
+                        assert_eq!(final_body["items"], serde_json::json!([{"value":"Z","visits":1}]));
+                        assert!(final_body["next_cursor"].is_null(), "server-issued pages terminate explicitly after every bucket");
                     }
 
                     let backend_root = send(backend.address, "GET", "/", None, "")
@@ -620,7 +652,8 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     for secret in [key.as_str(), "PROXY_EFFECTIVE_IP_CANARY", "UNTRUSTED_DIRECT_IP_CANARY"] {
                         assert!(!exit.logs.contains(secret));
                     }
-                    let proxy_config = fs::read_to_string(proxy_runtime.join("default.conf")).unwrap();
+                    let proxy_config =
+                        fs::read_to_string(proxy_runtime.join("conf.d/default.conf")).unwrap();
                     assert!(proxy_config.contains(&backend_ip));
                     assert!(proxy_config.contains("large_client_header_buffers 4 128k"));
                 })
@@ -642,16 +675,6 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
         "cleanup",
     )
     .await;
-    let cleanup_probe_proxy = proxy_action(
-        &cleanup_probe_proxy_id,
-        probe_proxy_port,
-        "8080",
-        "ferl-backend",
-        Some(&network),
-        &cleanup_probe_runtime,
-        "cleanup",
-    )
-    .await;
     let cleanup_host_proxy = proxy_action(
         &cleanup_host_id,
         host_proxy_port,
@@ -666,7 +689,6 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
     assert!(cleanup_server_a.status.success() || !container_exists(&cleanup_server_a_name).await);
     assert!(cleanup_server_b.status.success() || !container_exists(&cleanup_server_b_name).await);
     assert!(cleanup_proxy.status.success());
-    assert!(cleanup_probe_proxy.status.success());
     assert!(cleanup_host_proxy.status.success());
     assert!(cleanup_network.status.success());
     if let Err(panic) = result {
@@ -718,6 +740,27 @@ async fn reserve_distinct_port(excluded: &[u16]) -> u16 {
     }
 }
 
+async fn wait_for_reloaded_backend(proxy: SocketAddr) -> serving_process::HttpResult {
+    timeout(Duration::from_secs(15), async {
+        loop {
+            let response = send(proxy, "GET", "/api/health/ready", None, "")
+                .await
+                .expect("reloaded proxy readiness request reaches TCP");
+            if response.status == 200 {
+                return response;
+            }
+            assert!(
+                matches!(response.status, 502 | 504),
+                "proxy backend reconfiguration returned an unexpected status {}",
+                response.status
+            );
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the retained NGINX instance forwards to its replacement backend before deadline")
+}
+
 async fn container_ip(name: &str) -> IpAddr {
     let output = podman_server::command_output(
         "podman",
@@ -739,6 +782,20 @@ async fn container_ip(name: &str) -> IpAddr {
         .trim()
         .parse()
         .expect("NGINX receives an address on the isolated user-defined network")
+}
+
+async fn container_id(name: &str) -> String {
+    let output = podman_server::command_output(
+        "podman",
+        &["inspect", "--format", "{{.Id}}", name],
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        output.status.success(),
+        "Podman inspects owned container {name}"
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
 async fn proxy_client(run_id: &str) -> IpAddr {

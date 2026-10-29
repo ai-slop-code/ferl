@@ -94,7 +94,9 @@ scenarios; it adds no business behavior or normative contract change.
   document's required response maps checked positively, actual protected-route
   ownership outcomes, received response headers, all 22 reviewed
   `(method,path,operationId)` entries, supported schema dialects, boolean
-  Schema Objects, local `$ref`/`$dynamicRef` checks, and invalid controls.
+  Schema Objects, local `$ref` checks, and invalid controls. Its former
+  `$dynamicRef` pointer-existence check is not semantic support; the new closure
+  rejects dynamic references explicitly and records that limitation.
 - **Release provenance/restart:** the clean-checkout `sh scripts/check-release.sh`
   passed from the exact implementation commit with fresh Cargo targets and full
   Git history. Its archived artifact has source revision
@@ -104,10 +106,58 @@ scenarios; it adds no business behavior or normative contract change.
   rotation/delete/restart-without-reseeding flow. Registry cache reuse is
   recorded in `progress.md` and `docs/release-verification.md`.
 
-The final consolidated local result was **228 all-target tests plus 3 doctests**
-with no failures or ignored tests. Rust 1.94 and TLS are new hardening evidence;
-hosted CI and the amd64 runtime remain unverified and are not represented as
-passing.
+**Historical count correction:** the previous hardening handoff's 228 aggregated
+test-result count included the 3-doctest result, which was then listed again as
+additional evidence. Listing-only inventory at retained implementation
+`9755fb61a42fa8d328ca5723a0cec1927afe0541` confirms **225 all-target cases**
+(97 library, 0 binary, 128 integration cases across 52 integration binaries)
+and **3 doctests**, 228 distinct cases total. The original hardening raw gate
+log was not retained under `target/hardening-evidence/9755fb6-clean-checkout/`,
+so this verifies the test inventory/arithmetic, not the original per-binary
+pass/fail or ignored results and is not fresh execution evidence. Rust 1.94 and
+TLS remain historical hardening evidence; hosted CI and native amd64 runtime
+remain unverified and are not represented as passing.
+
+## Verification-integrity closure addendum — 2026-10-29
+
+Implementation `7309ea5ead2279b6ea01470c8382abed6013a177` adds no acceptance
+scenario or business behavior. It closes the evidence limits above:
+
+- **19, 37–40, 14:** the exact committed `sh scripts/check-proxy.sh` gate
+  passed its production TCP NGINX test. One observed proxy container/network
+  identity is retained across backend replacement; host-gateway loopback is not
+  trusted. Raw path ownership, real GET/HEAD, exact Location/query/fragment,
+  headers/body bytes, method Allow, 8,192-byte headers, and all four ordered
+  breakdown buckets through final `next_cursor: null` are observed over TCP.
+- **29, 30, 31:** `sh scripts/check-tls.sh` and `sh scripts/check-release.sh`
+  passed the packaged TLS tests. Positive and negative cases use run-owned
+  PostgreSQL/Collector fixtures, recovery controls, CA/hostname/DNS validation,
+  decoded records bound by process `service.instance.id`, privacy canaries, and
+  signal-to-process-exit timing. The cancellation cleanup regression verifies
+  owned container/network removal and unchanged Stage 01 PostgreSQL/volume IDs.
+- **51:** `sh scripts/check-openapi.sh` passed 3 tests. A single whole-document
+  validation path requires operation responses, validates component and inline
+  parameter/header/request/response/webhook schemas using the supplied document,
+  traverses schema maps, preserves boolean schemas and `$ref` siblings, and
+  rejects unsupported `$dynamicRef` semantics. Actual authorized outcomes
+  distinguish protected handlers; received common headers, exact Allow sets, and
+  bytes are checked.
+- **1, 5, 6, 9, 20:** the packaged smoke in `sh scripts/check-release.sh` verifies
+  the old key remains revoked after restart, the replacement key works, deleted
+  code remains reserved, and startup does not reseed.
+- **Artifact provenance:** pre-extraction archive validation and committed-source
+  comparison run in `sh scripts/check-release.sh`; Python controls reject
+  corruption, unsafe/canonical path aliases, links/special/unexpected members,
+  migration-inventory forgery, caller-supplied provenance, and binary
+  substitution. The clean-checkout run at the implementation commit produced
+  the archive recorded in `progress.md`; identical-input repackaging matched it.
+
+Post-commit counts: `sh scripts/check.sh` passed **226 all-target cases** (97
+library, 0 binary, 129 integration across 52 binaries) plus **3 doctests**, with
+0 failures/ignored. These are disjoint commands: `check.sh` executes one
+all-target test command and a separate doctest command. The focused OpenAPI gate
+passed 3; proxy passed 1; release passed 7 Rust plus 8 Python controls; TLS
+passed 2. Hosted CI and native Linux/amd64 runtime remain unverified.
 
 ## Additional derived checks
 

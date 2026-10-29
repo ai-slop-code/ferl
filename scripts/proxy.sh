@@ -52,16 +52,16 @@ assert_configuration() {
     }
     mounts=$(podman inspect --format '{{range .Mounts}}{{.Destination}} {{end}}' "$NAME")
     case "$mounts" in
-        *"/etc/nginx/conf.d/default.conf"*"/usr/share/nginx/html"*) ;;
+        *"/etc/nginx/conf.d"*"/etc/nginx/ferl-proxy-headers.conf"*"/usr/share/nginx/html"*) ;;
         *) echo "proxy is missing the checked-in routing config/static fixture mounts" >&2; exit 1 ;;
     esac
 }
 
 render_config() {
-    mkdir -p "$RUNTIME_DIR"
+    mkdir -p "$RUNTIME_DIR/conf.d"
     case "$BACKEND_HOST" in *[!A-Za-z0-9_.-]*) echo "invalid proxy backend hostname" >&2; exit 2 ;; esac
     sed "s/ferl-backend:8080/$BACKEND_HOST:$BACKEND_PORT/" \
-        "$ROOT/deploy/proxy/nginx.conf" > "$RUNTIME_DIR/default.conf"
+        "$ROOT/deploy/proxy/nginx.conf" > "$RUNTIME_DIR/conf.d/default.conf"
     cp "$ROOT/deploy/proxy/ferl-proxy-headers.conf" "$RUNTIME_DIR/ferl-proxy-headers.conf"
 }
 
@@ -104,7 +104,7 @@ case "${1:-}" in
                     --label "$LABEL_KEY=part11-proxy" \
                     --network "$NETWORK" \
                     --publish "127.0.0.1:$PORT:8080" \
-                    --volume "$RUNTIME_DIR/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+                    --volume "$RUNTIME_DIR/conf.d:/etc/nginx/conf.d:ro" \
                     --volume "$RUNTIME_DIR/ferl-proxy-headers.conf:/etc/nginx/ferl-proxy-headers.conf:ro" \
                     --volume "$ROOT/deploy/proxy/static:/usr/share/nginx/html:ro" \
                     "$IMAGE" >/dev/null
@@ -114,7 +114,7 @@ case "${1:-}" in
                     --label "$LABEL_KEY=part11-proxy" \
                     --publish "127.0.0.1:$PORT:8080" \
                     --add-host host.containers.internal:host-gateway \
-                    --volume "$RUNTIME_DIR/default.conf:/etc/nginx/conf.d/default.conf:ro" \
+                    --volume "$RUNTIME_DIR/conf.d:/etc/nginx/conf.d:ro" \
                     --volume "$RUNTIME_DIR/ferl-proxy-headers.conf:/etc/nginx/ferl-proxy-headers.conf:ro" \
                     --volume "$ROOT/deploy/proxy/static:/usr/share/nginx/html:ro" \
                     "$IMAGE" >/dev/null
