@@ -637,7 +637,8 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     for secret in [key.as_str(), "PROXY_EFFECTIVE_IP_CANARY", "UNTRUSTED_DIRECT_IP_CANARY"] {
                         assert!(!exit.logs.contains(secret));
                     }
-                    let proxy_config = fs::read_to_string(proxy_runtime.join("default.conf")).unwrap();
+                    let proxy_config =
+                        fs::read_to_string(proxy_runtime.join("conf.d/default.conf")).unwrap();
                     assert!(proxy_config.contains(&backend_ip));
                     assert!(proxy_config.contains("large_client_header_buffers 4 128k"));
                 })
