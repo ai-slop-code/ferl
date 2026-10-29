@@ -214,7 +214,12 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
             &["migrate"],
         )
         .await;
-        assert!(migrated.status.success(), "packaged migration verifies the trusted PostgreSQL chain and hostname");
+        assert!(
+            migrated.status.success(),
+            "packaged migration verifies the trusted PostgreSQL chain and hostname; exit={:?}, diagnostic={}",
+            migrated.status.code(),
+            sanitized_migration_diagnostic(&migrated.stderr)
+        );
 
         let untrusted_url = database_url("pg-tls.local", "/tls/untrusted-ca.pem");
         let untrusted = release_cli(
@@ -718,6 +723,10 @@ async fn start_tls_postgres(owned: &mut OwnedPodmanRun, name: &str, tls_dir: &Pa
                     "-q",
                     "-t",
                     "1",
+                    "-h",
+                    "127.0.0.1",
+                    "-p",
+                    "5432",
                     "-U",
                     "ferl",
                     "-d",
@@ -986,6 +995,17 @@ fn signal_resources(
 
 fn path(path: &Path) -> &str {
     path.to_str().expect("temporary fixture paths are UTF-8")
+}
+
+fn sanitized_migration_diagnostic(stderr: &[u8]) -> &str {
+    std::str::from_utf8(stderr)
+        .ok()
+        .and_then(|output| {
+            output
+                .lines()
+                .find(|line| line.starts_with("migrate failed ("))
+        })
+        .unwrap_or("no sanitized migration category emitted")
 }
 
 fn bounded_podman_cleanup(arguments: &[&str]) {
