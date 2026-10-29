@@ -20,7 +20,7 @@ recorded only after the commands in the final column have run.
    and captured queue metrics, not delays, to establish ordering.
 4. Validate the entire checked-in OpenAPI 3.1 file using its pinned upstream
    schema, compile all JSON Schema 2020-12 roots, resolve references, compare
-   all 21 operation IDs/methods/paths, and probe actual production HTTP behavior.
+   all 22 operation IDs/methods/paths, and probe actual production HTTP behavior.
 5. Run the pinned NGINX proxy over TCP with separate static files; record
    container-to-host and container-to-container peer addresses before setting
    proxy trust; traverse actual maximum header-derived report cursors.
@@ -33,6 +33,42 @@ recorded only after the commands in the final column have run.
 8. Replace historical/generic acceptance pointers with exact executable tests,
    review the full diff, commit the verified part and handoff, then perform the
    explicit no-ff local merge.
+
+## Observed local results — 2026-10-29
+
+| Command | Observed result |
+|---|---|
+| `sh scripts/check.sh` | Passed on the feature implementation before its one-line NGINX version-comment correction: **224 all-target tests plus 3 doctests**, 0 failures and 0 ignored. It ran formatting, locked check/Clippy/tests, doctests, and the independent-process/proxy/release-smoke suites. |
+| `sh scripts/check-openapi.sh` | Passed on verified implementation `95d053d70c47c7199cfbd45545fa8c08b8d945d1`: 3 tests, 0 failures/ignored. |
+| `sh scripts/check-proxy.sh` | Passed on clean source at `95d053d70c47c7199cfbd45545fa8c08b8d945d1`: 1 production TCP proxy test, 0 failures/ignored; clean-source package provenance verified. |
+| `sh scripts/check-release.sh` | Passed on clean source at the same revision: 5 tests (3 OpenAPI, 1 proxy, 1 packaged release smoke), 0 failures/ignored. |
+
+The host was macOS with Podman 6.1.4, PostgreSQL 17.6, Rust/Cargo 1.99.1,
+NGINX 1.30.6, and the digest-pinned Debian Bookworm Rust 1.99.1 builder. The
+locally built artifact targets `aarch64-unknown-linux-gnu`; this is not evidence
+for other operating systems or architectures. The final ignored local artifact
+is `target/release-packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`,
+SHA-256
+`07d7641e88e852d6891b459c7dbd18f7d0a1db7f0b23850418d7b22718ab5d17`. Its
+provenance records source revision `95d053d70c47c7199cfbd45545fa8c08b8d945d1`,
+`source_tree_clean=true`, 17 inventoried files, OpenAPI SHA-256
+`45677d0d0c0afda4687fada791ce492682ad546f2fbc612113890cffecbb6b5e`, and
+binary SHA-256
+`76fb42bffd1e224c616b87ca19b22ec52201e9fe101d4a7954a247bab3c32919`.
+
+The macOS host-gateway probe observed backend peer `127.0.0.1`; it was not added
+to the trusted-proxy list. On the isolated Podman network the observed NGINX
+peer was `10.89.0.4`, direct untrusted peer `10.89.0.3`, and NGINX-observed
+client peer `10.89.0.6`; the effective forwarded IP matched the latter. The
+harness removed its owned proxy/server containers and network; the pre-existing
+PostgreSQL fixture remains running.
+
+All 51 scenario rows in `spec/implementation/acceptance-map.md` point to exact
+executable evidence. Hosted CI was not run. Rust 1.94 compilation and an
+end-to-end TLS handshake were not run and are not claimed. The full-gate
+pre-correction package hash is intentionally not presented as a release
+artifact; only the clean-source checksum above is the final local package
+evidence.
 
 ## Scenario-by-scenario gap matrix
 
@@ -94,4 +130,4 @@ pre-existing tests referenced compactly here.
 | 48 | `tests/link_listing.rs::listing_uses_fresh_account_authority_and_complete_visible_link_snapshots`; `tests/link_filters.rs::filters_are_literal_canonical_and_composed_before_distinct_keyset_selection`; `tests/tag_discovery.rs::tag_counts_cover_visible_live_links_and_cursor_pages_groups_not_links` | Strict invalid/multiplicity and authority-precedence controls remain in the full gate. | HTTP + PostgreSQL; `sh scripts/check.sh` |
 | 49 | `tests/link_pagination.rs::{all_sorts_directions_have_golden_keyset_order_and_stable_stateless_continuations,each_page_renews_role_and_account_identity_before_decoding_its_cursor}` | A/B/C continuation and boundary-deletion behavior is in `tests/discovery_process.rs::discovery_cursors_and_fresh_state_cross_independent_servers_and_volume_restart`. | PostgreSQL + HTTP + independent processes; `sh scripts/check.sh` |
 | 50 | `tests/visit_records.rs::actual_redirect_snapshots_and_visit_pages_are_reported_after_delayed_worker_persistence`; `tests/report_process.rs::report_authority_history_and_maximum_breakdown_cursors_cross_tcp_instances_and_volume_restart`; `tests/telemetry_signals.rs::production_otlp_privacy_sampling_outage_drain_and_replacement_are_verified` | A/B snapshots, retry, deletion, and privacy evidence remain in the full gate. | PostgreSQL + independent processes + Collector; `sh scripts/check.sh` |
-| 51 | `tests/openapi_contracts.rs` family response tests and invalid controls | `tests/openapi_release.rs::{whole_openapi_document_and_every_json_schema_root_are_valid,documented_method_path_operation_ids_match_the_reviewed_inventory,production_executable_routes_and_global_method_errors_match_openapi}` adds pinned whole-document validation, all schema roots, refs, complete 21-operation inventory, real executable TCP probes and globally specified unsupported-method/HEAD behavior. | OpenAPI 3.1 + JSON Schema 2020-12 + production HTTP; `sh scripts/check-openapi.sh` |
+| 51 | `tests/openapi_contracts.rs` family response tests and invalid controls | `tests/openapi_release.rs::{whole_openapi_document_and_every_json_schema_root_are_valid,documented_method_path_operation_ids_match_the_reviewed_inventory,production_executable_routes_and_global_method_errors_match_openapi}` adds pinned whole-document validation, all schema roots, refs, complete 22-entry method/path/operationId inventory, real executable TCP probes and globally specified unsupported-method/HEAD behavior. | OpenAPI 3.1 + JSON Schema 2020-12 + production HTTP; `sh scripts/check-openapi.sh` |

@@ -1,8 +1,8 @@
 # Acceptance scenario coverage map
 
-The numbers below refer to [server-business-logic.md, section 15](../server-business-logic.md#15-acceptance-scenarios). Each scenario must have executable evidence before part 11 is complete. The final column is initially a suggested suite name, **not evidence that a test exists or passed**. Replace/add exact file/test names during implementation.
+The numbers below refer to [server-business-logic.md, section 15](../server-business-logic.md#15-acceptance-scenarios). The final audit below records observed Part 11 gate results; each row maps the requirement to exact executable evidence. Earlier parts may test pure functions or repository invariants, while later parts complete HTTP/process evidence for the same scenario.
 
-Parts are linked from [the implementation index](README.md). Earlier parts may test pure functions or repository invariants; later parts complete HTTP/process evidence for the same scenario.
+Parts are linked from [the implementation index](README.md).
 
 | Scenario | Required behavior | Implementation parts | Audited executable evidence |
 | --- | --- | --- | --- |
@@ -56,7 +56,23 @@ Parts are linked from [the implementation index](README.md). Earlier parts may t
 | 48 | Invalid/forbidden filters, multiplicity, no widened scope | 03, 08 | `tests/http_decoding.rs::query_decoders_are_operation_scoped_and_errors_remain_sanitized`, `tests/link_listing.rs::listing_uses_fresh_account_authority_and_complete_visible_link_snapshots`, `tests/link_filters.rs::filters_are_literal_canonical_and_composed_before_distinct_keyset_selection`, and tag authority precedence in `tests/tag_discovery.rs::tag_counts_cover_visible_live_links_and_cursor_pages_groups_not_links`. |
 | 49 | All sort/direction/null/tie cursors, deletion/context/scaling | 03, 08, 11 | Golden six-direction/tie/null traversal, changed limits/context, boundary deletion, tampering, rotation, demotion and account recreation: `tests/link_pagination.rs::{all_sorts_directions_have_golden_keyset_order_and_stable_stateless_continuations,each_page_renews_role_and_account_identity_before_decoding_its_cursor}`. A/B/C continuation is `tests/discovery_process.rs::discovery_cursors_and_fresh_state_cross_independent_servers_and_volume_restart`. |
 | 50 | Exact A/B historical snapshots, retries/deletion/privacy | 07, 09, 10 | Delayed A→B worker snapshot and retry: `tests/visit_records.rs::actual_redirect_snapshots_and_visit_pages_are_reported_after_delayed_worker_persistence`; cross-TCP/volume history: `tests/report_process.rs::report_authority_history_and_maximum_breakdown_cursors_cross_tcp_instances_and_volume_restart`; OTLP/stdout privacy: `tests/telemetry_signals.rs::production_otlp_privacy_sampling_outage_drain_and_replacement_are_verified`. |
-| 51 | OpenAPI 3.1 validation, representative schemas/routes/headers | 01, 03–09, 11 | `tests/openapi_release.rs::{whole_openapi_document_and_every_json_schema_root_are_valid,documented_method_path_operation_ids_match_the_reviewed_inventory,production_executable_routes_and_global_method_errors_match_openapi}` validates the whole checked-in document with the pinned official OAS 3.1 schema, Draft 2020-12 schema roots, local refs, operation inventory, actual production TCP routes, common Allow/bodyless HEAD, and invalid controls. Existing `tests/openapi_contracts.rs::{actual_bootstrap_dto_and_account_http_responses_match_openapi_components,actual_redirect_head_and_failure_responses_match_openapi_components,actual_analytics_report_responses_and_errors_match_openapi_with_invalid_controls,actual_discovery_responses_and_errors_match_openapi_components}` validate family response schemas, headers, errors, bodyless 204/HEAD, nullability, and invalid fixtures. Exact command: `sh scripts/check-openapi.sh`. |
+| 51 | OpenAPI 3.1 validation, representative schemas/routes/headers | 01, 03–09, 11 | `tests/openapi_release.rs::{whole_openapi_document_and_every_json_schema_root_are_valid,documented_method_path_operation_ids_match_the_reviewed_inventory,production_executable_routes_and_global_method_errors_match_openapi}` validates the whole checked-in document with the pinned official OAS 3.1 schema, Draft 2020-12 schema roots, local refs, complete 22-entry method/path/operationId inventory, actual production TCP routes, common Allow/bodyless HEAD, and invalid controls. Existing `tests/openapi_contracts.rs::{actual_bootstrap_dto_and_account_http_responses_match_openapi_components,actual_redirect_head_and_failure_responses_match_openapi_components,actual_analytics_report_responses_and_errors_match_openapi_with_invalid_controls,actual_discovery_responses_and_errors_match_openapi_components}` validate family response schemas, headers, errors, bodyless 204/HEAD, nullability, and invalid fixtures. Exact command: `sh scripts/check-openapi.sh`. |
+
+## Part 11 final audit — 2026-10-29
+
+All 51 acceptance scenarios are mapped above to concrete tests. The full local
+`sh scripts/check.sh` gate passed **224 all-target tests plus 3 doctests**, with
+zero failures or ignored tests. The exact locked OpenAPI gate passed 3 tests;
+the clean-source proxy gate passed its production TCP test; and the clean-source
+release gate passed 5 tests (3 OpenAPI, 1 proxy, 1 packaged-binary smoke). The
+final verified implementation revision is
+`95d053d70c47c7199cfbd45545fa8c08b8d945d1`; its packaged Linux/arm64 artifact
+SHA-256 is
+`07d7641e88e852d6891b459c7dbd18f7d0a1db7f0b23850418d7b22718ab5d17`.
+Detailed tool versions, exact provenance, observed proxy peers, and unverified
+platform/hosted-CI scope are recorded in the [Part 11 handoff](progress.md#part-11-handoff--2026-10-29)
+and [execution results](../../docs/release-verification.md#observed-local-results).
+Hosted CI was not run; this is a local verification result only.
 
 ## Additional derived checks
 
