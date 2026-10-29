@@ -321,9 +321,11 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     let backend_id = container_id(&server_b).await;
                     let backend_ip = container_ip(&server_b).await;
                     let backend_ip_text = backend_ip.to_string();
+                    let configured_trusted_proxies =
+                        podman_server::trusted_proxy_entries(&server_b).await;
                     assert_eq!(
-                        podman_server::trusted_proxy_entries(&server_b).await,
-                        [trusted.clone()],
+                        configured_trusted_proxies.as_slice(),
+                        std::slice::from_ref(&trusted),
                         "the backend trusts exactly the NGINX peer observed on this network"
                     );
                     let backend_health = podman_server::command_output(
