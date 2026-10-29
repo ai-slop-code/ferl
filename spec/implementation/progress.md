@@ -4,7 +4,7 @@ Handoff summary: Parts 01–11 are complete and merged into local `main`. Part 1
 
 ## Post-release hardening milestone — 2026-10-29
 
-Status: **In progress** on `maintenance/post-release-hardening`, based on the
+Status: **Verified (awaiting merge)** on `maintenance/post-release-hardening`, based on the
 verified, clean Part 11 merge `6038cbe6703ed81e387b7d9fa5998e686bedcd21`.
 That commit has the expected parents `71d77b3f3838081add13d46cdefe0a91cdd70efd`
 and `4226cd63298a7599e5866ae545845a590e32616f`; the retained Part 11 branch is
@@ -34,6 +34,59 @@ and local Git integration. It does not reopen Part 11 or add business behavior.
 | `Cargo.toml` declares Rust 1.94; prior evidence used only 1.99.1. | A locked dependency or source feature requires a newer compiler despite metadata. | Obtain and execute actual isolated Rust/Cargo 1.94.0; run locked workspace all-target/all-feature check and locked production release build. | Both requested commands pass on the recorded target, or a specific blocker is documented without claiming MSRV compatibility. |
 | `src/db/pool.rs`, migration/bootstrap connection options, `src/telemetry/providers.rs`, and release smoke currently have no end-to-end TLS evidence. | PostgreSQL server verification may skip chain/hostname validation, or OTLP HTTPS export may fail despite exporter configuration. | Use run-isolated short-lived CA/server fixtures and the packaged binary; test valid chain+hostname, untrusted CA, hostname mismatch, actual decoded OTLP signals, and exporter failure/readiness/shutdown controls. | Valid TLS handshakes and actual telemetry receipt are observed; both certificate controls reject; request/readiness stay independent and shutdown remains within its total deadline. |
 | `.github/workflows/ci.yml` and release build scripts. | CI builds a native Ubuntu executable but exercises it in Debian Bookworm, while local macOS uses the pinned Bookworm builder; hosted success is not available locally. | Compare build/runtime prerequisites; pin or align the Linux builder/runtime where justified, run local equivalents, and state hosted CI is unverified. | The local Linux artifact is built with the same pinned runtime-generation baseline used by smoke; no hosted result is claimed. |
+
+### Hardening handoff — verified implementation
+
+Verified implementation revision: `9755fb61a42fa8d328ca5723a0cec1927afe0541`
+(`fix: gate TLS migration on PostgreSQL TCP readiness`), descended from base
+`6038cbe6703ed81e387b7d9fa5998e686bedcd21`. The branch remains local and is
+retained for the explicit merge after the separate handoff-only commit.
+
+Final local gates on the committed implementation:
+
+- `sh scripts/check-openapi.sh` — 3 tests passed; the normative OpenAPI document
+  and actual production method/path/response/header probes passed.
+- `sh scripts/check-proxy.sh` — 1 packaged TCP proxy test passed. The host
+  gateway, probe proxy, and trusted replacement use distinct reserved ports.
+- `sh scripts/check-release.sh` — 6 packaged Rust tests and 3 Python verifier
+  regression controls passed; no failures or ignored tests.
+- `sh scripts/check-tls.sh` — 1 packaged TLS test passed. The Collector decoded
+  10 traces, 14 metrics, and 11 log records; invalid CA and hostname controls
+  rejected export while API/readiness stayed healthy and shutdown stayed under
+  the configured 20-second total bound.
+- `sh scripts/check.sh` — **228 all-target tests plus 3 doctests passed**, with
+  0 failures and 0 ignored tests. This includes formatting, locked check,
+  warning-denied Clippy, PostgreSQL, independent-process, Collector, proxy,
+  packaged release, and TLS suites.
+- `FERL_MSRV_TOOLCHAIN_DIR=target/toolchains/rust-1.94.0 sh scripts/check-msrv.sh`
+  — actual Rust/Cargo 1.94.0 passed the locked workspace check
+  (`--all-targets --all-features`) and locked production release build on
+  `aarch64-apple-darwin`. The standard pinned project toolchain remains 1.99.1.
+
+Clean-checkout release verification passed in a disposable detached worktree at
+this exact implementation revision, with complete Git history, the required
+legacy commit reachable, and fresh Cargo target directories. The existing
+Cargo registry cache was reused (not a cold dependency-cache build). The
+packaged `aarch64-unknown-linux-gnu` executable ran as UID 65532 in the same
+digest-pinned Debian Bookworm arm64 image used for its build. The archive has 17
+verified files, exact `spec/openapi.yaml` bytes, both migrations, matching
+provenance and checksums, and `source_tree_clean=true`.
+
+Artifact from the clean-checkout run:
+
+- Path: `target/hardening-evidence/9755fb6-clean-checkout/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`
+- Archive SHA-256: `8f170dcb3d4f7a0cb88dc86554694ec9280c26755ea2622843d66e3ed1ea5915`
+- Binary SHA-256: `76fb42bffd1e224c616b87ca19b22ec52201e9fe101d4a7954a247bab3c32919`
+- OpenAPI SHA-256: `45677d0d0c0afda4687fada791ce492682ad546f2fbc612113890cffecbb6b5e`
+
+Independent builds from this commit used separate fresh Cargo target directories
+and the same pinned arm64 Bookworm builder; their binary and archive checksums
+matched. Repackaging identical inputs was byte-identical. The Cargo registry
+cache was shared, so this is not a cold-cache or cross-machine reproducibility
+claim. Hosted CI was not run. The pinned amd64 image was pulled, but local
+execution under the arm64 Podman QEMU emulator segfaulted; no x86_64 runtime
+result is claimed. Other runtime distributions remain unverified. No remote,
+push, published tag, deployment, migration, or business-contract change was made.
 
 Historical Part 11 evidence below remains a separate record and is not new
 evidence for this milestone.
