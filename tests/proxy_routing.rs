@@ -43,6 +43,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
     let run_id = Uuid::new_v4().simple().to_string();
     let host_probe_id = format!("part11-hostprobe-{run_id}");
     let proxy_id = format!("part11-proxy-{run_id}");
+    let client_name = format!("ferl-part11-client-{run_id}");
     let network = format!("ferl-part11-net-{run_id}");
     let host_proxy_port = reserve_port().await;
     let proxy_port = reserve_distinct_port(&[host_proxy_port]).await;
@@ -59,6 +60,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
     let server_b = format!("ferl-part11-proxy-b-{run_id}");
     let cleanup_server_a_name = server_a.clone();
     let cleanup_server_b_name = server_b.clone();
+    let cleanup_client_name = client_name.clone();
     let cleanup_network = network.clone();
     let cleanup_host_id = host_probe_id.clone();
     let cleanup_proxy_id = proxy_id.clone();
@@ -305,7 +307,6 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     assert!(!server_a_exit.oom_killed);
 
                     let trusted = proxy_peer.to_string();
-                    let settings = [("FERL_TRUSTED_PROXIES", trusted.as_str())];
                     let backend = podman_server::ContainerServer::start(
                         &package,
                         &server_b,
@@ -314,10 +315,17 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         CURSOR_KEY,
                         &trusted,
                         app_port,
-                        &settings,
+                        &[],
                     )
                     .await;
-                    let backend_ip = container_ip(&server_b).await.to_string();
+                    let backend_id = container_id(&server_b).await;
+                    let backend_ip = container_ip(&server_b).await;
+                    let backend_ip_text = backend_ip.to_string();
+                    assert_eq!(
+                        podman_server::trusted_proxy_entries(&server_b).await,
+                        [trusted.clone()],
+                        "the backend trusts exactly the NGINX peer observed on this network"
+                    );
                     let backend_health = podman_server::command_output(
                         "podman",
                         &[
@@ -325,7 +333,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                             &nginx_container,
                             "wget",
                             "-qO-",
-                            &format!("http://{backend_ip}:8080/api/health/ready"),
+                            &format!("http://{backend_ip_text}:8080/api/health/ready"),
                         ],
                         Duration::from_secs(10),
                     )
@@ -337,7 +345,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         &proxy_id,
                         proxy_port,
                         "8080",
-                        &backend_ip,
+                        &backend_ip_text,
                         Some(&network_for_test),
                         &proxy_runtime,
                         "reload",
@@ -349,12 +357,20 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         Duration::from_secs(10),
                     ).await;
                     assert!(effective_config.status.success());
-                    assert!(String::from_utf8_lossy(&effective_config.stdout).contains(&backend_ip),
+                    let active_config = String::from_utf8_lossy(&effective_config.stdout);
+                    assert!(active_config.contains(&backend_ip_text),
                         "running NGINX config uses the replacement backend's observed address");
+                    assert!(active_config.contains("proxy_set_header X-Forwarded-For $remote_addr;"),
+                        "the active edge config replaces supplied XFF with its observed TCP client");
                     assert_eq!(container_id(&nginx_container).await, nginx_identity,
                         "the actual proxy instance observed before trust remains alive for assertions");
-                    assert_eq!(container_ip(&nginx_container).await, nginx_ip,
-                        "the forwarding proxy's peer address cannot pass by replacement-address reuse");
+                    assert_eq!(
+                        container_ip(&nginx_container).await,
+                        nginx_ip,
+                        "the forwarding proxy's peer address cannot pass by replacement-address reuse"
+                    );
+                    let proxy_ready = wait_for_reloaded_backend(proxy).await;
+                    assert_headers(&proxy_ready);
                     let nginx_health = podman_server::command_output(
                         "podman",
                         &["exec", &nginx_container, "wget", "-qO-", "http://127.0.0.1:8080/api/health/ready"],
@@ -362,8 +378,6 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     ).await;
                     assert!(nginx_health.status.success(),
                         "reloaded NGINX forwards health to its replacement backend");
-                    let proxy_ready = wait_for_reloaded_backend(proxy).await;
-                    assert_headers(&proxy_ready);
 
                     for (code, destination) in [
                         ("assets", "https://proxy-assets.example/path"),
@@ -485,82 +499,140 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     assert_eq!(too_large.status, 413);
                     assert_eq!(json(&too_large)["error"]["code"], "request_too_large");
 
-                    let forwarded = send_with_headers(
-                        proxy,
-                        "GET",
-                        "/proxyraw",
-                        None,
-                        "",
-                        &[
-                            ("User-Agent", "PROXY_EFFECTIVE_IP_CANARY"),
-                            ("X-Forwarded-For", "198.51.100.240"),
-                        ],
-                    )
-                    .await
-                    .unwrap();
-                    assert_eq!(forwarded.status, 302);
-                    wait_for_visit(database.pool(), "proxyraw", "PROXY_EFFECTIVE_IP_CANARY").await;
+                    // This client is a distinct, run-owned container on the
+                    // same isolated network. It reaches both NGINX and the
+                    // backend by real TCP, so the proxy's observed client and
+                    // the backend's NGINX peer cannot collapse to one address.
+                    let client =
+                        podman_server::NetworkClient::start(&client_name, &network_for_test).await;
+                    let client_id = container_id(&client.name).await;
+                    let client_ip = container_ip(&client.name).await;
+                    assert_eq!(client.id, client_id, "client container identity is retained");
+                    assert_eq!(client.ip, client_ip, "client address is read from its network attachment");
+                    let backend_id_after_reload = container_id(&server_b).await;
+                    let backend_ip_after_reload = container_ip(&server_b).await;
+                    assert_eq!(backend_id_after_reload, backend_id);
+                    assert_eq!(backend_ip_after_reload, backend_ip);
+                    assert_ne!(client_id, nginx_identity);
+                    assert_ne!(client_id, backend_id);
+                    assert_ne!(nginx_identity, backend_id);
+
+                    let spoofed_ip: IpAddr = "198.51.100.240".parse().unwrap();
+                    assert_ne!(client_ip, nginx_ip, "actual proxy client differs from NGINX peer");
+                    assert_ne!(client_ip, spoofed_ip, "attacker-supplied IP is a third identity");
+                    assert_ne!(nginx_ip, spoofed_ip);
+                    println!(
+                        "PROXY_NETWORK_IDENTITIES client_id={client_id} client_ip={client_ip} \
+                         nginx_id={nginx_identity} nginx_ip={nginx_ip} \
+                         backend_id={backend_id} backend_ip={backend_ip} \
+                         attacker_spoofed_ip={spoofed_ip}"
+                    );
+
+                    let forwarded_marker = format!("PROXY_EFFECTIVE_IP_{run_id}");
+                    let forwarded = client
+                        .get(nginx_ip, "/proxyraw", &forwarded_marker, spoofed_ip)
+                        .await;
+                    assert_network_redirect(
+                        &forwarded,
+                        nginx_ip,
+                        "https://proxy-raw.example/path?edition=2#section",
+                    );
+                    let nginx_client = proxy_client(&proxy_id).await;
+                    assert_eq!(
+                        nginx_client, client_ip,
+                        "NGINX access log records the separate client container's TCP peer"
+                    );
+                    wait_for_visit(database.pool(), "proxyraw", &forwarded_marker).await;
                     let stored_forwarded: String = sqlx::query_scalar(
                         "SELECT host(client_ip) FROM visits v JOIN links l ON l.id=v.link_id \
-                         WHERE l.short_code='proxyraw' AND user_agent='PROXY_EFFECTIVE_IP_CANARY'",
+                         WHERE l.short_code='proxyraw' AND user_agent=$1",
                     )
+                    .bind(&forwarded_marker)
                     .fetch_one(database.pool())
                     .await
                     .unwrap();
-                    let nginx_client = proxy_client(&proxy_id).await;
-                    assert_eq!(stored_forwarded, canonical_ip(nginx_client));
-                    println!("PROXY_FORWARDED_CLIENT persisted={stored_forwarded} observed_by_nginx={nginx_client}");
-                    assert_ne!(stored_forwarded, "198.51.100.240", "edge overwrites client-supplied XFF");
+                    assert_eq!(stored_forwarded, client_ip.to_string());
+                    assert_ne!(stored_forwarded, proxy_peer.to_string());
+                    assert_ne!(stored_forwarded, spoofed_ip.to_string());
 
-                    let direct_observed = send_with_headers(
-                        backend.address,
-                        "GET",
-                        "/proxyraw",
-                        None,
-                        "",
-                        &[("User-Agent", "UNTRUSTED_DIRECT_PEER_CANARY")],
-                    )
-                    .await
-                    .unwrap();
-                    assert_eq!(direct_observed.status, 302);
-                    wait_for_visit(
-                        database.pool(),
-                        "proxyraw",
-                        "UNTRUSTED_DIRECT_PEER_CANARY",
-                    )
-                    .await;
-                    let direct_peer_b: String = sqlx::query_scalar(
-                        "SELECT host(client_ip) FROM visits v JOIN links l ON l.id=v.link_id \
-                         WHERE l.short_code='proxyraw' AND user_agent='UNTRUSTED_DIRECT_PEER_CANARY'",
-                    )
-                    .fetch_one(database.pool())
-                    .await
-                    .unwrap();
-                    assert_ne!(direct_peer_b, proxy_peer.to_string());
-                    let spoofed_direct = send_with_headers(
-                        backend.address,
-                        "GET",
-                        "/proxyraw",
-                        None,
-                        "",
-                        &[
-                            ("User-Agent", "UNTRUSTED_DIRECT_IP_CANARY"),
-                            ("X-Forwarded-For", "198.51.100.241"),
-                        ],
-                    )
-                    .await
-                    .unwrap();
-                    assert_eq!(spoofed_direct.status, 302);
-                    wait_for_visit(database.pool(), "proxyraw", "UNTRUSTED_DIRECT_IP_CANARY").await;
+                    let direct_marker = format!("UNTRUSTED_DIRECT_IP_{run_id}");
+                    let direct = client
+                        .get(backend_ip, "/proxyraw", &direct_marker, spoofed_ip)
+                        .await;
+                    assert_network_redirect(
+                        &direct,
+                        backend_ip,
+                        "https://proxy-raw.example/path?edition=2#section",
+                    );
+                    wait_for_visit(database.pool(), "proxyraw", &direct_marker).await;
                     let stored_direct: String = sqlx::query_scalar(
                         "SELECT host(client_ip) FROM visits v JOIN links l ON l.id=v.link_id \
-                         WHERE l.short_code='proxyraw' AND user_agent='UNTRUSTED_DIRECT_IP_CANARY'",
+                         WHERE l.short_code='proxyraw' AND user_agent=$1",
                     )
+                    .bind(&direct_marker)
                     .fetch_one(database.pool())
                     .await
                     .unwrap();
-                    assert_eq!(stored_direct, direct_peer_b);
-                    assert_ne!(stored_direct, "198.51.100.241");
+                    assert_eq!(stored_direct, client_ip.to_string());
+                    assert_ne!(stored_direct, proxy_peer.to_string());
+                    assert_ne!(stored_direct, spoofed_ip.to_string());
+
+                    // Confirm the retained NGINX network peer still reaches the
+                    // replacement backend as that same peer. An absent XFF
+                    // exercises the production resolver's trusted-peer fallback.
+                    let nginx_peer_marker = format!("NGINX_PEER_AFTER_RELOAD_{run_id}");
+                    let nginx_peer_url = format!("http://{backend_ip}:8080/proxyraw");
+                    let nginx_peer_agent = format!("User-Agent: {nginx_peer_marker}");
+                    let nginx_peer_probe = podman_server::command_output(
+                        "podman",
+                        &[
+                            "exec",
+                            &nginx_container,
+                            "curl",
+                            "--silent",
+                            "--show-error",
+                            "--max-time",
+                            "8",
+                            "--dump-header",
+                            "-",
+                            "--output",
+                            "/dev/null",
+                            "--write-out",
+                            "\\nFERL_CLIENT_RESULT %{http_code} %{remote_ip}\\n",
+                            "--header",
+                            &nginx_peer_agent,
+                            "--header",
+                            "X-Forwarded-For:",
+                            &nginx_peer_url,
+                        ],
+                        Duration::from_secs(12),
+                    )
+                    .await;
+                    assert_network_redirect(
+                        &nginx_peer_probe,
+                        backend_ip,
+                        "https://proxy-raw.example/path?edition=2#section",
+                    );
+                    wait_for_visit(database.pool(), "proxyraw", &nginx_peer_marker).await;
+                    let persisted_replacement_peer: String = sqlx::query_scalar(
+                        "SELECT host(client_ip) FROM visits v JOIN links l ON l.id=v.link_id \
+                         WHERE l.short_code='proxyraw' AND user_agent=$1",
+                    )
+                    .bind(&nginx_peer_marker)
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap();
+                    assert_eq!(persisted_replacement_peer, nginx_ip.to_string());
+                    assert_eq!(container_id(&nginx_container).await, nginx_identity);
+                    assert_eq!(container_ip(&nginx_container).await, nginx_ip);
+                    assert_eq!(container_id(&server_b).await, backend_id);
+
+                    println!(
+                        "PROXY_FORWARDED_ASSERTION actual_client={client_ip} nginx_peer={proxy_peer} \
+                         attacker_spoof={spoofed_ip} persisted_proxied={stored_forwarded} \
+                         persisted_direct={stored_direct} persisted_replacement_peer={persisted_replacement_peer} \
+                         observed_by_nginx={nginx_client}"
+                    );
 
                     let quote_value = format!("M{}", "\"".repeat(8_191));
                     let utf8_value = format!("M{}€", "é".repeat(4_094));
@@ -649,12 +721,21 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     assert_eq!(exit.exit_code, 0);
                     assert!(!exit.oom_killed);
                     assert!(exit.shutdown_elapsed < Duration::from_secs(20));
-                    for secret in [key.as_str(), "PROXY_EFFECTIVE_IP_CANARY", "UNTRUSTED_DIRECT_IP_CANARY"] {
+                    for secret in [
+                        key.as_str(),
+                        forwarded_marker.as_str(),
+                        direct_marker.as_str(),
+                        nginx_peer_marker.as_str(),
+                    ] {
                         assert!(!exit.logs.contains(secret));
                     }
                     let proxy_config =
                         fs::read_to_string(proxy_runtime.join("conf.d/default.conf")).unwrap();
-                    assert!(proxy_config.contains(&backend_ip));
+                    let forwarding_config =
+                        fs::read_to_string(proxy_runtime.join("ferl-proxy-headers.conf")).unwrap();
+                    assert!(proxy_config.contains(&backend_ip_text));
+                    assert!(forwarding_config
+                        .contains("proxy_set_header X-Forwarded-For $remote_addr;"));
                     assert!(proxy_config.contains("large_client_header_buffers 4 128k"));
                 })
             })
@@ -665,6 +746,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
 
     let cleanup_server_a = podman_server::cleanup_server(&cleanup_server_a_name).await;
     let cleanup_server_b = podman_server::cleanup_server(&cleanup_server_b_name).await;
+    let cleanup_client = podman_server::cleanup_client(&cleanup_client_name).await;
     let cleanup_proxy = proxy_action(
         &cleanup_proxy_id,
         proxy_port,
@@ -688,6 +770,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
     let cleanup_network = podman_server::remove_network(&cleanup_network).await;
     assert!(cleanup_server_a.status.success() || !container_exists(&cleanup_server_a_name).await);
     assert!(cleanup_server_b.status.success() || !container_exists(&cleanup_server_b_name).await);
+    assert!(cleanup_client.status.success() || !container_exists(&cleanup_client_name).await);
     assert!(cleanup_proxy.status.success());
     assert!(cleanup_host_proxy.status.success());
     assert!(cleanup_network.status.success());
@@ -722,6 +805,30 @@ async fn proxy_action(
         .await
         .unwrap_or_else(|_| panic!("proxy harness {action} exceeds its 30-second bound"))
         .expect("proxy harness command starts")
+}
+
+fn assert_network_redirect(output: &Output, peer: IpAddr, location: &str) {
+    assert!(
+        output.status.success(),
+        "isolated-network curl request completes: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let response = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        response.contains("HTTP/1.1 302"),
+        "real TCP response is a 302: {response}"
+    );
+    assert!(
+        response.lines().any(|line| {
+            line.to_ascii_lowercase()
+                .starts_with(&format!("location: {location}").to_ascii_lowercase())
+        }),
+        "real TCP response carries the exact stored Location"
+    );
+    assert!(
+        response.contains(&format!("FERL_CLIENT_RESULT 302 {peer}")),
+        "curl reports the expected real network peer and HTTP status"
+    );
 }
 
 async fn reserve_port() -> u16 {
@@ -861,16 +968,6 @@ async fn wait_for_user_agent(pool: &sqlx::PgPool, code: &str, value: &str) {
     })
     .await
     .expect("maximum legal analytics header persists over the proxy");
-}
-
-fn canonical_ip(address: IpAddr) -> String {
-    match address {
-        IpAddr::V6(v6) => v6
-            .to_ipv4_mapped()
-            .map_or(v6.into(), IpAddr::V4)
-            .to_string(),
-        other => other.to_string(),
-    }
 }
 
 async fn container_exists(name: &str) -> bool {

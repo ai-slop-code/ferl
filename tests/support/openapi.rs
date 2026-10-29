@@ -37,7 +37,7 @@ pub fn resolve_schema_value(schema: &Value) -> Result<Value, String> {
 #[allow(dead_code)]
 pub fn resolve_schema_value_in_document(doc: &Value, schema: &Value) -> Result<Value, String> {
     let document_dialect = document_schema_dialect(doc)?;
-    if !schema_dialect_supported(schema, document_dialect) {
+    if !schema_dialect_supported(schema, document_dialect, doc, &mut Vec::new()) {
         return Err("schema declares an unsupported JSON Schema dialect".to_owned());
     }
     resolve_refs(schema, doc, &mut Vec::new())
@@ -64,7 +64,7 @@ pub fn document_schema_dialects_supported(doc: &Value) -> bool {
 
     schema_roots(doc)
         .into_iter()
-        .all(|schema| schema_dialect_supported(schema, document_dialect))
+        .all(|schema| schema_dialect_supported(schema, document_dialect, doc, &mut Vec::new()))
 }
 
 /// Return only Schema Objects at OpenAPI-defined locations, not arbitrary
@@ -223,7 +223,12 @@ fn document_schema_dialect(doc: &Value) -> Result<&'static str, String> {
     }
 }
 
-fn schema_dialect_supported(schema: &Value, inherited: &str) -> bool {
+fn schema_dialect_supported(
+    schema: &Value,
+    inherited: &str,
+    root: &Value,
+    references: &mut Vec<String>,
+) -> bool {
     const SINGLE_SCHEMA_KEYWORDS: &[&str] = &[
         "additionalItems",
         "additionalProperties",
@@ -264,9 +269,25 @@ fn schema_dialect_supported(schema: &Value, inherited: &str) -> bool {
     if object.contains_key("$dynamicRef") {
         return false;
     }
+    // A reference target is another Schema Object whose dialect must be checked
+    // before resolve_refs/adapt_to_draft_2020_12 can rewrite its declaration.
+    // Leave malformed, external, unresolved, and cyclic reference diagnostics to
+    // resolve_refs, which already reports those limitations precisely.
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+        && reference.starts_with("#/")
+        && !references.iter().any(|entry| entry == reference)
+        && let Some(target) = root.pointer(reference.trim_start_matches('#'))
+    {
+        references.push(reference.to_owned());
+        let supported = schema_dialect_supported(target, effective, root, references);
+        references.pop();
+        if !supported {
+            return false;
+        }
+    }
     for keyword in SINGLE_SCHEMA_KEYWORDS {
         if let Some(nested) = object.get(*keyword)
-            && !schema_dialect_supported(nested, effective)
+            && !schema_dialect_supported(nested, effective, root, references)
         {
             return false;
         }
@@ -278,7 +299,7 @@ fn schema_dialect_supported(schema: &Value, inherited: &str) -> bool {
             };
             if !values
                 .iter()
-                .all(|nested| schema_dialect_supported(nested, effective))
+                .all(|nested| schema_dialect_supported(nested, effective, root, references))
             {
                 return false;
             }
@@ -291,7 +312,7 @@ fn schema_dialect_supported(schema: &Value, inherited: &str) -> bool {
             };
             if !entries
                 .values()
-                .all(|nested| schema_dialect_supported(nested, effective))
+                .all(|nested| schema_dialect_supported(nested, effective, root, references))
             {
                 return false;
             }
@@ -301,10 +322,9 @@ fn schema_dialect_supported(schema: &Value, inherited: &str) -> bool {
         let Some(entries) = entries.as_object() else {
             return false;
         };
-        if !entries
-            .values()
-            .all(|nested| !nested.is_object() || schema_dialect_supported(nested, effective))
-        {
+        if !entries.values().all(|nested| {
+            !nested.is_object() || schema_dialect_supported(nested, effective, root, references)
+        }) {
             return false;
         }
     }
@@ -343,31 +363,103 @@ fn resolve_refs(
                 stack.push(reference.to_owned());
                 let target = resolve_refs(target, root, stack)?;
                 stack.pop();
-                let siblings = object
-                    .iter()
-                    .filter(|(key, _)| key.as_str() != "$ref")
-                    .map(|(key, value)| Ok((key.clone(), resolve_refs(value, root, stack)?)))
-                    .collect::<Result<serde_json::Map<_, _>, ReferenceError>>()?;
+                let siblings = resolve_schema_children(object, root, stack, true)?;
                 if siblings.is_empty() {
                     Ok(target)
                 } else {
                     Ok(json!({"allOf": [target, Value::Object(siblings)]}))
                 }
             } else {
-                object
-                    .iter()
-                    .map(|(key, value)| Ok((key.clone(), resolve_refs(value, root, stack)?)))
-                    .collect::<Result<serde_json::Map<_, _>, ReferenceError>>()
-                    .map(Value::Object)
+                resolve_schema_children(object, root, stack, false).map(Value::Object)
             }
         }
-        Value::Array(values) => values
-            .iter()
-            .map(|value| resolve_refs(value, root, stack))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array),
         other => Ok(other.clone()),
     }
+}
+
+/// Resolve references only in JSON Schema positions. Values beneath annotations
+/// such as `const`, `default`, and `examples` are instance data even when their
+/// object members resemble JSON Schema keywords.
+fn resolve_schema_children(
+    object: &serde_json::Map<String, Value>,
+    root: &Value,
+    stack: &mut Vec<String>,
+    skip_ref: bool,
+) -> Result<serde_json::Map<String, Value>, ReferenceError> {
+    const SINGLE_SCHEMA_KEYWORDS: &[&str] = &[
+        "additionalItems",
+        "additionalProperties",
+        "contains",
+        "contentSchema",
+        "items",
+        "not",
+        "propertyNames",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+        "if",
+        "then",
+        "else",
+    ];
+    const SCHEMA_ARRAY_KEYWORDS: &[&str] = &["allOf", "anyOf", "oneOf", "prefixItems"];
+    const SCHEMA_MAP_KEYWORDS: &[&str] = &[
+        "$defs",
+        "definitions",
+        "dependentSchemas",
+        "patternProperties",
+        "properties",
+    ];
+
+    object
+        .iter()
+        .filter(|(key, _)| !skip_ref || key.as_str() != "$ref")
+        .map(|(key, value)| {
+            let resolved = if SINGLE_SCHEMA_KEYWORDS.contains(&key.as_str()) {
+                resolve_refs(value, root, stack)?
+            } else if SCHEMA_ARRAY_KEYWORDS.contains(&key.as_str()) {
+                match value.as_array() {
+                    Some(values) => Value::Array(
+                        values
+                            .iter()
+                            .map(|nested| resolve_refs(nested, root, stack))
+                            .collect::<Result<_, _>>()?,
+                    ),
+                    None => value.clone(),
+                }
+            } else if SCHEMA_MAP_KEYWORDS.contains(&key.as_str()) {
+                match value.as_object() {
+                    Some(entries) => Value::Object(
+                        entries
+                            .iter()
+                            .map(|(name, nested)| {
+                                Ok((name.clone(), resolve_refs(nested, root, stack)?))
+                            })
+                            .collect::<Result<_, ReferenceError>>()?,
+                    ),
+                    None => value.clone(),
+                }
+            } else if key == "dependencies" {
+                match value.as_object() {
+                    Some(entries) => Value::Object(
+                        entries
+                            .iter()
+                            .map(|(name, nested)| {
+                                let resolved = if nested.is_object() || nested.is_boolean() {
+                                    resolve_refs(nested, root, stack)?
+                                } else {
+                                    nested.clone()
+                                };
+                                Ok((name.clone(), resolved))
+                            })
+                            .collect::<Result<_, ReferenceError>>()?,
+                    ),
+                    None => value.clone(),
+                }
+            } else {
+                value.clone()
+            };
+            Ok((key.clone(), resolved))
+        })
+        .collect()
 }
 
 fn adapt_to_draft_2020_12(schema: Value) -> Value {

@@ -14,6 +14,7 @@ use super::serving_process::send;
 pub const IMAGE: &str = "docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75";
 #[cfg(target_arch = "x86_64")]
 pub const IMAGE: &str = "docker.io/library/rust@sha256:8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8";
+pub const NGINX_IMAGE: &str = "docker.io/library/nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951";
 pub const POSTGRES_CONTAINER: &str = "ferl-stage01-postgres";
 
 pub struct ContainerServer {
@@ -26,6 +27,120 @@ pub struct ExitedServer {
     pub exit_code: i32,
     pub shutdown_elapsed: Duration,
     pub oom_killed: bool,
+}
+
+pub struct NetworkClient {
+    pub name: String,
+    pub id: String,
+    pub ip: IpAddr,
+}
+
+impl NetworkClient {
+    pub async fn start(name: &str, network: &str) -> Self {
+        let output = command_output(
+            "podman",
+            &[
+                "run",
+                "--detach",
+                "--pull=never",
+                "--name",
+                name,
+                "--label",
+                "io.ferl.harness=part11-client",
+                "--network",
+                network,
+                "--entrypoint",
+                "/bin/sh",
+                NGINX_IMAGE,
+                "-ec",
+                "sleep 600",
+            ],
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(output.status.success(), "run-owned network client starts");
+
+        let id = command_output(
+            "podman",
+            &["inspect", "--format", "{{.Id}}", name],
+            Duration::from_secs(10),
+        )
+        .await;
+        assert!(
+            id.status.success(),
+            "Podman identifies the run-owned client container"
+        );
+        let networks = command_output(
+            "podman",
+            &[
+                "inspect",
+                "--format",
+                "{{json .NetworkSettings.Networks}}",
+                name,
+            ],
+            Duration::from_secs(10),
+        )
+        .await;
+        assert!(
+            networks.status.success(),
+            "Podman reports the client network attachment"
+        );
+        let networks: serde_json::Value =
+            serde_json::from_slice(&networks.stdout).expect("Podman network inspection is JSON");
+        let ip = networks[network]["IPAddress"]
+            .as_str()
+            .expect("run-owned client has an IP on the isolated network")
+            .parse()
+            .expect("Podman client network address parses");
+        Self {
+            name: name.to_owned(),
+            id: String::from_utf8_lossy(&id.stdout).trim().to_owned(),
+            ip,
+        }
+    }
+
+    /// Run curl as a process in this isolated-network client container. The
+    /// request is a real TCP GET; curl does not follow the backend's redirect.
+    pub async fn get(
+        &self,
+        address: IpAddr,
+        path: &str,
+        marker: &str,
+        spoofed_ip: IpAddr,
+    ) -> Output {
+        let host = match address {
+            IpAddr::V4(address) => address.to_string(),
+            IpAddr::V6(address) => format!("[{address}]"),
+        };
+        let url = format!("http://{host}:8080{path}");
+        let user_agent = format!("User-Agent: {marker}");
+        let forwarded = format!("X-Forwarded-For: {spoofed_ip}");
+        command_output(
+            "podman",
+            &[
+                "exec",
+                &self.name,
+                "curl",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                "8",
+                "--dump-header",
+                "-",
+                "--output",
+                "/dev/null",
+                "--write-out",
+                "\\nFERL_CLIENT_RESULT %{http_code} %{remote_ip}\\n",
+                "--header",
+                &user_agent,
+                "--header",
+                &forwarded,
+                &url,
+            ],
+            Duration::from_secs(12),
+        )
+        .await
+    }
 }
 
 pub async fn container_database_url(host_schema_url: &str) -> String {
@@ -405,6 +520,54 @@ pub async fn cleanup_server(name: &str) -> Output {
         "part11-server"
     );
     command_output("podman", &["rm", "--force", name], Duration::from_secs(15)).await
+}
+
+pub async fn cleanup_client(name: &str) -> Output {
+    let inspect = command_output(
+        "podman",
+        &[
+            "inspect",
+            "--format",
+            "{{ index .Config.Labels \"io.ferl.harness\" }}",
+            name,
+        ],
+        Duration::from_secs(10),
+    )
+    .await;
+    if !inspect.status.success() {
+        return inspect;
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&inspect.stdout).trim(),
+        "part11-client",
+        "refuse cleanup of a container not owned by the proxy-client fixture"
+    );
+    command_output("podman", &["rm", "--force", name], Duration::from_secs(15)).await
+}
+
+/// Return only the configured proxy-trust entries; the raw inspection output
+/// also contains credentials and is deliberately never returned or printed.
+pub async fn trusted_proxy_entries(name: &str) -> Vec<String> {
+    let output = command_output(
+        "podman",
+        &["inspect", "--format", "{{json .Config.Env}}", name],
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        output.status.success(),
+        "Podman inspects the backend environment"
+    );
+    let environment: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("container environment inspection is JSON");
+    environment
+        .as_array()
+        .expect("container environment is an array")
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter_map(|entry| entry.strip_prefix("FERL_TRUSTED_PROXIES="))
+        .map(str::to_owned)
+        .collect()
 }
 
 pub async fn command_output(program: &str, arguments: &[&str], limit: Duration) -> Output {

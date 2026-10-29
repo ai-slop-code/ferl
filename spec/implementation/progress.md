@@ -1,5 +1,66 @@
 # Implementation progress and agent handoff
 
+## Release-readiness acceptance — worklist recorded before implementation
+
+Branch `maintenance/release-readiness-acceptance`; verified starting `main`
+baseline `487cc04749e1d391ba04a4a4d45d2afaa0b83aab`. Starting inspection found
+a clean index/tree, no pending Git operation, no remote, one worktree, configured
+identity `LubosBa <30705301+LubosBa@users.noreply.github.com>`, both retained maintenance branches, and
+the required Part 07 compatibility commit reachable from `main`. The pinned
+Stage 01 PostgreSQL container and volume were running and label-verified; their
+identities are preserved for use and neither is task-owned. Initial container ID:
+`272ce0848e0d7f0e8da96139e80b31dfec0b31d785bffd690007f1e2296bd1ea`; pinned
+image digest `sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94`;
+volume `ferl-stage01-postgres-data` at Podman mountpoint
+`/var/home/core/.local/share/containers/storage/volumes/ferl-stage01-postgres-data/_data`.
+
+| Location | Demonstrated defect or hypothesis; plausible faulty implementation | Focused control | Acceptance condition | External prerequisite |
+|---|---|---|---|---|
+| `tests/proxy_routing.rs`, `tests/support/podman_server.rs`, `scripts/proxy.sh`, proxy fixture | Retained `7309ea5` output has backend peer, NGINX IP, persisted IP, and NGINX-observed IP all `10.89.0.4`. Correct forwarding and backend peer fallback are indistinguishable; host-published traffic can make NGINX observe itself as the client. | Send a run-marked request from a separate run-owned client container over the isolated network through one retained NGINX instance; inspect client/NGINX/backend IDs and IPs; compare persisted client, backend peer, and attacker spoof values. Independently send a spoofed request directly from an untrusted network peer. | Three IP values are distinguishable; proxied visit stores the real client IP; direct visit stores its peer despite spoofed headers; existing proxy path/method/header/cursor assertions remain. | None for local fixtures. |
+| `tests/support/openapi.rs`, `tests/openapi_release.rs` | Resolver checks the supplied root dialect, resolves `$ref`, then adapts every expanded schema by replacing `$schema`. A referenced target can introduce unsupported or ill-typed `$schema` and be silently accepted by adaptation. | Call the public resolver with supplied documents covering a bad direct target, invalid dialect type, second-hop bad target, restrictive supported sibling, true/false targets, and example/constant data containing schema-like keys. | Every public schema-resolution path rejects unsupported effective referenced dialects before adaptation; supported references/siblings/booleans/data semantics and current normative schemas pass. | None. |
+| `.github/workflows/ci.yml`, advertised targets and release evidence | Local aarch64/macOS evidence does not establish hosted CI or native Linux/amd64 runtime support; workflow and package scripts advertise both `aarch64-unknown-linux-gnu` and `x86_64-unknown-linux-gnu`. | Only after authorization, execute the actual hosted workflow with complete history and native runners for each advertised target; retain run URL/revision/job evidence. | Native CI and packaged execution pass for every approved supported release architecture; do not infer native compatibility from QEMU. | Approved remote and push authorization; hosted workflow execution authorization; explicit supported architecture decision; authorized evidence retention. |
+| Staging, backup and isolated restore | No approved staging target, private credential path, backup target, or separately recoverable cursor-key mechanism is specified in this local checkout. Local fixtures cannot establish deployment or restore acceptance. | After authorization, run the synthetic-data deployment and separate-target backup/restore exercise in the approved environment; retain private evidence only by its approved method. | Every deployment and restore step in the release acceptance request passes using the exact verified artifact; source database is never overwritten. | Approved staging/environment operations, credentials/evidence method, backup/restore target, and cursor-key recovery mechanism. |
+
+Outcome status at worklist creation:
+
+- Local verification corrections: **Planned**.
+- Native CI acceptance: **Pending authorization** (not a pass).
+- Staging and restore acceptance: **Pending authorization** (not a pass).
+
+Current status: Local verification corrections are **In progress**. Focused
+controls have reproduced and corrected the two false greens; the implementation
+and regression tests are not yet committed, and consolidated gates remain
+pending. Native CI and staging/restore remain **Pending authorization**.
+
+Development evidence (not part of the final consolidated counts):
+
+- The new referenced-dialect test was first run against the uncorrected resolver
+  at starting revision `487cc04749e1d391ba04a4a4d45d2afaa0b83aab`. It failed as
+  intended: unsupported string dialect, invalid-type dialect, and second-hop
+  dialect all returned `Ok` schemas with `$schema` rewritten to Draft 2020-12.
+  Raw log: `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/before-fix-2ca84701cb424fdebdbbaa9f89e4c4a3/`.
+- After the focused resolver correction, the same test passed (1 passed, 0
+  failed): `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/openapi-regression-df15ecff42ac42de869fe5c08e36da8e/`.
+- After extending the whole-document data control to an inline `example` payload
+  containing `$schema`, `$ref`, and `$dynamicRef`, the focused OpenAPI-document
+  test passed (1 passed, 0 failed):
+  `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/openapi-document-regression-adb55688d57e4a30873404056df59e77/`.
+- The proxy regression ran one test against the retained packaged backend from
+  the preceding verification-integrity artifact. A separate pinned NGINX-image
+  client produced client `10.89.0.6`, NGINX/backend peer `10.89.0.4`, and spoofed
+  IP `198.51.100.240`; proxied and direct spoofed visits both persisted
+  `10.89.0.6`, and the post-reload peer-fallback visit persisted `10.89.0.4`.
+  The test passed: `target/release-readiness/36effbe1b5e845dab684df60c98bf51e/proxy-regression-peer-stability-f40b52c46da14f01a3ec5dd2aa36cc8e/`.
+  This focused harness run is not the committed clean-source proxy gate.
+- Earlier focused proxy retries are retained separately in the same evidence
+  directory; one exposed an assertion against the wrong NGINX config file and
+  another exposed the immediate reload-probe race. The final focused retry
+  passed after checking the included header config and awaiting the existing
+  deadline-bound backend readiness before the internal probe.
+
+The post-release task does not mutate production behavior, schemas, migrations,
+dependencies, or normative business/OpenAPI contracts.
+
 ## Verification-integrity closure — Complete
 
 ### Verified implementation and results — 2026-10-29
@@ -104,6 +165,30 @@ the warm registry was shared, so this is not a cold-cache or cross-machine
 reproducibility claim. Hosted CI was not run. The available host/Podman VM is
 macOS/aarch64 and Linux/arm64; native Linux/amd64 runtime verification is not
 claimed. No blocker remains; awaiting local Git integration.
+
+### Correction to the preceding verification-integrity evidence — 2026-10-29
+
+The preceding Complete status and original evidence are preserved, but two
+assertions described there exceeded what their controls established:
+
+- The proxy log `target/verification-integrity/7309ea5/check-proxy.log` records
+  the backend peer, NGINX address, persisted address, and NGINX-observed address
+  all as `10.89.0.4`. Because the observed client and NGINX peer were identical,
+  that run did **not** distinguish selecting the forwarded client from ignoring
+  forwarding and recording the backend peer. Its spoof comparison alone did not
+  prove a different real client address was forwarded.
+- The OpenAPI negative dialect controls covered supplied roots and inline
+  schema positions, but did not call a public resolver with a referenced target
+  that introduced `$schema`. The public helper checked the supplied schema,
+  resolved references, then adapted the expanded schema; adaptation could
+  overwrite an unchecked referenced dialect. Whole-document validation did not
+  protect those public functions when called independently.
+
+These are verification-integrity gaps in those two assertions, not unfinished
+business features or a change to the historical milestone record. The current
+release-readiness acceptance work adds direct public-resolver controls and a
+run-owned network client with distinct observed identities; its final committed
+gate results are recorded below after execution.
 
 Branch `maintenance/verification-integrity-closure`; base `main` commit
 `960f7a422f593c42383d2b8fe719ffd8aaee9ae4`. Initial inspection found a clean
