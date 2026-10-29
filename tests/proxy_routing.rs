@@ -347,9 +347,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         "the actual proxy instance observed before trust remains alive for assertions");
                     assert_eq!(container_ip(&nginx_container).await, nginx_ip,
                         "the forwarding proxy's peer address cannot pass by replacement-address reuse");
-                    let proxy_ready = send(proxy, "GET", "/api/health/ready", None, "").await.unwrap();
-                    assert_eq!(proxy_ready.status, 200,
-                        "reloaded retained NGINX forwards to the replacement backend before business assertions");
+                    let proxy_ready = wait_for_reloaded_backend(proxy).await;
                     assert_headers(&proxy_ready);
 
                     for (code, destination) in [
@@ -724,6 +722,27 @@ async fn reserve_distinct_port(excluded: &[u16]) -> u16 {
             return candidate;
         }
     }
+}
+
+async fn wait_for_reloaded_backend(proxy: SocketAddr) -> serving_process::HttpResult {
+    timeout(Duration::from_secs(15), async {
+        loop {
+            let response = send(proxy, "GET", "/api/health/ready", None, "")
+                .await
+                .expect("reloaded proxy readiness request reaches TCP");
+            if response.status == 200 {
+                return response;
+            }
+            assert!(
+                matches!(response.status, 502 | 504),
+                "proxy backend reconfiguration returned an unexpected status {}",
+                response.status
+            );
+            sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("the retained NGINX instance forwards to its replacement backend before deadline")
 }
 
 async fn container_ip(name: &str) -> IpAddr {
