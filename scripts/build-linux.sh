@@ -45,6 +45,7 @@ cargo fetch --locked
 podman info >/dev/null
 podman image exists "$IMAGE" || podman pull "$IMAGE"
 mkdir -p "$OUT"
+OUT=$(CDPATH= cd -- "$OUT" && pwd)
 test -f "$SOURCE_DIR/Cargo.toml"
 test -f "$SOURCE_DIR/Cargo.lock"
 if [ "$SOURCE_DIR" = "$ROOT" ]; then
