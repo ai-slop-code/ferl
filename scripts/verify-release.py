@@ -29,6 +29,10 @@ ELF_MACHINES = {
     "aarch64-unknown-linux-gnu": 183,
     "x86_64-unknown-linux-gnu": 62,
 }
+BUILDER_DIGESTS = {
+    "aarch64-unknown-linux-gnu": "32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75",
+    "x86_64-unknown-linux-gnu": "8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8",
+}
 
 
 def sha256(data: bytes) -> str:
@@ -106,11 +110,11 @@ def main() -> None:
         "aarch64-unknown-linux-gnu": "arm64",
         "x86_64-unknown-linux-gnu": "amd64",
     }.get(args.target)
-    if target_arch is None:
+    if target_arch is None or args.target not in BUILDER_DIGESTS:
         raise SystemExit("release target is not in the supported Linux inventory")
     expected_builder = (
         "Rust/Cargo 1.99.1; pinned Debian Bookworm builder image "
-        "sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8; "
+        f"sha256:{BUILDER_DIGESTS[args.target]}; "
         f"linux/{target_arch}"
     )
     if provenance["builder"] != expected_builder:

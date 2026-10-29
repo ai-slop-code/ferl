@@ -30,13 +30,13 @@ case "$TARGET" in
         export FERL_LINUX_BUILD_DIR="$LINUX_BUILD_DIR"
         sh "$SCRIPT_DIR/build-linux.sh" "$TARGET"
         BINARY="$LINUX_BUILD_DIR/target/$TARGET/release/ferl-server"
-        BUILDER="Rust/Cargo 1.99.1; pinned Debian Bookworm builder image sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8; linux/arm64"
+        BUILDER="Rust/Cargo 1.99.1; pinned Debian Bookworm builder image sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75; linux/arm64"
         ;;
     x86_64-unknown-linux-gnu)
         export FERL_LINUX_BUILD_DIR="$LINUX_BUILD_DIR"
         sh "$SCRIPT_DIR/build-linux.sh" "$TARGET"
         BINARY="$LINUX_BUILD_DIR/target/$TARGET/release/ferl-server"
-        BUILDER="Rust/Cargo 1.99.1; pinned Debian Bookworm builder image sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8; linux/amd64"
+        BUILDER="Rust/Cargo 1.99.1; pinned Debian Bookworm builder image sha256:8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8; linux/amd64"
         ;;
     *)
         echo "unsupported release target '$TARGET'; choose aarch64-unknown-linux-gnu or x86_64-unknown-linux-gnu" >&2

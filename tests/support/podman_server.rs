@@ -10,7 +10,12 @@ use url::Url;
 
 use super::serving_process::send;
 
-pub const IMAGE: &str = "docker.io/library/rust@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8";
+#[cfg(target_arch = "aarch64")]
+pub const IMAGE: &str =
+    "docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75";
+#[cfg(target_arch = "x86_64")]
+pub const IMAGE: &str =
+    "docker.io/library/rust@sha256:8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8";
 pub const POSTGRES_CONTAINER: &str = "ferl-stage01-postgres";
 
 pub struct ContainerServer {

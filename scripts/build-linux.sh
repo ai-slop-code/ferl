@@ -4,14 +4,21 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 TARGET=${1:-aarch64-unknown-linux-gnu}
-IMAGE=docker.io/library/rust@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8
 OUT=${FERL_LINUX_BUILD_DIR:-"$ROOT/target/linux-release"}
 CARGO_REGISTRY=${CARGO_HOME:-"$HOME/.cargo"}/registry
 HOST=$(rustc -vV | sed -n 's/^host: //p')
 
 case "$TARGET" in
-    aarch64-unknown-linux-gnu) RUSTUP_TOOLCHAIN=1.99.1-aarch64-unknown-linux-gnu ;;
-    x86_64-unknown-linux-gnu) RUSTUP_TOOLCHAIN=1.99.1-x86_64-unknown-linux-gnu ;;
+    aarch64-unknown-linux-gnu)
+        RUSTUP_TOOLCHAIN=1.99.1-aarch64-unknown-linux-gnu
+        IMAGE=docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75
+        PLATFORM=linux/arm64
+        ;;
+    x86_64-unknown-linux-gnu)
+        RUSTUP_TOOLCHAIN=1.99.1-x86_64-unknown-linux-gnu
+        IMAGE=docker.io/library/rust@sha256:8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8
+        PLATFORM=linux/amd64
+        ;;
     *) echo "unsupported Linux release target '$TARGET'" >&2; exit 2 ;;
 esac
 
@@ -34,7 +41,7 @@ podman info >/dev/null
 podman image exists "$IMAGE" || podman pull "$IMAGE"
 mkdir -p "$OUT"
 
-podman run --rm --pull=never \
+podman run --rm --pull=never --platform "$PLATFORM" \
     --memory 1536m --cpus 3 --pids-limit 512 \
     --volume "$ROOT:/workspace:ro" \
     --volume "$CARGO_REGISTRY:/usr/local/cargo/registry:ro" \

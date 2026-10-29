@@ -26,11 +26,15 @@ inputs are identical; the hardening handoff records whether that comparison was
 measured.
 
 The release script is configured for `aarch64-unknown-linux-gnu` and
-`x86_64-unknown-linux-gnu`; both build inside that digest-pinned Debian Bookworm
-Rust image. In particular, CI no longer builds an Ubuntu-native executable and
-then assumes it runs on an older Bookworm runtime. The x86_64 builder path is
-configured for the Linux CI host, but only the arm64 artifact has been executed
-locally; no hosted workflow result is claimed here.
+`x86_64-unknown-linux-gnu`; each uses its target-specific, digest-pinned Debian
+Bookworm Rust image (arm64
+`docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`,
+amd64
+`docker.io/library/rust@sha256:8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8`).
+In particular, CI no longer builds an Ubuntu-native executable and then assumes
+it runs on an older Bookworm runtime. The x86_64 builder path is configured for
+the Linux CI host, but only the arm64 artifact has been executed locally; no
+hosted workflow result is claimed here.
 
 ## Runtime TLS and CA trust
 
@@ -63,15 +67,17 @@ image available locally:
 podman info
 podman machine list
 # On a new machine, run the explicitly digest-pinned image pull first.
-podman pull docker.io/library/rust@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8
+podman pull docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75
 sh scripts/package-release.sh
 sh scripts/check-release.sh
 ```
 
-The pull command uses ordinary TLS verification. The local intercepting-registry
-exception, if needed, is limited to this image pull; it does not change runtime
-TLS. `scripts/package-release.sh` checks clean Git provenance before the build;
-the builder runs `cargo fetch --locked`, then uses the reusable Cargo registry
+The documented builder-image pull uses ordinary TLS verification. In the
+owner-authorized local intercepting-registry environment, the fixture scripts
+may use `--tls-verify=false` only for fully qualified, digest-pinned image pulls;
+this does not change runtime TLS. `scripts/package-release.sh` checks clean Git
+provenance before the build; the builder runs `cargo fetch --locked`, then uses
+the reusable Cargo registry
 cache read-only and an isolated Cargo target under ignored `target/`. A fresh
 target directory therefore does not imply a cold registry. The script refuses to
 silently substitute another builder digest. Set `FERL_RELEASE_OUTPUT_DIR` to
