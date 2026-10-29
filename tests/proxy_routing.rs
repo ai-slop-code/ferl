@@ -343,7 +343,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     assert!(backend_health.status.success(),
                         "the retained NGINX container reaches replacement backend IP {backend_ip}: {}",
                         String::from_utf8_lossy(&backend_health.stderr));
-                    proxy_action(
+                    let reload = proxy_action(
                         &proxy_id,
                         proxy_port,
                         "8080",
@@ -353,6 +353,12 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         "reload",
                     )
                     .await;
+                    assert!(
+                        reload.status.success(),
+                        "NGINX validates and reloads the replacement upstream: {}{}",
+                        String::from_utf8_lossy(&reload.stdout),
+                        String::from_utf8_lossy(&reload.stderr)
+                    );
                     let effective_config = podman_server::command_output(
                         "podman",
                         &["exec", &nginx_container, "nginx", "-T"],
@@ -850,6 +856,7 @@ async fn reserve_distinct_port(excluded: &[u16]) -> u16 {
 }
 
 async fn wait_for_reloaded_backend(proxy: SocketAddr) -> serving_process::HttpResult {
+    let mut last_status = None;
     timeout(Duration::from_secs(15), async {
         loop {
             let response = send(proxy, "GET", "/api/health/ready", None, "")
@@ -858,6 +865,7 @@ async fn wait_for_reloaded_backend(proxy: SocketAddr) -> serving_process::HttpRe
             if response.status == 200 {
                 return response;
             }
+            last_status = Some(response.status);
             assert!(
                 matches!(response.status, 502 | 504),
                 "proxy backend reconfiguration returned an unexpected status {}",
@@ -867,7 +875,11 @@ async fn wait_for_reloaded_backend(proxy: SocketAddr) -> serving_process::HttpRe
         }
     })
     .await
-    .expect("the retained NGINX instance forwards to its replacement backend before deadline")
+    .unwrap_or_else(|_| {
+        panic!(
+            "the retained NGINX instance forwards to its replacement backend before the 15-second deadline; last status={last_status:?}"
+        )
+    })
 }
 
 async fn container_ip(name: &str) -> IpAddr {
