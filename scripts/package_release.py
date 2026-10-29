@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tarfile
 import tempfile
 
@@ -34,6 +35,16 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def git_output(*arguments: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
@@ -43,6 +54,13 @@ def main() -> None:
     parser.add_argument("--builder", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
+
+    actual_revision = git_output("rev-parse", "HEAD")
+    actual_tree_clean = not git_output("status", "--porcelain", "--untracked-files=normal")
+    if args.source_revision != actual_revision:
+        raise SystemExit("source revision does not match the Git checkout used for packaging")
+    if (args.source_tree_clean == "true") != actual_tree_clean:
+        raise SystemExit("source-tree-clean provenance does not match the Git checkout")
 
     binary = args.binary.resolve(strict=True)
     if not binary.is_file() or not os.access(binary, os.X_OK):
@@ -77,11 +95,18 @@ def main() -> None:
         if source_spec != packaged_spec:
             raise SystemExit("packaged OpenAPI differs from the checked-in normative file")
 
+        if git_output("rev-parse", "HEAD") != actual_revision or (
+            not git_output("status", "--porcelain", "--untracked-files=normal")
+        ) != actual_tree_clean:
+            raise SystemExit("Git source revision or tree changed while packaging")
+
         toolchain_path = next(
             (parent / "toolchain.txt" for parent in binary.parents if (parent / "toolchain.txt").is_file()),
             None,
         )
-        toolchain = toolchain_path.read_text().strip() if toolchain_path else args.builder
+        if toolchain_path is None:
+            raise SystemExit("release executable has no observed builder toolchain record")
+        toolchain = toolchain_path.read_text().strip()
         provenance = {
             "artifact": f"ferl-server-{version}-{args.target}.tar.gz",
             "source_revision": args.source_revision,

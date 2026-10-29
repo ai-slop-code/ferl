@@ -15,26 +15,21 @@ case "$TARGET" in
     *) echo "unsupported Linux release target '$TARGET'" >&2; exit 2 ;;
 esac
 
-if [ "$HOST" = "$TARGET" ]; then
-    mkdir -p "$OUT"
-    {
-        rustc --version
-        cargo --version
-        rustc -vV
-    } > "$OUT/toolchain.txt"
-    CARGO_TARGET_DIR="$OUT/target" cargo build --locked --release --target "$TARGET" --bin ferl-server
-    test -x "$OUT/target/$TARGET/release/ferl-server"
-    echo "built $OUT/target/$TARGET/release/ferl-server with native pinned Rust toolchain"
-    exit 0
-fi
-if [ "$TARGET" != aarch64-unknown-linux-gnu ] || [ "$HOST" != aarch64-apple-darwin ]; then
-    echo "cross-building $TARGET from host $HOST is not supported" >&2
-    exit 2
-fi
+case "$HOST/$TARGET" in
+    aarch64-apple-darwin/aarch64-unknown-linux-gnu \
+    | aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu \
+    | x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu)
+        ;;
+    *)
+        echo "building Linux target $TARGET from host $HOST is not supported" >&2
+        exit 2
+        ;;
+esac
+
 if [ ! -d "$CARGO_REGISTRY" ]; then
-    echo "Cargo registry cache is unavailable at the standard Cargo home" >&2
-    exit 1
+    mkdir -p "$CARGO_REGISTRY"
 fi
+cargo fetch --locked
 podman info >/dev/null
 podman image exists "$IMAGE" || podman pull "$IMAGE"
 mkdir -p "$OUT"
@@ -53,6 +48,11 @@ podman run --rm --pull=never \
     --env RUSTUP_TOOLCHAIN="$RUSTUP_TOOLCHAIN" \
     --entrypoint /bin/sh \
     "$IMAGE" -ec '
+        . /etc/os-release
+        [ "${ID:-}" = debian ] && [ "${VERSION_CODENAME:-}" = bookworm ] || {
+            echo "release builder is not Debian Bookworm" >&2
+            exit 1
+        }
         case "$(rustc --version)" in
             "rustc 1.99.1 "*) ;;
             *) echo "builder rustc is not the pinned 1.99.1 toolchain" >&2; exit 1 ;;
@@ -65,9 +65,10 @@ podman run --rm --pull=never \
             rustc --version
             cargo --version
             rustc -vV
+            printf "builder_os=%s/%s\n" "$ID" "$VERSION_CODENAME"
         } > /out/toolchain.txt
         cargo build --locked --release --target "$TARGET" --bin ferl-server
     '
 
 test -x "$OUT/target/$TARGET/release/ferl-server"
-echo "built $OUT/target/$TARGET/release/ferl-server with pinned $IMAGE"
+echo "built $OUT/target/$TARGET/release/ferl-server in pinned Bookworm builder $IMAGE"

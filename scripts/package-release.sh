@@ -13,30 +13,41 @@ TARGET=${FERL_RELEASE_TARGET:-$DEFAULT_TARGET}
 OUTPUT_DIR=${FERL_RELEASE_OUTPUT_DIR:-"$ROOT/target/release-packages"}
 LINUX_BUILD_DIR=${FERL_LINUX_BUILD_DIR:-"$ROOT/target/linux-release"}
 
+SOURCE_REVISION=$(git -C "$ROOT" rev-parse HEAD)
+if [ -n "${FERL_SOURCE_REVISION:-}" ] && [ "$FERL_SOURCE_REVISION" != "$SOURCE_REVISION" ]; then
+    echo "FERL_SOURCE_REVISION must match the checkout HEAD used for the build" >&2
+    exit 1
+fi
+SOURCE_STATUS_BEFORE=$(git -C "$ROOT" status --porcelain --untracked-files=normal)
+if [ -n "$SOURCE_STATUS_BEFORE" ]; then
+    echo "release packaging requires a clean tracked/untracked source tree before building" >&2
+    exit 1
+fi
+SOURCE_TREE_CLEAN=true
+
 case "$TARGET" in
     aarch64-unknown-linux-gnu)
         export FERL_LINUX_BUILD_DIR="$LINUX_BUILD_DIR"
         sh "$SCRIPT_DIR/build-linux.sh" "$TARGET"
         BINARY="$LINUX_BUILD_DIR/target/$TARGET/release/ferl-server"
-        BUILDER="Rust/Cargo 1.99.1; linux/arm64 native or pinned Debian Bookworm builder image sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8"
+        BUILDER="Rust/Cargo 1.99.1; pinned Debian Bookworm builder image sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8; linux/arm64"
         ;;
     x86_64-unknown-linux-gnu)
         export FERL_LINUX_BUILD_DIR="$LINUX_BUILD_DIR"
         sh "$SCRIPT_DIR/build-linux.sh" "$TARGET"
         BINARY="$LINUX_BUILD_DIR/target/$TARGET/release/ferl-server"
-        BUILDER="Rust/Cargo 1.99.1 native linux/x86_64"
+        BUILDER="Rust/Cargo 1.99.1; pinned Debian Bookworm builder image sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8; linux/amd64"
         ;;
     *)
-        echo "unsupported release target '$TARGET'; only verified aarch64-unknown-linux-gnu is packaged" >&2
+        echo "unsupported release target '$TARGET'; choose aarch64-unknown-linux-gnu or x86_64-unknown-linux-gnu" >&2
         exit 2
         ;;
 esac
 
-SOURCE_REVISION=${FERL_SOURCE_REVISION:-$(git -C "$ROOT" rev-parse HEAD)}
-if [ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" ]; then
-    SOURCE_TREE_CLEAN=true
-else
-    SOURCE_TREE_CLEAN=false
+if [ "$(git -C "$ROOT" rev-parse HEAD)" != "$SOURCE_REVISION" ] \
+    || [ "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" != "$SOURCE_STATUS_BEFORE" ]; then
+    echo "source revision or tree changed while building the release executable" >&2
+    exit 1
 fi
 python3 "$SCRIPT_DIR/package_release.py" \
     --binary "$BINARY" \

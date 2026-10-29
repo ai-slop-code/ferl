@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 *.log
+__pycache__/
 /test-artifacts/
 /container-data/
 /.DS_Store

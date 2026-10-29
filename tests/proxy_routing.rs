@@ -46,7 +46,14 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
     let proxy_id = format!("part11-proxy-{run_id}");
     let network = format!("ferl-part11-net-{run_id}");
     let host_proxy_port = reserve_port().await;
-    let proxy_port = reserve_port().await;
+    let proxy_port = reserve_distinct_port(&[host_proxy_port]).await;
+    let probe_proxy_port = reserve_distinct_port(&[host_proxy_port, proxy_port]).await;
+    assert_ne!(host_proxy_port, proxy_port);
+    assert_ne!(host_proxy_port, probe_proxy_port);
+    assert_ne!(
+        probe_proxy_port, proxy_port,
+        "host-gateway probe and trusted proxy replacement use independent ports"
+    );
     let host_runtime = std::env::current_dir()
         .unwrap()
         .join("target/proxy")
@@ -179,7 +186,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     .await;
                     proxy_action(
                         &probe_proxy_id,
-                        proxy_port,
+                        probe_proxy_port,
                         "8080",
                         "ferl-backend",
                         Some(&network_for_test),
@@ -189,7 +196,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     .await;
                     proxy_action(
                         &probe_proxy_id,
-                        proxy_port,
+                        probe_proxy_port,
                         "8080",
                         "ferl-backend",
                         Some(&network_for_test),
@@ -310,7 +317,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     assert!(!server_a_exit.oom_killed);
                     let probe_cleanup = proxy_action(
                         &probe_proxy_id,
-                        proxy_port,
+                        probe_proxy_port,
                         "8080",
                         "ferl-backend",
                         Some(&network_for_test),
@@ -636,7 +643,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
     .await;
     let cleanup_probe_proxy = proxy_action(
         &cleanup_probe_proxy_id,
-        proxy_port,
+        probe_proxy_port,
         "8080",
         "ferl-backend",
         Some(&network),
@@ -699,6 +706,15 @@ async fn reserve_port() -> u16 {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     port
+}
+
+async fn reserve_distinct_port(excluded: &[u16]) -> u16 {
+    loop {
+        let candidate = reserve_port().await;
+        if !excluded.contains(&candidate) {
+            return candidate;
+        }
+    }
 }
 
 async fn container_ip(name: &str) -> IpAddr {

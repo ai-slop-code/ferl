@@ -184,6 +184,32 @@ impl ContainerServer {
         host_port: u16,
         extra: &[(&str, &str)],
     ) -> Self {
+        Self::start_with_mounts(
+            binary,
+            name,
+            network,
+            database_url,
+            cursor_key,
+            trusted_proxies,
+            host_port,
+            &[],
+            extra,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_with_mounts(
+        binary: &Path,
+        name: &str,
+        network: &str,
+        database_url: &str,
+        cursor_key: &str,
+        trusted_proxies: &str,
+        host_port: u16,
+        read_only_mounts: &[(&Path, &str)],
+        extra: &[(&str, &str)],
+    ) -> Self {
         let binary = binary
             .canonicalize()
             .expect("packaged ferl-server executable resolves");
@@ -249,6 +275,11 @@ impl ContainerServer {
                 "--env",
                 "FERL_SHUTDOWN_TIMEOUT_SECS=20",
             ]);
+        for (host_path, container_path) in read_only_mounts {
+            child
+                .args(["--volume"])
+                .arg(format!("{}:{container_path}:ro", host_path.display()));
+        }
         for (key, value) in extra {
             child.arg("--env").arg(format!("{key}={value}"));
         }
