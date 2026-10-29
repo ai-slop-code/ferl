@@ -52,7 +52,10 @@ impl LegacyWorktree {
             .arg("--bin")
             .arg("ferl-server")
             .kill_on_drop(true);
-        let result = match timeout(Duration::from_secs(60), build.output()).await {
+        // This is a deliberately isolated cold build of retained Part 07
+        // dependencies. Ten minutes remains bounded while allowing clean CI
+        // workers to compile the historical graph without a warmed target dir.
+        let result = match timeout(Duration::from_secs(600), build.output()).await {
             Ok(Ok(output)) => output,
             Ok(Err(_)) => {
                 guard.cleanup().await?;
@@ -60,7 +63,7 @@ impl LegacyWorktree {
             }
             Err(_) => {
                 guard.cleanup().await?;
-                return Err("Part 07 server build exceeded its 60-second deadline".to_owned());
+                return Err("Part 07 server build exceeded its 600-second deadline".to_owned());
             }
         };
         if !result.status.success() {

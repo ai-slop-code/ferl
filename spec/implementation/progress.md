@@ -1,6 +1,6 @@
 # Implementation progress and agent handoff
 
-Handoff summary: Parts 01–10 are complete and merged into local `main`. Part 11 — Release verification is next and remains separate.
+Handoff summary: Parts 01–11 are complete and merged into local `main`. Part 11 — Release verification was verified on `implementation/11-release-verification` from baseline `71d77b3f3838081add13d46cdefe0a91cdd70efd` and integrated by the explicit no-ff merge recorded below.
 
 Status lifecycle: Planned → In progress → Verified (awaiting merge) → Complete. Use Blocked when a required implementation, verification or Git integration step cannot finish. Complete requires a committed merge into local `main`, as defined in [git-workflow.md](git-workflow.md).
 
@@ -18,7 +18,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 08 Link and tag discovery | Complete | Verified implementation `1526f60527ac7fd9206fbbdef2b51a11b87d5af8`, integrated branch tip `fd9f4d35bda58b82a81834891d95f318fa3cc913`, based on Part 07 merge `9bcf7c0c021c994e76d0696633fe822f0a49a5e1`, is integrated by the explicit no-ff merge recorded in the Part 08 handoff below. The closing gate passed; only this completion handoff differs in the merge commit. |
 | 09 Analytics reports | Complete | Verified implementation `178e297` and handoff-only part tip `f08b805` from `implementation/09-analytics-reports`, based on Part 08 merge `12c10c234c492dcbdf554a3cc6e1321d83474361`, are integrated by the explicit no-ff merge recorded below. |
 | 10 Observability and lifecycle | Complete | Verified implementation `1d84f0a` and handoff-only branch tip `3f21bb4` are integrated from `implementation/10-observability-and-lifecycle` by the explicit no-ff merge from base `6153b768`; see the Part 10 handoff below. |
-| 11 Release verification | Planned | — |
+| 11 Release verification | Complete | Verified implementation `95d053d70c47c7199cfbd45545fa8c08b8d945d1` and handoff-only branch tip `4226cd63298a7599e5866ae545845a590e32616f` from `implementation/11-release-verification`, based on `71d77b3f3838081add13d46cdefe0a91cdd70efd`, are integrated by the explicit local no-ff merge recorded below. The full local gate, OpenAPI, clean-source proxy/package gates, and all 51 scenario evidence mappings are recorded in the Part 11 handoff. |
 
 ## Recorded decisions
 
@@ -1157,9 +1157,90 @@ telemetry/metrics,telemetry/mod,telemetry/providers}.rs`,
   rollout/proxy checks, packaging, and release-wide OpenAPI verification remain
   Part 11 and are not claimed here.
 
-No required Part 10 check remains unexecuted and no blocker remains. Part 10 is
-complete and merged. Part 11 — Release verification is next; its independent
-release audit remains unexecuted and no release-readiness claim is made.
+No required Part 10 check remained unexecuted at this handoff. Part 10 is
+complete and merged. Part 11 was the next part at that time; its independent
+release audit is now recorded in the Part 11 handoff below.
+
+## Part 11 handoff — 2026-10-29
+
+Status: **Complete**. The Part 11 implementation and required local verification
+passed on `implementation/11-release-verification`, based on the verified Part
+10 merge `71d77b3f3838081add13d46cdefe0a91cdd70efd`. The verified implementation
+tip is `95d053d70c47c7199cfbd45545fa8c08b8d945d1`
+(`fix(proxy): align documented proxy fixture version`); its preceding feature
+commit is `c548e47ff50175a5111f1c4195b4ef24a0980799`. Handoff-only branch tip
+`4226cd63298a7599e5866ae545845a590e32616f` (`docs(part-11): record verified
+release handoff`) was integrated by the explicit local no-ff merge into `main`.
+The merge parents are `71d77b3f3838081add13d46cdefe0a91cdd70efd` and
+`4226cd63298a7599e5866ae545845a590e32616f`. The merge tree differs from the
+reviewed part tip only in this Part 11 completion metadata. Its merge hash is
+reported from Git after creation rather than embedded in its own tree.
+
+### Delivered verification and operator material
+
+- Added real A/B/C production HTTP coverage for shared account/IP create
+  allowances, durable charges, stale-key mutation revalidation, A/B analytics
+  workers, queued-event deletion, graceful readiness withdrawal, and replacement
+  against the same isolated PostgreSQL schema.
+- Added pinned whole-document OpenAPI 3.1 validation, all local references and
+  JSON Schema 2020-12 roots, a reviewed **22-entry** method/path/operationId
+  inventory, and production executable TCP probes. Existing business and
+  `spec/openapi.yaml` contracts remain normative and unchanged.
+- Added a pinned NGINX 1.30.6 TCP fixture with a separate static root, verified
+  raw-path/body/header behavior, observed proxy trust, and real maximum-header
+  cursor continuation. The macOS host-gateway probe observed `127.0.0.1`, which
+  is explicitly not trusted; the isolated network observed NGINX/backend peer
+  `10.89.0.4`, direct untrusted peer `10.89.0.3`, and NGINX client `10.89.0.6`.
+- Added a locked Linux/arm64 Bookworm release build, normalized archive
+  packaging, internal checksums/provenance, and packaged-binary migrate,
+  bootstrap, HTTP, rotation, deletion, and no-reseed restart smoke. Operator and
+  proxy setup, limits, trust, migration, backup, TLS/CA, and verification scope
+  are documented in `docs/release.md`.
+- `spec/server-business-logic.md`, `spec/openapi.yaml`, migrations, and
+  `Cargo.lock` were not changed. No remote, push, external publication, or
+  deployment was performed.
+
+### Verification evidence
+
+- Environment: macOS host, Podman 6.1.4, PostgreSQL 17.6, Rust/Cargo 1.99.1,
+  NGINX 1.30.6, and the digest-pinned Debian Bookworm Rust 1.99.1 builder. The
+  locally verified artifact target is `aarch64-unknown-linux-gnu`; no other
+  target or host platform is claimed.
+- `sh scripts/check.sh` — passed on the exact feature implementation that was
+  committed as `c548e47ff50175a5111f1c4195b4ef24a0980799`, before the subsequent
+  one-line proxy-version comment correction. The log reports **224 all-target
+  tests plus 3 doctests passed**, with zero failures and zero ignored tests; it
+  ran fmt, locked check, warning-denied Clippy, all-target tests, doctests, and
+  the packaged release smoke. The correction changes no executable code or
+  test behavior.
+- `sh scripts/check-openapi.sh` — passed on verified implementation
+  `95d053d70c47c7199cfbd45545fa8c08b8d945d1` (3 tests; 0 failed/ignored).
+- `sh scripts/check-proxy.sh` — passed on clean source at that same revision
+  (1 production proxy test; 0 failed/ignored). It rebuilt and verified the
+  17-file Linux/arm64 archive with `source_tree_clean=true`.
+- `sh scripts/check-release.sh` — passed on clean source at that revision
+  (5 tests: 3 OpenAPI, 1 proxy, 1 packaged release smoke; 0 failed/ignored).
+  The artifact is
+  `target/release-packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`,
+  SHA-256 `07d7641e88e852d6891b459c7dbd18f7d0a1db7f0b23850418d7b22718ab5d17`.
+  Its verified provenance records source `95d053d70c47c7199cfbd45545fa8c08b8d945d1`,
+  `source_tree_clean=true`, target `aarch64-unknown-linux-gnu`, 17 inventoried
+  files, OpenAPI SHA-256
+  `45677d0d0c0afda4687fada791ce492682ad546f2fbc612113890cffecbb6b5e`, and
+  binary SHA-256
+  `76fb42bffd1e224c616b87ca19b22ec52201e9fe101d4a7954a247bab3c32919`.
+- All 51 scenarios have exact executable evidence in `acceptance-map.md`; the
+  corresponding full-suite and dedicated-gate results are recorded in
+  `docs/release-verification.md`. Harness-owned proxy/server/network resources
+  were removed; the pre-existing PostgreSQL fixture remains running.
+- Hosted CI was not run. Rust 1.94 compilation and an end-to-end TLS handshake
+  were not run and are not claimed. Neither is a blocker to the locally
+  specified Part 11 gate; no platform or hosted result is inferred.
+
+No required local Part 11 check remains unexecuted. The explicit local no-ff
+merge is complete; the implementation branch is retained, no remote is
+configured, and no push or external publication occurred. The merge commit hash
+is reported from Git after creation rather than embedded in its own tree.
 
 ## Per-part handoff template
 

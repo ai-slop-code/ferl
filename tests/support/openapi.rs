@@ -17,15 +17,23 @@ pub fn resolve_schema(name: &str) -> Value {
     with_draft(expanded)
 }
 
+/// Resolve one OpenAPI Schema Object using JSON Schema 2020-12 `$ref`
+/// semantics. Sibling keywords are preserved conjunctively as `allOf`.
+#[allow(dead_code)]
+pub fn resolve_schema_value(schema: &Value) -> Result<Value, String> {
+    let root = document();
+    resolve_refs(schema, &root, &mut Vec::new())
+        .map(with_draft)
+        .map_err(|()| "schema contains an unresolved, external, or cyclic reference".to_owned())
+}
+
 /// OpenAPI 3.1 inherits JSON Schema 2020-12 reference semantics: `$ref` and
 /// sibling assertions are conjunctive, not object-merge overrides.
 fn resolve_refs(schema: &Value, root: &Value, stack: &mut Vec<String>) -> Result<Value, ()> {
     match schema {
         Value::Object(object) => {
             if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-                if !reference.starts_with("#/components/schemas/")
-                    || stack.iter().any(|entry| entry == reference)
-                {
+                if !reference.starts_with("#/") || stack.iter().any(|entry| entry == reference) {
                     return Err(());
                 }
                 let target = root.pointer(reference.trim_start_matches('#')).ok_or(())?;

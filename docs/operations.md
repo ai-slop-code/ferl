@@ -74,10 +74,11 @@ Run the mandatory PostgreSQL + Collector + production-process verification with:
 sh scripts/check.sh
 ```
 
-The gate starts the existing locked PostgreSQL 17.6 fixture and the Collector,
+The gate starts the existing locked PostgreSQL 17.6 fixture and a fresh Collector,
 waits for useful readiness, exports `FERL_TEST_OTEL_ENDPOINT` and the isolated
 capture path, runs all Rust gates including `tests/telemetry_signals.rs`, and
-stops only its Collector container on exit. It leaves capture files for audit.
+removes only its own labeled Collector container on exit. It leaves the fresh,
+run-isolated capture files for audit.
 The process suite exercises real `ferl-server` TCP processes, not the in-process
 router as export evidence.
 

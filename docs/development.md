@@ -9,25 +9,29 @@ including `rustfmt` and `clippy`, if it is not already available.
 
 ```sh
 cargo fmt --all -- --check
-cargo check --workspace --all-targets --all-features
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets
+cargo check --locked --workspace --all-targets --all-features
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-targets
 ```
 
-The all-targets test command includes the Part 03 `domain_contracts`,
-`http_decoding`, `cursor_codec`, and `openapi_contracts` suites. The OpenAPI
-suite reads the checked-in OpenAPI 3.1 YAML with `yaml_serde` and validates
-representative fixtures against its locally resolved component schemas using
-the pinned JSON Schema Draft 2020-12 `jsonschema` crate. It does not claim
-endpoint/release conformance (Part 11).
+The all-targets test command includes the domain, decoding, cursor, existing
+OpenAPI component-conformance, and Part 11 `openapi_release` suites. The required
+whole-document OpenAPI command is `sh scripts/check-openapi.sh`: it validates
+the checked-in document against the pinned OAI OpenAPI 3.1 schema, compiles all
+applicable JSON Schema roots using locked Draft 2020-12 tooling, rejects invalid
+controls, checks the method/path/operationId inventory, and probes the
+production executable over TCP. `spec/openapi.yaml` remains authoritative.
 
 The PostgreSQL integration test is required by the ordinary test command. It
 fails with an actionable message if the harness environment is missing; it is
 not silently skipped. Run `sh scripts/check.sh` to start/verify the owned
-PostgreSQL and Collector fixtures, set required test variables, execute fmt,
-all-target/all-feature build, warning-denied Clippy, all-target tests, and
-doctests. Collector/process tests are mandatory and fail rather than skip if the
-fixture cannot be reached.
+PostgreSQL and run-isolated Collector fixtures, set required test variables,
+execute fmt, all-target/all-feature build, warning-denied Clippy, all-target
+tests, doctests, build the locked packaged release executable, and run
+independent-process/proxy/release-smoke evidence. Collector/process tests are
+mandatory and fail rather than skip if a fixture cannot be reached. Use
+`sh scripts/check-openapi.sh`, `sh scripts/check-proxy.sh`, and
+`sh scripts/check-release.sh` for independently repeatable focused release gates.
 
 ## PostgreSQL with Podman
 
@@ -85,7 +89,9 @@ single-link management routes, Part 07 adds exact public GET/HEAD redirects and
 bounded best-effort visit ingestion, Part 08 adds scoped link listing and tag
 discovery, and Part 09 registers the three authorized per-link analytics reports.
 Part 10 adds OTLP signals, privacy boundaries, and bounded lifecycle. Part 11
-release verification remains separate; this is not a release-readiness claim.
+adds independent-process release verification, whole-document OpenAPI
+conformance, the pinned TCP proxy fixture, and a packaged-binary smoke. See
+[the release/operator guide](release.md) and run `sh scripts/check-release.sh`.
 Readiness is fail-closed until the production composition verifies migration
 history and required schema objects, then performs a bounded database probe.
 The verifier rechecks for database or schema recovery.
@@ -147,7 +153,8 @@ decision.
 `visit_concurrency`, `link_process`, `link_listing`, `link_filters`,
 `link_pagination`, `tag_discovery`, `discovery_failures`, `discovery_values`,
 `discovery_process`, `visit_records`, `analytics_authorization`, `report_failures`,
-`report_process`, and migrations. Part 09 also has deterministic real-PostgreSQL
+`report_process`, `multi_instance_process`, `openapi_release`, `proxy_routing`,
+`release_smoke`, and migrations. Part 09 also has deterministic real-PostgreSQL
 worker-backed report and production-query-plan tests in `src/analytics/reports/tests.rs`.
 The mandatory `telemetry_signals` suite also runs the production binary against
 PostgreSQL and the pinned Collector and inspects real OTLP and process-shutdown
