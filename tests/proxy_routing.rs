@@ -343,10 +343,25 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         "reload",
                     )
                     .await;
+                    let effective_config = podman_server::command_output(
+                        "podman",
+                        &["exec", &nginx_container, "nginx", "-T"],
+                        Duration::from_secs(10),
+                    ).await;
+                    assert!(effective_config.status.success());
+                    assert!(String::from_utf8_lossy(&effective_config.stdout).contains(&backend_ip),
+                        "running NGINX config uses the replacement backend's observed address");
                     assert_eq!(container_id(&nginx_container).await, nginx_identity,
                         "the actual proxy instance observed before trust remains alive for assertions");
                     assert_eq!(container_ip(&nginx_container).await, nginx_ip,
                         "the forwarding proxy's peer address cannot pass by replacement-address reuse");
+                    let nginx_health = podman_server::command_output(
+                        "podman",
+                        &["exec", &nginx_container, "wget", "-qO-", "http://127.0.0.1:8080/api/health/ready"],
+                        Duration::from_secs(10),
+                    ).await;
+                    assert!(nginx_health.status.success(),
+                        "reloaded NGINX forwards health to its replacement backend");
                     let proxy_ready = wait_for_reloaded_backend(proxy).await;
                     assert_headers(&proxy_ready);
 
