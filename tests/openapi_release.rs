@@ -99,8 +99,15 @@ fn whole_openapi_document_and_every_json_schema_root_are_valid() {
     );
 
     let mut example_with_schema_property = doc.clone();
+    let schema_like_example = serde_json::json!({
+        "schema":{"$schema":"https://example.invalid/not-a-schema"},
+        "$ref":"#/not-a-reference",
+        "$dynamicRef":"#/not-a-dynamic-reference"
+    });
     example_with_schema_property["paths"]["/api/v1/links"]["post"]["requestBody"]["content"]["application/json"]
-        ["examples"]["schemaPayload"] = serde_json::json!({"value":{"schema":{"$schema":"https://example.invalid/not-a-schema"},"$ref":"#/not-a-reference","$dynamicRef":"#/not-a-dynamic-reference"}});
+        ["examples"]["schemaPayload"] = serde_json::json!({"value":schema_like_example});
+    example_with_schema_property["paths"]["/api/v1/links"]["post"]["requestBody"]["content"]["application/json"]
+        ["example"] = schema_like_example;
     assert!(
         validate_openapi_document(&example_with_schema_property, &validator).is_ok(),
         "arbitrary example payload members are not mistaken for Schema Objects"
@@ -284,6 +291,110 @@ fn whole_openapi_document_and_every_json_schema_root_are_valid() {
         .build(&unsupported_format)
         .unwrap();
     assert!(!format_validator.is_valid(&serde_json::json!("not-a-date")));
+}
+
+#[test]
+fn public_schema_resolvers_validate_referenced_dialects_and_preserve_instance_data() {
+    let base = document();
+    let root_ref = serde_json::json!({"$ref":"#/components/schemas/ReferencedTarget"});
+
+    let mut unsupported = base.clone();
+    unsupported["components"]["schemas"]["ReferencedTarget"] = serde_json::json!({
+        "$schema":"https://json-schema.org/draft/2019-09/schema",
+        "type":"string"
+    });
+    unsupported["components"]["schemas"]["ReferencedRoot"] = root_ref.clone();
+    let unsupported_component =
+        resolve_component_schema_in_document(&unsupported, "ReferencedRoot");
+    let unsupported_root = resolve_schema_value_in_document(&unsupported, &root_ref);
+
+    let mut invalid_type = base.clone();
+    invalid_type["components"]["schemas"]["ReferencedTarget"] =
+        serde_json::json!({"$schema":17,"type":"string"});
+    invalid_type["components"]["schemas"]["ReferencedRoot"] = root_ref.clone();
+    let invalid_type_result = resolve_component_schema_in_document(&invalid_type, "ReferencedRoot");
+
+    let mut second_hop = base.clone();
+    second_hop["components"]["schemas"]["ReferencedRoot"] = serde_json::json!({
+        "$ref":"#/components/schemas/ReferencedMiddle"
+    });
+    second_hop["components"]["schemas"]["ReferencedMiddle"] = serde_json::json!({
+        "$ref":"#/components/schemas/ReferencedLeaf"
+    });
+    second_hop["components"]["schemas"]["ReferencedLeaf"] = serde_json::json!({
+        "$schema":"https://example.invalid/unsupported-dialect",
+        "type":"string"
+    });
+    let second_hop_result = resolve_schema_value_in_document(
+        &second_hop,
+        &second_hop["components"]["schemas"]["ReferencedRoot"],
+    );
+
+    assert!(
+        unsupported_component.is_err()
+            && unsupported_root.is_err()
+            && invalid_type_result.is_err()
+            && second_hop_result.is_err(),
+        "public resolution rejects dialects introduced at any reference depth before adaptation; component={unsupported_component:?}, root={unsupported_root:?}, invalid_type={invalid_type_result:?}, second_hop={second_hop_result:?}"
+    );
+
+    let mut supported = base.clone();
+    supported["components"]["schemas"]["RestrictedRole"] = serde_json::json!({
+        "type":"string",
+        "enum":["admin", "user"]
+    });
+    let restricted = resolve_schema_value_in_document(
+        &supported,
+        &serde_json::json!({
+            "$ref":"#/components/schemas/RestrictedRole",
+            "enum":["admin"]
+        }),
+    )
+    .expect("supported referenced schemas retain conjunctive sibling assertions");
+    let validator = jsonschema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .build(&restricted)
+        .unwrap();
+    assert!(validator.is_valid(&serde_json::json!("admin")));
+    assert!(!validator.is_valid(&serde_json::json!("user")));
+
+    supported["components"]["schemas"]["AllowAny"] = serde_json::json!(true);
+    supported["components"]["schemas"]["DenyAny"] = serde_json::json!(false);
+    assert_eq!(
+        resolve_schema_value_in_document(
+            &supported,
+            &serde_json::json!({"$ref":"#/components/schemas/AllowAny"})
+        )
+        .unwrap(),
+        serde_json::json!(true),
+        "referenced true schemas remain permissive"
+    );
+    assert_eq!(
+        resolve_schema_value_in_document(
+            &supported,
+            &serde_json::json!({"$ref":"#/components/schemas/DenyAny"})
+        )
+        .unwrap(),
+        serde_json::json!(false),
+        "referenced false schemas remain rejecting"
+    );
+
+    let instance_data = serde_json::json!({
+        "$schema":"https://example.invalid/ordinary-instance-data",
+        "$ref":"#/not-a-schema-reference",
+        "$dynamicRef":"#/not-a-dynamic-reference"
+    });
+    let schema_with_data = serde_json::json!({
+        "const":instance_data,
+        "default":instance_data,
+        "examples":[instance_data]
+    });
+    let resolved_data = resolve_schema_value_in_document(&base, &schema_with_data)
+        .expect("constant/default/example values are data, not nested schemas");
+    for location in ["const", "default"] {
+        assert_eq!(resolved_data[location], instance_data);
+    }
+    assert_eq!(resolved_data["examples"][0], instance_data);
 }
 
 #[test]
@@ -613,9 +724,12 @@ fn document_references_resolve(doc: &Value) -> bool {
                     seen.insert(reference.to_owned());
                 }
                 for (keyword, child) in object {
-                    // Payloads and defaults are data, not OpenAPI Reference
-                    // Objects or JSON Schema keywords.
-                    if matches!(keyword.as_str(), "value" | "default" | "const" | "enum") {
+                    // Payloads, examples, defaults, and constants are data,
+                    // not OpenAPI Reference Objects or JSON Schema keywords.
+                    if matches!(
+                        keyword.as_str(),
+                        "example" | "value" | "default" | "const" | "enum"
+                    ) {
                         continue;
                     }
                     if !visit(child, root, seen) {

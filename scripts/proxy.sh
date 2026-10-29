@@ -51,10 +51,12 @@ assert_configuration() {
         exit 1
     }
     mounts=$(podman inspect --format '{{range .Mounts}}{{.Destination}} {{end}}' "$NAME")
-    case "$mounts" in
-        *"/etc/nginx/conf.d"*"/etc/nginx/ferl-proxy-headers.conf"*"/usr/share/nginx/html"*) ;;
-        *) echo "proxy is missing the checked-in routing config/static fixture mounts" >&2; exit 1 ;;
-    esac
+    for required_mount in "/etc/nginx/conf.d" "/etc/nginx/ferl-proxy-headers.conf" "/usr/share/nginx/html"; do
+        case " $mounts " in
+            *" $required_mount "*) ;;
+            *) echo "proxy is missing required fixture mount $required_mount" >&2; exit 1 ;;
+        esac
+    done
 }
 
 render_config() {
