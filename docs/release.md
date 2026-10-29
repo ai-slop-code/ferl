@@ -20,10 +20,11 @@ distributions, libc versions, CPU architectures, or operating systems. The
 archive is not a container image. No bit-for-bit reproducibility claim is made;
 the packaging process normalizes archive timestamps/ownership and records
 checksums and build provenance. The documented locked builder is a repeatable
-procedure; it does not by itself prove independent builds are byte-identical.
-Packaging can be compared deterministically when the executable and all source
-inputs are identical; the hardening handoff records whether that comparison was
-measured.
+procedure; it does not by itself prove independent executable builds are
+byte-identical. Repackaging identical binary, source, and build-receipt inputs is
+deterministic. A new build invocation gets a distinct receipt ID, so compare
+binary hashes—not whole archives—when measuring independent executable
+reproducibility.
 
 The release script is configured for `aarch64-unknown-linux-gnu` and
 `x86_64-unknown-linux-gnu`; each uses its target-specific, digest-pinned Debian
@@ -75,27 +76,51 @@ sh scripts/check-release.sh
 The documented builder-image pull uses ordinary TLS verification. In the
 owner-authorized local intercepting-registry environment, the fixture scripts
 may use `--tls-verify=false` only for fully qualified, digest-pinned image pulls;
-this does not change runtime TLS. `scripts/package-release.sh` checks clean Git
-provenance before the build; the builder runs `cargo fetch --locked`, then uses
-the reusable Cargo registry cache (writable so Cargo can unpack locked sources)
-and an isolated Cargo target under ignored `target/`. A fresh target directory
-therefore does not imply a cold registry. The script refuses to
-silently substitute another builder digest. Set `FERL_RELEASE_OUTPUT_DIR` to
-choose another local output directory. Verify both the archive and its internal
-inventory:
+this does not change runtime TLS. `scripts/package-release.sh` requires a clean
+checkout, archives the exact committed Git tree into a run-specific source
+snapshot. It checks every snapshot path, mode, and byte against committed Git
+blobs, mounts that snapshot read-only for the locked build, and records the source tree, target,
+binary checksum, pinned builder, observed toolchain, build command, and
+run-specific build receipt. Pre/post Git checks describe the invoking checkout;
+the actual Cargo build and copied release sources are separately bound to the
+committed snapshot. The builder runs `cargo fetch --locked`, then uses the
+reusable Cargo registry cache (writable so Cargo can unpack locked sources) and
+an isolated Cargo target under ignored `target/`. A fresh target directory
+therefore does not imply a cold registry. The script refuses to silently
+substitute another builder digest. Set `FERL_RELEASE_OUTPUT_DIR` to choose
+another local output directory and `FERL_LINUX_BUILD_DIR` to choose build
+evidence storage. Verify an archive using the prevalidating extractor; do not
+run `tar -x` on an unverified archive:
 
 ```sh
-cd target/release-packages
-shasum -a 256 -c ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz.sha256
-mkdir -p inspect
-tar -xzf ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz -C inspect
-cd inspect
-shasum -a 256 -c SHA256SUMS
-cmp spec/openapi.yaml ../../../spec/openapi.yaml
+ARCHIVE="$PWD/target/release-packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz"
+REVISION=$(git rev-parse HEAD)
+mkdir -p target/release-inspection
+python3 scripts/verify-release.py \
+  --archive "$ARCHIVE" \
+  --source-revision "$REVISION" \
+  --target aarch64-unknown-linux-gnu \
+  --openapi "$PWD/spec/openapi.yaml" \
+  --extract-to "$PWD/target/release-inspection/ferl-server-0.1.0-aarch64-unknown-linux-gnu"
+ROOT="$PWD/target/release-inspection/ferl-server-0.1.0-aarch64-unknown-linux-gnu"
+python3 scripts/verify-release.py \
+  --root "$ROOT" \
+  --archive "$ARCHIVE" \
+  --source-revision "$REVISION" \
+  --target aarch64-unknown-linux-gnu \
+  --openapi "$PWD/spec/openapi.yaml" \
+  --require-clean-source
+shasum -a 256 -c "$ROOT/SHA256SUMS"
 ```
 
-The extracted binary's revision, target, toolchain/image, schema and migration
-inventory, binary checksum, and OpenAPI checksum are in `PROVENANCE.json`.
+Before writing any member, the verifier checks the archive sidecar and bytes,
+canonical unique paths, exact directories/files, regular-file-only members,
+the committed source revision/tree, every source-file byte, checksums, target
+ELF architecture, OpenAPI, migrations, and observed build receipt. It extracts
+to a run-specific staging directory and renames only after successful
+verification. The extracted binary's revision, target, toolchain/image, schema
+and migration inventory, binary checksum, and OpenAPI checksum are in
+`PROVENANCE.json`.
 Keep the archive and sidecar checksum together. Checksums detect corruption;
 they do not authenticate the publisher. Use the organization's separate signed
 artifact-distribution process when one is established.

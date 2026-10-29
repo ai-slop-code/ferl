@@ -94,7 +94,9 @@ scenarios; it adds no business behavior or normative contract change.
   document's required response maps checked positively, actual protected-route
   ownership outcomes, received response headers, all 22 reviewed
   `(method,path,operationId)` entries, supported schema dialects, boolean
-  Schema Objects, local `$ref`/`$dynamicRef` checks, and invalid controls.
+  Schema Objects, local `$ref` checks, and invalid controls. Its former
+  `$dynamicRef` pointer-existence check is not semantic support; the new closure
+  rejects dynamic references explicitly and records that limitation.
 - **Release provenance/restart:** the clean-checkout `sh scripts/check-release.sh`
   passed from the exact implementation commit with fresh Cargo targets and full
   Git history. Its archived artifact has source revision
@@ -104,10 +106,15 @@ scenarios; it adds no business behavior or normative contract change.
   rotation/delete/restart-without-reseeding flow. Registry cache reuse is
   recorded in `progress.md` and `docs/release-verification.md`.
 
-The final consolidated local result was **228 all-target tests plus 3 doctests**
-with no failures or ignored tests. Rust 1.94 and TLS are new hardening evidence;
-hosted CI and the amd64 runtime remain unverified and are not represented as
-passing.
+**Historical count correction:** the previous hardening handoff's 228 aggregated
+test-result count included the 3-doctest result, which was then listed again as
+additional evidence. The corrected arithmetic label is **225 all-target tests
+plus 3 doctests (228 distinct tests)**, not 228 plus 3. No raw hardening gate log
+was retained under `target/hardening-evidence/9755fb6-clean-checkout/`, so the
+original per-binary output cannot be independently reconstructed; this corrects
+the handoff's arithmetic/label and is not fresh verification. Rust 1.94 and TLS
+remain historical hardening evidence; hosted CI and native amd64 runtime remain
+unverified and are not represented as passing.
 
 ## Additional derived checks
 

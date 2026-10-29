@@ -88,9 +88,11 @@ migration was changed.
   semantics. The normative document now passes the actual required-response
   helper; route probes require the precise unauthenticated result, including a
   seeded real GET/HEAD redirect; received response headers are validated as
-  received. Dialects and `$ref`/`$dynamicRef` targets are explicitly checked,
-  boolean schemas preserve allow/deny semantics, and negative controls cover
-  these cases.
+  received. Dialects and local `$ref` targets are checked, boolean schemas
+  preserve allow/deny semantics, and negative controls cover these cases. The
+  former `$dynamicRef` check established pointer existence only, not dynamic
+  scope/anchor behavior; the verification-integrity closure now rejects that
+  keyword explicitly rather than claiming semantic support.
 - The proxy test reused the same published port for its peer-observation probe
   and the later trusted-proxy replacement, then initially sent probe traffic to
   the replacement port before it was started. It now allocates three distinct
@@ -113,6 +115,18 @@ migration was changed.
   now waits for the loopback TCP listener used by the client, and a failure
   reports only the migration command's sanitized category.
 
+### Historical test-count correction
+
+The hardening handoff's “228 all-target tests plus 3 doctests” double-counted
+the doctest result line: its displayed 228 aggregate included the separately
+reported 3 doctests. The corrected arithmetic partition is **225 all-target
+tests plus 3 doctests (228 distinct tests)**. The original hardening raw gate
+log is not retained—the historical evidence directory contains the package and
+repackages only—so this is an explicit arithmetic/label correction, not an
+independent reconstruction of per-binary output or a fresh rerun. The earlier
+hardening milestone remains historically complete; new results are recorded in
+the verification-integrity closure below.
+
 ### Commands and results
 
 | Command | Result |
@@ -121,7 +135,7 @@ migration was changed.
 | `sh scripts/check-proxy.sh` | Passed: 1 packaged production TCP proxy test, 0 failures/ignored. The host-gateway probe and trusted replacement use distinct host ports. |
 | `sh scripts/check-release.sh` | Passed: 6 packaged Rust tests (3 OpenAPI, proxy, release smoke, TLS), 0 failures/ignored; the 3 Python release-verifier tests also passed. |
 | `sh scripts/check-tls.sh` | Passed: 1 packaged TLS test. PostgreSQL `verify-full` migration/bootstrap/readiness succeeded; untrusted CA and hostname mismatch were rejected. OTLP HTTPS delivered and decoded 10 traces, 14 metrics, and 11 log records. Untrusted CA/hostname OTLP controls emitted exporter-failure diagnostics while readiness/requests succeeded and shutdown remained under the 20-second configured total bound. |
-| `sh scripts/check.sh` | Passed: 228 all-target tests and 3 doctests, 0 failures/ignored. It includes the locked workspace check, warning-denied Clippy, release package, independent-process/PostgreSQL/Collector gates, release smoke, and TLS test. |
+| `sh scripts/check.sh` | Historical handoff corrected below: the reported 228 test-result aggregate included the 3 doctests; do not read it as 228 all-target tests plus 3 doctests. |
 | `FERL_MSRV_TOOLCHAIN_DIR=target/toolchains/rust-1.94.0 sh scripts/check-msrv.sh` | Passed using actual `rustc 1.94.0 (4a4ef493e 2026-03-02)` and `cargo 1.94.0 (85eff7c80 2026-01-15)` on `aarch64-apple-darwin`: locked workspace check `--all-targets --all-features` and locked production release build. The official Rust distribution archive SHA-256 was `9e55893e014e6aa76924b4cc244a289ad56de4d89d3721fbd5c7f497b31ea33c`. Registry cache was reused; check and release target directories were separate. |
 
 ### Clean-checkout artifact and limits

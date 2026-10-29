@@ -95,6 +95,18 @@ Untrusted-CA and hostname-mismatch Collector endpoints must fail export while
 readiness/API handling continue and the process exits under its configured total
 shutdown deadline.
 
+The test parses the positive and negative CA files, verifies both intended
+hostname aliases resolve to their run-owned servers, and brackets PostgreSQL
+rejections with successful migrations against the same fixture. OTLP recovery
+processes prove the Collector remains reachable; decoded records are selected by
+the originating process's generated `service.instance.id` and checked for
+meaningful signal records and privacy canaries. Absence of telemetry from a
+rejected process is checked after positive same-Collector recovery, not after an
+arbitrary settling sleep. Shutdown timing stops at observed process exit before
+log collection/container removal. Cancellation cleanup is synchronous,
+run-labeled, bounded, and regression-tested to preserve the Stage 01 PostgreSQL
+container and volume.
+
 Cleanup is scoped to the test's UUID-named containers/network and generated
 certificate directory, including bounded cleanup on unwinding/cancellation.
 The test never joins, restarts, resets, or removes the pre-existing

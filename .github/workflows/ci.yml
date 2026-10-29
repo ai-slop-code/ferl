@@ -22,8 +22,8 @@ jobs:
 
       - name: Check declared MSRV and production release build
         run: |
-          TOOLCHAIN_BIN="$(dirname "$(rustup which rustc --toolchain 1.94.0)")"
-          FERL_MSRV_TOOLCHAIN_DIR="$TOOLCHAIN_BIN" sh scripts/check-msrv.sh
+          TOOLCHAIN_PREFIX="$(dirname "$(dirname "$(rustup which rustc --toolchain 1.94.0)")")"
+          FERL_MSRV_TOOLCHAIN_DIR="$TOOLCHAIN_PREFIX" sh scripts/check-msrv.sh
 
   release-gate:
     runs-on: ubuntu-24.04

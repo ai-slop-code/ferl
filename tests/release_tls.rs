@@ -32,6 +32,7 @@ const HARNESS_VALUE: &str = "post-release-tls";
 const POSTGRES_IMAGE: &str = "docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94";
 const COLLECTOR_IMAGE: &str = "docker.io/otel/opentelemetry-collector-contrib@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b";
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
+static FIXTURE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct TlsDirectory {
     path: PathBuf,
@@ -83,52 +84,10 @@ impl OwnedPodmanRun {
 
     async fn cleanup(&mut self) {
         for (name, label_key, expected_label) in &self.containers {
-            let inspect = podman(
-                &[
-                    "inspect",
-                    "--format",
-                    &format!("{{{{ index .Config.Labels \"{label_key}\" }}}}"),
-                    name,
-                ],
-                Duration::from_secs(10),
-            )
-            .await;
-            if inspect.status.success()
-                && String::from_utf8_lossy(&inspect.stdout).trim() == *expected_label
-            {
-                let removed = podman(
-                    &["rm", "--force", "--time", "2", name],
-                    Duration::from_secs(15),
-                )
-                .await;
-                assert!(
-                    removed.status.success(),
-                    "owned TLS fixture container is removed"
-                );
-            }
+            remove_owned_container(name, label_key, expected_label).await;
         }
         if self.network_created {
-            let inspect = podman(
-                &[
-                    "network",
-                    "inspect",
-                    "--format",
-                    &format!("{{{{ index .Labels \"{HARNESS_LABEL}\" }}}}"),
-                    &self.network,
-                ],
-                Duration::from_secs(10),
-            )
-            .await;
-            if inspect.status.success()
-                && String::from_utf8_lossy(&inspect.stdout).trim() == HARNESS_VALUE
-            {
-                let removed =
-                    podman(&["network", "rm", &self.network], Duration::from_secs(15)).await;
-                assert!(
-                    removed.status.success(),
-                    "owned TLS fixture network is removed"
-                );
-            }
+            remove_owned_network(&self.network, HARNESS_LABEL, HARNESS_VALUE).await;
         }
         self.cleaned = true;
     }
@@ -139,45 +98,167 @@ impl Drop for OwnedPodmanRun {
         if self.cleaned {
             return;
         }
-        let network = self.network.clone();
-        let network_created = self.network_created;
-        let containers = self.containers.clone();
-        let _ = thread::Builder::new()
-            .name("ferl-tls-fixture-cleanup".to_owned())
-            .spawn(move || {
-                for (name, label_key, expected_label) in containers {
-                    let label_format = format!("{{{{ index .Config.Labels \"{label_key}\" }}}}");
-                    if bounded_podman_output(&["inspect", "--format", &label_format, &name])
-                        .is_some_and(|output| {
-                            output.status.success()
-                                && String::from_utf8_lossy(&output.stdout).trim() == expected_label
-                        })
-                    {
-                        bounded_podman_cleanup(&["rm", "--force", "--time", "2", &name]);
-                    }
-                }
-                let network_label_format = format!("{{{{ index .Labels \"{HARNESS_LABEL}\" }}}}");
-                if network_created
-                    && bounded_podman_output(&[
-                        "network",
-                        "inspect",
-                        "--format",
-                        &network_label_format,
-                        &network,
-                    ])
-                    .is_some_and(|output| {
-                        output.status.success()
-                            && String::from_utf8_lossy(&output.stdout).trim() == HARNESS_VALUE
-                    })
+        // Drop is the cancellation/panic fallback. Do the bounded, label-checked
+        // work synchronously so test-process exit is not mistaken for completed
+        // cleanup while a detached thread or Podman client remains active.
+        for (name, label_key, expected_label) in &self.containers {
+            cleanup_owned_container_sync(name, label_key, expected_label);
+        }
+        if self.network_created {
+            cleanup_owned_network_sync(&self.network, HARNESS_LABEL, HARNESS_VALUE);
+        }
+    }
+}
+
+async fn remove_owned_container(name: &str, label_key: &str, expected_label: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let label_format = format!("{{{{ index .Config.Labels \"{label_key}\" }}}}");
+        let inspect = podman(
+            &["inspect", "--format", &label_format, name],
+            Duration::from_secs(5),
+        )
+        .await;
+        if inspect.status.success() {
+            assert_eq!(
+                String::from_utf8_lossy(&inspect.stdout).trim(),
+                expected_label,
+                "refuse cleanup of an unrelated container with a colliding name"
+            );
+            let removed = podman(
+                &["rm", "--force", "--time", "2", name],
+                Duration::from_secs(10),
+            )
+            .await;
+            assert!(
+                removed.status.success(),
+                "owned TLS fixture container is removed"
+            );
+            break;
+        }
+        let exists = podman(&["container", "exists", name], Duration::from_secs(5)).await;
+        if !exists.status.success() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "owned container becomes inspectable or absent before cleanup deadline"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let exists = podman(&["container", "exists", name], Duration::from_secs(5)).await;
+    assert!(
+        !exists.status.success(),
+        "owned TLS container is absent before test exit"
+    );
+}
+
+async fn remove_owned_network(name: &str, label_key: &str, expected_label: &str) {
+    let inspect = podman(
+        &[
+            "network",
+            "inspect",
+            "--format",
+            &format!("{{{{ index .Labels \"{label_key}\" }}}}"),
+            name,
+        ],
+        Duration::from_secs(5),
+    )
+    .await;
+    if inspect.status.success() {
+        assert_eq!(
+            String::from_utf8_lossy(&inspect.stdout).trim(),
+            expected_label,
+            "refuse cleanup of an unrelated network with a colliding name"
+        );
+        let removed = podman(&["network", "rm", name], Duration::from_secs(10)).await;
+        assert!(
+            removed.status.success(),
+            "owned TLS fixture network is removed"
+        );
+    }
+    let remains = podman(&["network", "inspect", name], Duration::from_secs(5)).await;
+    assert!(
+        !remains.status.success(),
+        "owned TLS network is absent before test exit"
+    );
+}
+
+fn cleanup_owned_container_sync(name: &str, label_key: &str, expected_label: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut absent_since = None;
+    let label_format = format!("{{{{ index .Config.Labels \"{label_key}\" }}}}");
+    loop {
+        if let Some(output) = bounded_podman_output(
+            &["inspect", "--format", &label_format, name],
+            Duration::from_secs(2),
+        ) && output.status.success()
+        {
+            if String::from_utf8_lossy(&output.stdout).trim() != expected_label {
+                return;
+            }
+            bounded_podman_cleanup(&["rm", "--force", "--time", "2", name]);
+            absent_since = None;
+        } else {
+            let exists =
+                bounded_podman_output(&["container", "exists", name], Duration::from_secs(2));
+            if exists.is_some_and(|output| output.status.success()) {
+                absent_since = None;
+            } else {
+                let absent_since = absent_since.get_or_insert_with(Instant::now);
+                if absent_since.elapsed() >= Duration::from_millis(300)
+                    || Instant::now() >= deadline
                 {
-                    bounded_podman_cleanup(&["network", "rm", &network]);
+                    return;
                 }
-            });
+            }
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn cleanup_owned_network_sync(name: &str, label_key: &str, expected_label: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut absent_since = None;
+    let label_format = format!("{{{{ index .Labels \"{label_key}\" }}}}");
+    loop {
+        if let Some(output) = bounded_podman_output(
+            &["network", "inspect", "--format", &label_format, name],
+            Duration::from_secs(2),
+        ) && output.status.success()
+        {
+            if String::from_utf8_lossy(&output.stdout).trim() != expected_label {
+                return;
+            }
+            bounded_podman_cleanup(&["network", "rm", name]);
+            absent_since = None;
+        } else {
+            let remains =
+                bounded_podman_output(&["network", "inspect", name], Duration::from_secs(2));
+            if remains.is_some_and(|output| output.status.success()) {
+                absent_since = None;
+            } else {
+                let absent_since = absent_since.get_or_insert_with(Instant::now);
+                if absent_since.elapsed() >= Duration::from_millis(300)
+                    || Instant::now() >= deadline
+                {
+                    return;
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
     }
 }
 
 #[tokio::test]
 async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
+    let _fixture_guard = FIXTURE_TEST_LOCK.lock().await;
     let binary = PathBuf::from(
         std::env::var_os("FERL_RELEASE_BINARY")
             .expect("run scripts/check-release.sh; the packaged release binary is required"),
@@ -200,6 +281,7 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
     let port = podman_server::host_port();
     let result = AssertUnwindSafe(async {
         generate_certificates(tls.path()).await;
+        verify_fixture_certificates(tls.path()).await;
         create_network(&mut owned).await;
         start_tls_postgres(&mut owned, &database_name, tls.path()).await;
 
@@ -232,6 +314,19 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
         )
         .await;
         assert_eq!(untrusted.status.code(), Some(1), "untrusted PostgreSQL CA is rejected");
+        assert!(sanitized_migration_diagnostic(&untrusted.stderr)
+            .contains("database_connection_unavailable"),
+            "untrusted CA rejection reaches the client's TLS connection failure category");
+        let valid_after_untrusted = release_cli(
+            &mut owned,
+            &format!("{migrate_cli_name}-recovery-ca"),
+            binary_path,
+            tls.path(),
+            &valid_database_url,
+            &["migrate"],
+        ).await;
+        assert!(valid_after_untrusted.status.success(),
+            "valid PostgreSQL TLS recovery brackets untrusted-CA rejection");
 
         let mismatched_hostname_url = database_url("ferl-postgres", "/tls/root-ca.pem");
         let mismatched_hostname = release_cli(
@@ -248,6 +343,19 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
             Some(1),
             "PostgreSQL certificate chain trusted under the CA is rejected for a mismatched hostname"
         );
+        assert!(sanitized_migration_diagnostic(&mismatched_hostname.stderr)
+            .contains("database_connection_unavailable"),
+            "hostname rejection reaches the client's TLS connection failure category");
+        let valid_after_hostname = release_cli(
+            &mut owned,
+            &format!("{migrate_cli_name}-recovery-host"),
+            binary_path,
+            tls.path(),
+            &valid_database_url,
+            &["migrate"],
+        ).await;
+        assert!(valid_after_hostname.status.success(),
+            "valid PostgreSQL TLS recovery brackets hostname rejection");
 
         let bootstrap = release_cli(
             &mut owned,
@@ -323,14 +431,13 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
         assert!(successful_exit.shutdown_elapsed < Duration::from_secs(20));
 
         let capture = tls.path().join("capture/telemetry.json");
-        let (traces, metrics, logs) = wait_for_decoded_signals(&capture).await;
+        let successful_instance = instance_id_from_logs(&successful_exit.logs);
+        let (traces, metrics, logs) =
+            wait_for_decoded_signals(&capture, &successful_instance).await;
         assert!(traces > 0, "Collector decoded actual production OTLP traces");
         assert!(metrics > 0, "Collector decoded actual production OTLP metrics");
         assert!(logs > 0, "Collector decoded actual production OTLP log records");
-        println!("TLS_OTLP_RECEIVED traces={traces} metrics={metrics} logs={logs}");
-
-        tokio::time::sleep(Duration::from_millis(1_200)).await;
-        let before_invalid_exports = fs::read(&capture).unwrap_or_default();
+        println!("TLS_OTLP_RECEIVED instance={successful_instance} traces={traces} metrics={metrics} logs={logs}");
         let untrusted_settings = [
             ("FERL_OTEL_ENDPOINT", valid_endpoint),
             ("FERL_OTEL_TIMEOUT_SECS", "1"),
@@ -382,11 +489,19 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
             untrusted_exit.logs.contains("otel_export_failed"),
             "untrusted OTLP certificate is rejected by the exporter"
         );
-        assert_eq!(
-            fs::read(&capture).unwrap_or_default(),
-            before_invalid_exports,
-            "Collector receives no OTLP payload from a client rejecting its certificate"
-        );
+        let untrusted_instance = instance_id_from_logs(&untrusted_exit.logs);
+        let recovery_ca_instance = run_valid_otlp_recovery(
+            &mut owned,
+            binary_path,
+            &valid_database_url,
+            &api_key,
+            &mount,
+            &valid_settings,
+            &capture,
+        ).await;
+        assert_ne!(untrusted_instance, recovery_ca_instance);
+        assert!(!capture_has_instance(&capture, &untrusted_instance),
+            "same-Collector positive recovery flushes before absence is assessed; rejected run has no received telemetry");
 
         let mismatched_endpoint = "https://collector-wrong-name:4318";
         let hostname_settings = [
@@ -440,15 +555,35 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
             hostname_exit.logs.contains("otel_export_failed"),
             "OTLP certificate hostname mismatch is rejected"
         );
-        assert_eq!(
-            fs::read(&capture).unwrap_or_default(),
-            before_invalid_exports,
-            "Collector receives no OTLP payload from a hostname-mismatched client"
-        );
+        let hostname_instance = instance_id_from_logs(&hostname_exit.logs);
+        let recovery_host_instance = run_valid_otlp_recovery(
+            &mut owned,
+            binary_path,
+            &valid_database_url,
+            &api_key,
+            &mount,
+            &valid_settings,
+            &capture,
+        ).await;
+        assert_ne!(hostname_instance, recovery_host_instance);
+        assert!(!capture_has_instance(&capture, &hostname_instance),
+            "same-Collector positive recovery flushes before hostname-rejection absence is assessed");
 
         assert!(!successful_exit.logs.contains(&api_key));
         assert!(!untrusted_exit.logs.contains(&api_key));
         assert!(!hostname_exit.logs.contains(&api_key));
+        let database_url_canary = valid_database_url.as_str();
+        let privacy_canaries = [
+            api_key.as_str(),
+            "https://tls-smoke.example/path",
+            database_url_canary,
+            valid_endpoint,
+            mismatched_endpoint,
+        ];
+        for output in [&successful_exit.logs, &untrusted_exit.logs, &hostname_exit.logs] {
+            assert_privacy_canaries(output.as_bytes(), &privacy_canaries);
+        }
+        assert_privacy_canaries(&fs::read(&capture).unwrap_or_default(), &privacy_canaries);
     })
     .catch_unwind()
     .await;
@@ -458,6 +593,139 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
+}
+
+#[tokio::test]
+async fn owned_tls_fixture_cleanup_completes_after_cancellation_and_preserves_stage01() {
+    let _fixture_guard = FIXTURE_TEST_LOCK.lock().await;
+    let run_id = format!("cleanup-{}", Uuid::new_v4().simple());
+    let container_name = format!("ferl-hardening-tls-cancel-{run_id}");
+    let container_for_task = container_name.clone();
+    let postgres_before = podman(
+        &[
+            "inspect",
+            "--format",
+            "{{.Id}}|{{.ImageDigest}}|{{range .Mounts}}{{.Name}}:{{.Destination}}{{end}}",
+            "ferl-stage01-postgres",
+        ],
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        postgres_before.status.success(),
+        "preserved Stage 01 fixture exists before cleanup regression"
+    );
+    let postgres_identity = String::from_utf8_lossy(&postgres_before.stdout)
+        .trim()
+        .to_owned();
+    let volume_before = podman(
+        &[
+            "volume",
+            "inspect",
+            "--format",
+            "{{.Name}}|{{.Mountpoint}}",
+            "ferl-stage01-postgres-data",
+        ],
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        volume_before.status.success(),
+        "preserved Stage 01 volume exists before cleanup regression"
+    );
+    let volume_identity = String::from_utf8_lossy(&volume_before.stdout)
+        .trim()
+        .to_owned();
+
+    let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut owned = OwnedPodmanRun::new(&run_id);
+        create_network(&mut owned).await;
+        owned.register_container(container_for_task.clone(), HARNESS_LABEL, HARNESS_VALUE);
+        let output = podman(
+            &[
+                "run",
+                "--detach",
+                "--pull=never",
+                "--name",
+                &container_for_task,
+                "--label",
+                &format!("{HARNESS_LABEL}={HARNESS_VALUE}"),
+                "--network",
+                &owned.network,
+                "--entrypoint",
+                "/bin/sleep",
+                IMAGE,
+                "60",
+            ],
+            Duration::from_secs(30),
+        )
+        .await;
+        assert!(
+            output.status.success(),
+            "run-owned cancellation fixture starts"
+        );
+        ready_sender.send(owned.network.clone()).unwrap();
+        std::future::pending::<()>().await;
+    });
+    let network = tokio::time::timeout(Duration::from_secs(40), ready_receiver)
+        .await
+        .expect("owned fixture reaches the controlled cancellation point")
+        .expect("fixture task reports its owned network");
+    task.abort();
+    assert!(
+        task.await
+            .expect_err("fixture task was cancelled")
+            .is_cancelled()
+    );
+
+    let remains = podman(
+        &["container", "exists", &container_name],
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        !remains.status.success(),
+        "synchronous cancellation cleanup removed the owned container before task exit"
+    );
+    let network_remains = podman(&["network", "inspect", &network], Duration::from_secs(10)).await;
+    assert!(
+        !network_remains.status.success(),
+        "synchronous cancellation cleanup removed the owned network before task exit"
+    );
+    let postgres_after = podman(
+        &[
+            "inspect",
+            "--format",
+            "{{.Id}}|{{.ImageDigest}}|{{range .Mounts}}{{.Name}}:{{.Destination}}{{end}}",
+            "ferl-stage01-postgres",
+        ],
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(postgres_after.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&postgres_after.stdout).trim(),
+        postgres_identity,
+        "unrelated pre-existing PostgreSQL container and volume survive fixture cancellation"
+    );
+    let volume_after = podman(
+        &[
+            "volume",
+            "inspect",
+            "--format",
+            "{{.Name}}|{{.Mountpoint}}",
+            "ferl-stage01-postgres-data",
+        ],
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(volume_after.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&volume_after.stdout).trim(),
+        volume_identity,
+        "unrelated Stage 01 volume identity survives fixture cancellation"
+    );
 }
 
 async fn generate_certificates(directory: &Path) {
@@ -645,6 +913,71 @@ async fn openssl(arguments: &[&str]) {
     );
 }
 
+async fn verify_fixture_certificates(directory: &Path) {
+    let root_path = directory.join("root-ca.pem");
+    let untrusted_path = directory.join("untrusted-ca.pem");
+    let intermediate_path = directory.join("intermediate.pem");
+    let chain_path = directory.join("server-chain.pem");
+    let root = path(&root_path);
+    let untrusted = path(&untrusted_path);
+    let intermediate = path(&intermediate_path);
+    let chain = path(&chain_path);
+    openssl(&["x509", "-in", root, "-noout"]).await;
+    for hostname in ["pg-tls.local", "ferl-collector"] {
+        openssl(&[
+            "verify",
+            "-CAfile",
+            root,
+            "-untrusted",
+            intermediate,
+            "-verify_hostname",
+            hostname,
+            chain,
+        ])
+        .await;
+    }
+    openssl(&["x509", "-in", untrusted, "-noout"]).await;
+    let untrusted_result = openssl_output(&[
+        "verify",
+        "-CAfile",
+        untrusted,
+        "-untrusted",
+        intermediate,
+        "-verify_hostname",
+        "ferl-collector",
+        chain,
+    ])
+    .await;
+    assert!(
+        !untrusted_result.status.success(),
+        "the readable, parsed negative CA does not authenticate the intended TLS server"
+    );
+    let mismatched = openssl_output(&[
+        "verify",
+        "-CAfile",
+        root,
+        "-untrusted",
+        intermediate,
+        "-verify_hostname",
+        "ferl-postgres",
+        chain,
+    ])
+    .await;
+    assert!(
+        !mismatched.status.success(),
+        "the parsed fixture chain is valid for both intended aliases and not the PostgreSQL mismatch alias"
+    );
+}
+
+async fn openssl_output(arguments: &[&str]) -> Output {
+    let mut command = TokioCommand::new("openssl");
+    command.args(arguments).kill_on_drop(true);
+    timeout(Duration::from_secs(20), command.output())
+        .await
+        .expect("OpenSSL TLS control is bounded")
+        .expect("OpenSSL starts for the local fixture")
+}
+
 async fn create_network(owned: &mut OwnedPodmanRun) {
     // Set before invoking Podman so Drop can label-check and clean a network if
     // the client is cancelled after creation but before the command returns.
@@ -827,7 +1160,7 @@ async fn verify_tls_fixture_paths_and_dns(
     let name = format!("ferl-hardening-tls-preflight-{run_id}");
     owned.register_container(name.clone(), HARNESS_LABEL, HARNESS_VALUE);
     let tls_volume = format!("{}:/tls:ro", tls_dir.display());
-    let script = "set -eu; test -s /tls/root-ca.pem; test -s /tls/untrusted-ca.pem; test -s /tls/server-chain.pem; for host in pg-tls.local ferl-postgres ferl-collector collector-wrong-name; do getent hosts \"$host\" >/dev/null; done";
+    let script = "set -eu; test -s /tls/root-ca.pem; test -r /tls/root-ca.pem; test -s /tls/untrusted-ca.pem; test -r /tls/untrusted-ca.pem; test -s /tls/server-chain.pem; pg_ip=$(getent hosts pg-tls.local | awk 'NR==1 {print $1}'); test -n \"$pg_ip\"; test \"$(getent hosts ferl-postgres | awk 'NR==1 {print $1}')\" = \"$pg_ip\"; collector_ip=$(getent hosts ferl-collector | awk 'NR==1 {print $1}'); test -n \"$collector_ip\"; test \"$(getent hosts collector-wrong-name | awk 'NR==1 {print $1}')\" = \"$collector_ip\"; test \"$pg_ip\" != \"$collector_ip\"";
     let output = podman(
         &[
             "run",
@@ -929,12 +1262,66 @@ async fn podman(arguments: &[&str], limit: Duration) -> Output {
         .expect("Podman command starts")
 }
 
-async fn wait_for_decoded_signals(path: &Path) -> (usize, usize, usize) {
+async fn run_valid_otlp_recovery(
+    owned: &mut OwnedPodmanRun,
+    binary: &Path,
+    database_url: &str,
+    api_key: &str,
+    mounts: &[(&Path, &str)],
+    settings: &[(&str, &str)],
+    capture: &Path,
+) -> String {
+    let name = format!("ferl-tls-recovery-{}", Uuid::new_v4().simple());
+    owned.register_container(name.clone(), "io.ferl.harness", "part11-server");
+    let server = ContainerServer::start_with_mounts(
+        binary,
+        &name,
+        &owned.network,
+        database_url,
+        CURSOR_KEY,
+        "",
+        podman_server::host_port(),
+        mounts,
+        settings,
+    )
+    .await;
+    let identity = send(server.address, "GET", "/api/v1/me", Some(api_key), "")
+        .await
+        .expect("positive OTLP recovery reaches the same production fixture");
+    assert_eq!(identity.status, 200);
+    let exit = server.stop_naturally().await;
+    assert_eq!(exit.exit_code, 0);
+    assert!(exit.shutdown_elapsed < Duration::from_secs(20));
+    assert_privacy_canaries(
+        exit.logs.as_bytes(),
+        &[api_key, database_url, "https://tls-smoke.example/path"],
+    );
+    let instance = instance_id_from_logs(&exit.logs);
+    let counts = wait_for_decoded_signals(capture, &instance).await;
+    assert!(
+        counts.0 > 0 && counts.1 > 0 && counts.2 > 0,
+        "same-Collector recovery receives this process's decoded traces, metrics, and logs"
+    );
+    instance
+}
+
+fn instance_id_from_logs(logs: &str) -> String {
+    logs.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find_map(|value| {
+            (value["fields"]["category"] == "server_started")
+                .then(|| value["fields"]["instance_id"].as_str().map(str::to_owned))
+                .flatten()
+        })
+        .expect("production startup logs its run-specific instance UUID")
+}
+
+async fn wait_for_decoded_signals(path: &Path, instance_id: &str) -> (usize, usize, usize) {
     timeout(Duration::from_secs(20), async {
         loop {
             let counts = fs::read_to_string(path)
                 .ok()
-                .map(|contents| decode_signal_counts(&contents))
+                .map(|contents| decode_signal_counts(&contents, instance_id))
                 .unwrap_or_default();
             if counts.0 > 0 && counts.1 > 0 && counts.2 > 0 {
                 return counts;
@@ -946,7 +1333,7 @@ async fn wait_for_decoded_signals(path: &Path) -> (usize, usize, usize) {
     .expect("Collector receives and decodes each OTLP signal before the deadline")
 }
 
-fn decode_signal_counts(capture: &str) -> (usize, usize, usize) {
+fn decode_signal_counts(capture: &str, instance_id: &str) -> (usize, usize, usize) {
     let mut traces = 0;
     let mut metrics = 0;
     let mut logs = 0;
@@ -954,9 +1341,27 @@ fn decode_signal_counts(capture: &str) -> (usize, usize, usize) {
         let Ok(document) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        traces += signal_resources(&document, "resourceSpans", "scopeSpans", "spans");
-        metrics += signal_resources(&document, "resourceMetrics", "scopeMetrics", "metrics");
-        logs += signal_resources(&document, "resourceLogs", "scopeLogs", "logRecords");
+        traces += signal_resources(
+            &document,
+            "resourceSpans",
+            "scopeSpans",
+            "spans",
+            instance_id,
+        );
+        metrics += signal_resources(
+            &document,
+            "resourceMetrics",
+            "scopeMetrics",
+            "metrics",
+            instance_id,
+        );
+        logs += signal_resources(
+            &document,
+            "resourceLogs",
+            "scopeLogs",
+            "logRecords",
+            instance_id,
+        );
     }
     (traces, metrics, logs)
 }
@@ -966,6 +1371,7 @@ fn signal_resources(
     resource_key: &str,
     scope_key: &str,
     data_key: &str,
+    instance_id: &str,
 ) -> usize {
     document
         .get(resource_key)
@@ -980,17 +1386,92 @@ fn signal_resources(
             let service_is_ferl = attributes.iter().any(|attribute| {
                 attribute["key"] == "service.name" && attribute["value"]["stringValue"] == "ferl"
             });
-            if !service_is_ferl {
+            let belongs_to_run = attributes.iter().any(|attribute| {
+                attribute["key"] == "service.instance.id"
+                    && attribute["value"]["stringValue"] == instance_id
+            });
+            if !service_is_ferl || !belongs_to_run {
                 return 0;
             }
             resource[scope_key]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .map(|scope| scope[data_key].as_array().map_or(0, Vec::len))
+                .map(|scope| {
+                    scope[data_key]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|record| meaningful_record(data_key, record))
+                        .count()
+                })
                 .sum::<usize>()
         })
         .sum()
+}
+
+fn meaningful_record(signal: &str, record: &Value) -> bool {
+    match signal {
+        "spans" => {
+            record["name"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+                && record["traceId"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty())
+                && record["spanId"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty())
+        }
+        "metrics" => {
+            record["name"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+                && [
+                    "gauge",
+                    "sum",
+                    "histogram",
+                    "exponentialHistogram",
+                    "summary",
+                ]
+                .iter()
+                .any(|kind| {
+                    record[*kind]["dataPoints"]
+                        .as_array()
+                        .is_some_and(|points| !points.is_empty())
+                })
+        }
+        "logRecords" => {
+            let body = &record["body"];
+            body["stringValue"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+                || body["kvlistValue"]["values"]
+                    .as_array()
+                    .is_some_and(|values| !values.is_empty())
+                || body["arrayValue"]["values"]
+                    .as_array()
+                    .is_some_and(|values| !values.is_empty())
+        }
+        _ => false,
+    }
+}
+
+fn capture_has_instance(path: &Path, instance_id: &str) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .is_some_and(|contents| decode_signal_counts(&contents, instance_id) != (0, 0, 0))
+}
+
+fn assert_privacy_canaries(payload: &[u8], canaries: &[&str]) {
+    for canary in canaries {
+        assert!(
+            !payload
+                .windows(canary.len())
+                .any(|window| window == canary.as_bytes()),
+            "TLS process/Collector payload excludes sensitive canaries"
+        );
+    }
 }
 
 fn path(path: &Path) -> &str {
@@ -1008,11 +1489,12 @@ fn sanitized_migration_diagnostic(stderr: &[u8]) -> &str {
         .unwrap_or("no sanitized migration category emitted")
 }
 
-fn bounded_podman_cleanup(arguments: &[&str]) {
-    let _ = bounded_podman_output(arguments);
+fn bounded_podman_cleanup(arguments: &[&str]) -> bool {
+    bounded_podman_output(arguments, Duration::from_secs(4))
+        .is_some_and(|output| output.status.success())
 }
 
-fn bounded_podman_output(arguments: &[&str]) -> Option<Output> {
+fn bounded_podman_output(arguments: &[&str], bound: Duration) -> Option<Output> {
     let mut child = Command::new("podman")
         .args(arguments)
         .stdout(Stdio::piped())
@@ -1025,7 +1507,7 @@ fn bounded_podman_output(arguments: &[&str]) -> Option<Output> {
         let _ = stdout.read_to_end(&mut bytes);
         bytes
     });
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + bound;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
