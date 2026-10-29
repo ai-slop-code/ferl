@@ -96,6 +96,7 @@ run `tar -x` on an unverified archive:
 ARCHIVE="$PWD/target/release-packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz"
 REVISION=$(git rev-parse HEAD)
 mkdir -p target/release-inspection
+# Choose a new, nonexistent destination; verified extraction never overwrites.
 python3 scripts/verify-release.py \
   --archive "$ARCHIVE" \
   --source-revision "$REVISION" \
@@ -110,7 +111,7 @@ python3 scripts/verify-release.py \
   --target aarch64-unknown-linux-gnu \
   --openapi "$PWD/spec/openapi.yaml" \
   --require-clean-source
-shasum -a 256 -c "$ROOT/SHA256SUMS"
+(cd "$ROOT" && shasum -a 256 -c SHA256SUMS)
 ```
 
 Before writing any member, the verifier checks the archive sidecar and bytes,

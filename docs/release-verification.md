@@ -119,13 +119,17 @@ migration was changed.
 
 The hardening handoff's “228 all-target tests plus 3 doctests” double-counted
 the doctest result line: its displayed 228 aggregate included the separately
-reported 3 doctests. The corrected arithmetic partition is **225 all-target
-tests plus 3 doctests (228 distinct tests)**. The original hardening raw gate
-log is not retained—the historical evidence directory contains the package and
-repackages only—so this is an explicit arithmetic/label correction, not an
-independent reconstruction of per-binary output or a fresh rerun. The earlier
-hardening milestone remains historically complete; new results are recorded in
-the verification-integrity closure below.
+reported 3 doctests. Listing-only controls at retained implementation
+`9755fb61a42fa8d328ca5723a0cec1927afe0541` ran
+`cargo test --locked --workspace --all-targets -- --list` (97 library, 0
+binary, 128 integration cases across 52 integration binaries) and
+`cargo test --locked --workspace --doc -- --list` (3 doctests). This verifies
+the corrected **225 all-target cases plus 3 doctests (228 distinct cases)**.
+These commands enumerate but do not execute tests. The original hardening raw
+gate log is not retained—the evidence directory has the package and repackages
+only—so original pass/fail and ignored status cannot be independently
+re-established. The historical completion remains intact; new execution results
+are recorded in the verification-integrity closure below.
 
 ### Commands and results
 
@@ -167,6 +171,96 @@ reproducibility claim. Hosted CI was not run. The amd64 child image was pulled
 by its pinned digest, but local execution under the arm64 Podman QEMU emulator
 segfaulted; no x86_64 runtime result is claimed. Other runtime distributions
 and hosted workflows remain unverified.
+
+## Verification-integrity closure — 2026-10-29
+
+Implementation `7309ea5ead2279b6ea01470c8382abed6013a177` was verified on
+`maintenance/verification-integrity-closure`, based on `main`
+`960f7a422f593c42383d2b8fe719ffd8aaee9ae4`. No normative contract, migration,
+production business behavior, or dependency version changed.
+
+### Findings and controls
+
+- **Count/provenance:** hardening source inventory at `9755fb6` lists 225
+  all-target cases (97 library, 0 binary, 128 integration across 52 binaries)
+  and 3 doctests. This confirms the correction from “228 all-target plus 3” to
+  225 + 3 distinct cases. The original hardening raw gate log was not retained,
+  so original pass/fail/ignored output cannot be reconstructed; listing controls
+  do not execute tests, and historical Complete status is preserved.
+- **OpenAPI/routes:** `tests/openapi_release.rs` now applies one whole-document
+  OAS 3.1/dialect/schema/reference/operation-response validator to the real and
+  mutated documents. Supplied-document refs, nested map keywords, boolean
+  schemas, conjunctive `$ref` siblings, unsupported nested dialects, and
+  example payloads have focused controls. `$dynamicRef` is rejected explicitly
+  because dynamic semantics are not implemented. Authorized operation probes
+  distinguish handlers; Allow sets, received headers, and body bytes are exact.
+- **Proxy:** the same observed NGINX container and bridge IP remain in use across
+  upstream reload. The file is directory-mounted so the running process sees
+  config changes. The test verifies its active config and connectivity and
+  traverses exact raw paths, GET/HEAD, Location with query+fragment, maximum
+  headers, unsupported methods, and every large-cursor page through termination.
+- **TLS/privacy/lifecycle:** CA parsing/readability, matching DNS aliases,
+  `verify-full` host/chain controls, PostgreSQL recovery brackets, and live
+  Collector recovery brackets isolate the TLS negatives. Exported signals are
+  meaningful, decoded, run-attributed by `service.instance.id`, and privacy
+  scanned. No arbitrary settling sleep is used. Synchronous cancellation cleanup
+  is covered by a controlled container/network cancellation regression that
+  verifies the pre-existing Stage 01 container/volume remain unchanged.
+- **Packaging:** extraction now follows full preverification; canonical paths,
+  duplicates, links/special entries, directories, checksum/payload bytes,
+  committed migrations/source bytes, ELF target, and build receipt are checked.
+  A read-only Git-archive snapshot is verified against every committed blob
+  before build. The receipt binds source tree, target, binary, invocation,
+  command, and observed builder. Archive and sidecar updates and extraction
+  staging are atomic. Restart smoke verifies the old key still returns 401 after
+  restart, the replacement key works, the deleted code remains reserved, and no
+  reseeding occurs.
+- **CI/MSRV:** workflow now passes the toolchain prefix expected by the script;
+  `RUSTC`, `RUSTDOC`, and Cargo are checked as 1.94.0. Rust 1.99.1 remains the
+  ordinary toolchain. Hosted CI was not run.
+
+### Post-commit commands and results
+
+| Command | Result |
+|---|---|
+| `sh scripts/check-openapi.sh` | 3 passed, 0 failed/ignored. |
+| `sh scripts/check.sh` | **226 all-target cases** (97 library, 0 binary, 129 integration across 52 binaries) + **3 doctests**; 0 failed/ignored. Formatting, locked check, Clippy, PostgreSQL, processes, Collector, proxy, release, and TLS all passed. |
+| `sh scripts/check-proxy.sh` | 1 packaged production TCP test passed. Observed host gateway `127.0.0.1`, NGINX/backend peer `10.89.0.4`, direct untrusted peer `10.89.0.3`. |
+| `sh scripts/check-release.sh` | 7 packaged Rust tests and 8 Python verifier controls passed; 0 failures/ignored. |
+| `sh scripts/check-tls.sh` | 2 packaged TLS/lifecycle tests passed. One valid run delivered 10 traces, 14 metrics, 11 log records. |
+| MSRV CI shape | Actual Rust/Cargo/Rustdoc 1.94.0 passed locked workspace `--all-targets --all-features` check and production release build on `aarch64-apple-darwin`. Local installed prefix was used because rustup is unavailable. |
+
+The consolidated full-gate count above includes exactly one
+`cargo test --workspace --all-targets` invocation and its separate
+`cargo test --workspace --doc`; focused or filtered development runs are not
+included. The 8 Python controls are listed separately from Rust test counts.
+
+### Clean-checkout artifact and platform limits
+
+The final release proof ran `sh scripts/check-release.sh` in a detached,
+complete-history worktree at the exact implementation commit, with retained
+legacy compatibility commit `9bcf7c0c021c994e76d0696633fe822f0a49a5e1` reachable.
+Cargo test and builder target directories were fresh; the registry cache was
+reused. The 17-file package contains exact OpenAPI and both migrations (schema
+v2), records `source_tree_clean=true`, and ran as UID 65532 in the same pinned
+Debian Bookworm arm64 image used for its build.
+
+- Artifact:
+  `target/verification-integrity/7309ea5/clean-checkout/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`
+- Archive SHA-256: `16ca864fe57e62400edd141837cc1cbd0cd569f1cc5edf110a5d36606598b9a5`
+- Binary SHA-256: `76fb42bffd1e224c616b87ca19b22ec52201e9fe101d4a7954a247bab3c32919`
+- OpenAPI SHA-256: `45677d0d0c0afda4687fada791ce492682ad546f2fbc612113890cffecbb6b5e`
+- Source tree `2f5d020db52daf1404d4c1014ec779e48a7a50ca`; build invocation
+  `0c232a81f0ee42b2870cebb8a0784562`; build-receipt SHA-256
+  `096eac7f93d6cabeb37ea2c2fefe0044c4bb35bfd36c5347fddbbf3edb80b65b`; builder image
+  `docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`.
+
+Two repackages of the same binary/source/build receipt matched this archive
+byte-for-byte. Independent builds in separate fresh target directories on this
+same host and pinned builder also matched the binary hash. Registry cache reuse
+means this is not cold-cache or cross-machine reproducibility evidence. The
+available host/Podman VM is macOS/aarch64 and Linux/arm64; no native Linux/amd64
+runtime verification is claimed. No hosted workflow was dispatched.
 
 ## Scenario-by-scenario gap matrix
 
