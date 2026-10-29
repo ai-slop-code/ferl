@@ -315,7 +315,7 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
         .await;
         assert_eq!(untrusted.status.code(), Some(1), "untrusted PostgreSQL CA is rejected");
         assert!(sanitized_migration_diagnostic(&untrusted.stderr)
-            .contains("database_connection_unavailable"),
+            .contains("migration_connection_unavailable"),
             "untrusted CA rejection reaches the client's TLS connection failure category");
         let valid_after_untrusted = release_cli(
             &mut owned,
@@ -344,7 +344,7 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
             "PostgreSQL certificate chain trusted under the CA is rejected for a mismatched hostname"
         );
         assert!(sanitized_migration_diagnostic(&mismatched_hostname.stderr)
-            .contains("database_connection_unavailable"),
+            .contains("migration_connection_unavailable"),
             "hostname rejection reaches the client's TLS connection failure category");
         let valid_after_hostname = release_cli(
             &mut owned,
