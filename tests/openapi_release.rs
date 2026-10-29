@@ -13,8 +13,11 @@ mod serving_process;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use http::{Method, header};
-use openapi_validation::{document, resolve_schema_value, validates, validates_response};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, header};
+use openapi_validation::{
+    document, document_schema_dialects_supported, resolve_schema_value,
+    resolve_schema_value_in_document, validates, validates_response,
+};
 use serde_json::Value;
 use serving_process::{ServingProcess, assert_headers, send};
 use sha2::{Digest, Sha256};
@@ -69,6 +72,8 @@ const EXPECTED_OPERATIONS: &[Operation] = &[
 fn whole_openapi_document_and_every_json_schema_root_are_valid() {
     let doc = document();
     assert_eq!(doc["openapi"], "3.1.0");
+    assert!(all_operations_have_responses(&doc));
+    assert!(document_schema_dialects_supported(&doc));
 
     // The pinned OAI schema checks the complete OpenAPI 3.1 document shape.
     // Its published variant intentionally leaves Schema Objects to the selected
@@ -143,6 +148,7 @@ fn whole_openapi_document_and_every_json_schema_root_are_valid() {
         }
     }
     check_schema_keywords(&doc["paths"], "#/paths");
+    check_schema_keywords(&doc["webhooks"], "#/webhooks");
     check_schema_keywords(&doc["components"], "#/components");
 
     assert!(
@@ -170,12 +176,74 @@ fn whole_openapi_document_and_every_json_schema_root_are_valid() {
         "OpenAPI's REQUIRED operation response map is enforced"
     );
 
+    let mut unsupported_dialect = doc.clone();
+    unsupported_dialect["jsonSchemaDialect"] =
+        serde_json::json!("https://example.invalid/schema/draft-07");
+    assert!(
+        !document_schema_dialects_supported(&unsupported_dialect),
+        "an unsupported document dialect is not silently rewritten"
+    );
+    assert!(
+        resolve_schema_value_in_document(
+            &unsupported_dialect,
+            &unsupported_dialect["components"]["schemas"]["Account"]
+        )
+        .is_err(),
+        "the schema resolver uses the same dialect rejection path"
+    );
+    let mut invalid_dialect_type = doc.clone();
+    invalid_dialect_type["jsonSchemaDialect"] = serde_json::json!(17);
+    assert!(
+        !document_schema_dialects_supported(&invalid_dialect_type),
+        "a non-string dialect value is rejected rather than treated as the default"
+    );
+    assert!(
+        resolve_schema_value_in_document(
+            &doc,
+            &serde_json::json!({"$schema":"https://example.invalid/schema/draft-07","type":"string"})
+        )
+        .is_err(),
+        "an unsupported schema-root dialect is not overwritten"
+    );
+
+    for (schema, expected) in [
+        (serde_json::json!(true), true),
+        (serde_json::json!(false), false),
+    ] {
+        let compiled = resolve_schema_value(&schema).expect("boolean Schema Object is valid");
+        let validator = jsonschema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .build(&compiled)
+            .expect("boolean Schema Object compiles under Draft 2020-12");
+        assert_eq!(
+            validator.is_valid(&serde_json::json!({"value": 1})),
+            expected,
+            "boolean Schema Object semantics are preserved"
+        );
+    }
+
     let mut unresolved = doc.clone();
     unresolved["components"]["responses"]["Missing"] =
         serde_json::json!({"$ref":"#/components/responses/doesNotExist"});
     assert!(
         !document_references_resolve(&unresolved),
         "unresolved local references are rejected"
+    );
+
+    let mut unresolved_dynamic = doc.clone();
+    unresolved_dynamic["components"]["schemas"]["Account"]["properties"]["role"]["$dynamicRef"] =
+        serde_json::json!("#/components/schemas/Missing");
+    assert!(
+        !document_references_resolve(&unresolved_dynamic),
+        "unresolved Draft 2020-12 dynamic references are rejected too"
+    );
+    assert!(
+        resolve_schema_value_in_document(
+            &doc,
+            &serde_json::json!({"$dynamicRef":"https://example.invalid/schema#anchor"})
+        )
+        .is_err(),
+        "external dynamic references are rejected by schema-root validation"
     );
 
     let mut invalid_schema = serde_json::json!({"type":"decimal"});
@@ -261,6 +329,8 @@ async fn production_executable_routes_and_global_method_errors_match_openapi() {
                     &[("FERL_ANONYMOUS_CREATION", "false")],
                 )
                 .await;
+                let _ =
+                    account_support::seed_anonymous_link(database.pool(), "inventory-code").await;
                 let doc = document();
                 let mut observed = BTreeMap::new();
                 for (method, template, operation_id) in EXPECTED_OPERATIONS {
@@ -272,6 +342,11 @@ async fn production_executable_routes_and_global_method_errors_match_openapi() {
                         .await
                         .unwrap_or_else(|error| panic!("{method} {path} reaches ferl: {error}"));
                     assert_headers(&response);
+                    let expected_status = unauthenticated_route_status(method, template);
+                    assert_eq!(
+                        response.status, expected_status,
+                        "{operation_id} owns {method} {path}; an unregistered route cannot pass as a documented 404"
+                    );
                     let status = response.status.to_string();
                     let documented = doc["paths"][*template][method.to_ascii_lowercase()]["responses"]
                         .as_object()
@@ -281,10 +356,30 @@ async fn production_executable_routes_and_global_method_errors_match_openapi() {
                         "{operation_id} {method} {path} returned undocumented {status}; declared {:?}",
                         documented.keys().collect::<Vec<_>>()
                     );
-                    if *method == "HEAD" {
-                        assert!(response.body.is_empty(), "HEAD responses are byte-empty");
-                    }
-                    if let Ok(body) = serde_json::from_slice::<Value>(&response.body)
+                    let response_component = response_component(&doc, template, method, &status);
+                    let received_headers = http_headers(&response.headers);
+                    let bodyless_response = *method == "HEAD" || response.status == 302;
+                    let body = if bodyless_response {
+                        assert!(response.body.is_empty(), "bodyless responses have zero bytes");
+                        None
+                    } else {
+                        Some(
+                            serde_json::from_slice::<Value>(&response.body)
+                                .unwrap_or_else(|error| {
+                                    panic!("{operation_id} response is JSON: {error}")
+                                }),
+                        )
+                    };
+                    assert!(
+                        validates_response(
+                            &response_component,
+                            &received_headers,
+                            body.as_ref(),
+                            bodyless_response,
+                        ),
+                        "{operation_id} actual status, response headers, and body conform to {response_component}"
+                    );
+                    if let Some(body) = body.as_ref()
                         && body.get("error").is_some()
                     {
                         assert_eq!(
@@ -292,7 +387,7 @@ async fn production_executable_routes_and_global_method_errors_match_openapi() {
                             body["request_id"].as_str().unwrap_or_default(),
                             "{operation_id} error body and header share the same request ID"
                         );
-                        assert!(validates("Error", &body), "{operation_id} error schema");
+                        assert!(validates("Error", body), "{operation_id} error schema");
                     }
                     observed.insert((*method, *template), response.status);
                 }
@@ -317,19 +412,24 @@ async fn production_executable_routes_and_global_method_errors_match_openapi() {
                     assert_eq!(head.status, 405, "HEAD {path} is not implicit GET");
                     assert!(head.body.is_empty(), "HEAD {path} has no body bytes");
                     assert!(head.headers.contains_key("allow"), "HEAD {path} includes Allow");
-                    let mut head_headers = http::HeaderMap::new();
-                    head_headers.insert(header::ALLOW, head.headers["allow"].parse().unwrap());
-                    head_headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
-                    head_headers.insert(
-                        http::HeaderName::from_static("x-request-id"),
-                        head.headers["x-request-id"].parse().unwrap(),
-                    );
+                    let head_headers = http_headers(&head.headers);
                     assert!(validates_response(
                         "MethodNotAllowed",
                         &head_headers,
                         None,
                         true,
                     ));
+                    let mut missing_cache_header = head_headers.clone();
+                    missing_cache_header.remove(header::CACHE_CONTROL);
+                    assert!(
+                        !validates_response(
+                            "MethodNotAllowed",
+                            &missing_cache_header,
+                            None,
+                            true,
+                        ),
+                        "a missing received Cache-Control header fails the response gate"
+                    );
                     let method_not_allowed = send(process.address, "PUT", &path, None, "")
                         .await
                         .unwrap_or_else(|error| panic!("PUT {path}: {error}"));
@@ -342,16 +442,7 @@ async fn production_executable_routes_and_global_method_errors_match_openapi() {
                         method_not_allowed.headers["x-request-id"],
                         error["request_id"]
                     );
-                    let mut method_headers = http::HeaderMap::new();
-                    method_headers.insert(
-                        header::ALLOW,
-                        method_not_allowed.headers["allow"].parse().unwrap(),
-                    );
-                    method_headers.insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
-                    method_headers.insert(
-                        http::HeaderName::from_static("x-request-id"),
-                        method_not_allowed.headers["x-request-id"].parse().unwrap(),
-                    );
+                    let method_headers = http_headers(&method_not_allowed.headers);
                     assert!(validates_response(
                         "MethodNotAllowed",
                         &method_headers,
@@ -387,13 +478,18 @@ fn document_references_resolve(doc: &Value) -> bool {
     fn visit(value: &Value, root: &Value, seen: &mut BTreeSet<String>) -> bool {
         match value {
             Value::Object(object) => {
-                if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
-                    if !reference.starts_with("#/")
-                        || root.pointer(reference.trim_start_matches('#')).is_none()
-                    {
-                        return false;
+                for keyword in ["$ref", "$dynamicRef"] {
+                    if let Some(reference) = object.get(keyword) {
+                        let Some(reference) = reference.as_str() else {
+                            return false;
+                        };
+                        if !reference.starts_with("#/")
+                            || root.pointer(reference.trim_start_matches('#')).is_none()
+                        {
+                            return false;
+                        }
+                        seen.insert(reference.to_owned());
                     }
-                    seen.insert(reference.to_owned());
                 }
                 for child in object.values() {
                     if !visit(child, root, seen) {
@@ -433,6 +529,38 @@ fn all_operations_have_responses(doc: &Value) -> bool {
             })
         })
     })
+}
+
+fn unauthenticated_route_status(method: &str, path: &str) -> u16 {
+    match (method, path) {
+        ("GET", "/api/health/live" | "/api/health/ready") => 200,
+        ("POST", "/api/v1/links") => 403,
+        (_, "/{short_code}") => 302,
+        _ => 401,
+    }
+}
+
+fn response_component(doc: &Value, path: &str, method: &str, status: &str) -> String {
+    let reference = doc["paths"][path][method.to_ascii_lowercase()]["responses"][status]["$ref"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{method} {path} {status} uses a referenced response"));
+    reference
+        .strip_prefix("#/components/responses/")
+        .filter(|name| !name.contains('/'))
+        .unwrap_or_else(|| panic!("response reference {reference} targets a response component"))
+        .to_owned()
+}
+
+fn http_headers(headers: &BTreeMap<String, String>) -> HeaderMap {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            (
+                HeaderName::from_bytes(name.as_bytes()).expect("received header name is valid"),
+                HeaderValue::from_str(value).expect("received header value is valid"),
+            )
+        })
+        .collect()
 }
 
 #[allow(dead_code)]

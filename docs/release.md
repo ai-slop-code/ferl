@@ -19,18 +19,46 @@ Linux/arm64 image. This is **not** a claim of compatibility with other Linux
 distributions, libc versions, CPU architectures, or operating systems. The
 archive is not a container image. No bit-for-bit reproducibility claim is made;
 the packaging process normalizes archive timestamps/ownership and records
-checksums and build provenance.
+checksums and build provenance. The documented locked builder is a repeatable
+procedure; it does not by itself prove independent builds are byte-identical.
+Packaging can be compared deterministically when the executable and all source
+inputs are identical; the hardening handoff records whether that comparison was
+measured.
 
-Rustls is used for PostgreSQL and OTLP HTTPS connections. The verified Bookworm
-runtime image includes the standard system CA bundle and rustls platform
-verifier; the pinned SQLx `webpki` feature also embeds its public trust roots and
-accepts an explicit PostgreSQL `sslrootcert`. Provide normal CA certificates
-when using OTLP HTTPS; install private enterprise roots in the container/host
-trust store and configure a private PostgreSQL CA explicitly. This example does
-not disable certificate verification. The local release smoke uses the owned
-non-TLS PostgreSQL fixture and no HTTPS Collector endpoint, so it verifies the
-CA bundle's presence but does not claim an end-to-end TLS handshake. No inbound
-TLS listener is implemented; terminate client TLS at the reverse proxy.
+The release script is configured for `aarch64-unknown-linux-gnu` and
+`x86_64-unknown-linux-gnu`; each uses its target-specific, digest-pinned Debian
+Bookworm Rust image (arm64
+`docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`,
+amd64
+`docker.io/library/rust@sha256:8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8`).
+In particular, CI no longer builds an Ubuntu-native executable and then assumes
+it runs on an older Bookworm runtime. The x86_64 builder path is configured for
+the Linux CI host, but only the arm64 artifact has been executed locally; no
+hosted workflow result is claimed here.
+
+## Runtime TLS and CA trust
+
+Rustls is used for PostgreSQL and OTLP HTTPS connections. PostgreSQL TLS options
+are parsed by SQLx 0.9: use `sslmode=verify-full` and an explicit
+`sslrootcert=/absolute/path/to/ca-bundle.pem` for private roots. SQLx's enabled
+`tls-rustls-ring-webpki` feature supplies bundled public roots and adds the
+configured PEM roots; `verify-full` checks both the certificate chain and URL
+hostname.
+
+The OTLP exporter uses the locked `opentelemetry-otlp` 0.33.1 → `reqwest` 0.13.5
+Rustls client and its platform verifier. It uses the runtime's normal trust
+source. On Linux, `SSL_CERT_FILE` and `SSL_CERT_DIR` are honored by the resolved
+rustls native-certificate loader; provide a PEM bundle containing the required
+roots (including ordinary public roots if replacing the default bundle) or
+install private roots using the runtime's documented trust mechanism. The
+production TLS test supplies a run-local `SSL_CERT_FILE`; it does not change a
+host trust store. Collector certificate errors remain best-effort telemetry
+failures and do not gate HTTP requests or readiness. Export attempts and graceful
+shutdown remain bounded by the configured timeout and total shutdown deadline.
+
+No inbound TLS listener is implemented; terminate client TLS at the reverse
+proxy. Run `sh scripts/check-tls.sh` for packaged PostgreSQL and OTLP HTTPS
+verification.
 
 Build and verify the archive from a clean checkout with the pinned Rust builder
 image available locally:
@@ -39,17 +67,22 @@ image available locally:
 podman info
 podman machine list
 # On a new machine, run the explicitly digest-pinned image pull first.
-podman pull docker.io/library/rust@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8
+podman pull docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75
 sh scripts/package-release.sh
 sh scripts/check-release.sh
 ```
 
-The pull command uses ordinary TLS verification. The local intercepting-registry
-exception, if needed, is limited to this image pull; it does not change runtime
-TLS. `scripts/package-release.sh` builds with `--locked`, uses an isolated target
-directory under ignored `target/`, and refuses to silently substitute another
-builder digest. Set `FERL_RELEASE_OUTPUT_DIR` to choose another local output
-directory. Verify both the archive and its internal inventory:
+The documented builder-image pull uses ordinary TLS verification. In the
+owner-authorized local intercepting-registry environment, the fixture scripts
+may use `--tls-verify=false` only for fully qualified, digest-pinned image pulls;
+this does not change runtime TLS. `scripts/package-release.sh` checks clean Git
+provenance before the build; the builder runs `cargo fetch --locked`, then uses
+the reusable Cargo registry cache (writable so Cargo can unpack locked sources)
+and an isolated Cargo target under ignored `target/`. A fresh target directory
+therefore does not imply a cold registry. The script refuses to
+silently substitute another builder digest. Set `FERL_RELEASE_OUTPUT_DIR` to
+choose another local output directory. Verify both the archive and its internal
+inventory:
 
 ```sh
 cd target/release-packages
@@ -217,11 +250,16 @@ product or an external disaster-recovery exercise.
 
 ## Verification commands
 
-From a clean checkout, install Rust 1.99.1 with rustfmt/clippy and Podman,
-start the existing Podman machine on macOS, and use only the repository-owned
-PostgreSQL/Collector/proxy fixtures:
+From a clean checkout, install Rust 1.99.1 with rustfmt/clippy, Rust 1.94.0,
+and Podman. Start the existing Podman machine on macOS. The TLS gate creates
+run-specific PostgreSQL and Collector containers and removes only those
+containers/network; it does not restart or remove the retained named PostgreSQL
+fixture volume.
 
 ```sh
+rustup toolchain install 1.94.0 --profile minimal
+sh scripts/check-msrv.sh
+sh scripts/check-tls.sh
 sh scripts/postgres.sh start
 sh scripts/postgres.sh ready
 sh scripts/check-openapi.sh

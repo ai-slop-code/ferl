@@ -4,45 +4,47 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 TARGET=${1:-aarch64-unknown-linux-gnu}
-IMAGE=docker.io/library/rust@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8
 OUT=${FERL_LINUX_BUILD_DIR:-"$ROOT/target/linux-release"}
 CARGO_REGISTRY=${CARGO_HOME:-"$HOME/.cargo"}/registry
 HOST=$(rustc -vV | sed -n 's/^host: //p')
 
 case "$TARGET" in
-    aarch64-unknown-linux-gnu) RUSTUP_TOOLCHAIN=1.99.1-aarch64-unknown-linux-gnu ;;
-    x86_64-unknown-linux-gnu) RUSTUP_TOOLCHAIN=1.99.1-x86_64-unknown-linux-gnu ;;
+    aarch64-unknown-linux-gnu)
+        RUSTUP_TOOLCHAIN=1.99.1-aarch64-unknown-linux-gnu
+        IMAGE=docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75
+        PLATFORM=linux/arm64
+        ;;
+    x86_64-unknown-linux-gnu)
+        RUSTUP_TOOLCHAIN=1.99.1-x86_64-unknown-linux-gnu
+        IMAGE=docker.io/library/rust@sha256:8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8
+        PLATFORM=linux/amd64
+        ;;
     *) echo "unsupported Linux release target '$TARGET'" >&2; exit 2 ;;
 esac
 
-if [ "$HOST" = "$TARGET" ]; then
-    mkdir -p "$OUT"
-    {
-        rustc --version
-        cargo --version
-        rustc -vV
-    } > "$OUT/toolchain.txt"
-    CARGO_TARGET_DIR="$OUT/target" cargo build --locked --release --target "$TARGET" --bin ferl-server
-    test -x "$OUT/target/$TARGET/release/ferl-server"
-    echo "built $OUT/target/$TARGET/release/ferl-server with native pinned Rust toolchain"
-    exit 0
-fi
-if [ "$TARGET" != aarch64-unknown-linux-gnu ] || [ "$HOST" != aarch64-apple-darwin ]; then
-    echo "cross-building $TARGET from host $HOST is not supported" >&2
-    exit 2
-fi
+case "$HOST/$TARGET" in
+    aarch64-apple-darwin/aarch64-unknown-linux-gnu \
+    | aarch64-unknown-linux-gnu/aarch64-unknown-linux-gnu \
+    | x86_64-unknown-linux-gnu/x86_64-unknown-linux-gnu)
+        ;;
+    *)
+        echo "building Linux target $TARGET from host $HOST is not supported" >&2
+        exit 2
+        ;;
+esac
+
 if [ ! -d "$CARGO_REGISTRY" ]; then
-    echo "Cargo registry cache is unavailable at the standard Cargo home" >&2
-    exit 1
+    mkdir -p "$CARGO_REGISTRY"
 fi
+cargo fetch --locked
 podman info >/dev/null
 podman image exists "$IMAGE" || podman pull "$IMAGE"
 mkdir -p "$OUT"
 
-podman run --rm --pull=never \
+podman run --rm --pull=never --platform "$PLATFORM" \
     --memory 1536m --cpus 3 --pids-limit 512 \
     --volume "$ROOT:/workspace:ro" \
-    --volume "$CARGO_REGISTRY:/usr/local/cargo/registry:ro" \
+    --volume "$CARGO_REGISTRY:/usr/local/cargo/registry:rw" \
     --volume "$OUT:/out:rw" \
     --workdir /workspace \
     --env CARGO_HOME=/usr/local/cargo \
@@ -53,6 +55,11 @@ podman run --rm --pull=never \
     --env RUSTUP_TOOLCHAIN="$RUSTUP_TOOLCHAIN" \
     --entrypoint /bin/sh \
     "$IMAGE" -ec '
+        . /etc/os-release
+        [ "${ID:-}" = debian ] && [ "${VERSION_CODENAME:-}" = bookworm ] || {
+            echo "release builder is not Debian Bookworm" >&2
+            exit 1
+        }
         case "$(rustc --version)" in
             "rustc 1.99.1 "*) ;;
             *) echo "builder rustc is not the pinned 1.99.1 toolchain" >&2; exit 1 ;;
@@ -65,9 +72,10 @@ podman run --rm --pull=never \
             rustc --version
             cargo --version
             rustc -vV
+            printf "builder_os=%s/%s\n" "$ID" "$VERSION_CODENAME"
         } > /out/toolchain.txt
         cargo build --locked --release --target "$TARGET" --bin ferl-server
     '
 
 test -x "$OUT/target/$TARGET/release/ferl-server"
-echo "built $OUT/target/$TARGET/release/ferl-server with pinned $IMAGE"
+echo "built $OUT/target/$TARGET/release/ferl-server in pinned Bookworm builder $IMAGE"

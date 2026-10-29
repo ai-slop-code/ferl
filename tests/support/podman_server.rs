@@ -10,7 +10,10 @@ use url::Url;
 
 use super::serving_process::send;
 
-pub const IMAGE: &str = "docker.io/library/rust@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8";
+#[cfg(target_arch = "aarch64")]
+pub const IMAGE: &str = "docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75";
+#[cfg(target_arch = "x86_64")]
+pub const IMAGE: &str = "docker.io/library/rust@sha256:8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8";
 pub const POSTGRES_CONTAINER: &str = "ferl-stage01-postgres";
 
 pub struct ContainerServer {
@@ -184,6 +187,32 @@ impl ContainerServer {
         host_port: u16,
         extra: &[(&str, &str)],
     ) -> Self {
+        Self::start_with_mounts(
+            binary,
+            name,
+            network,
+            database_url,
+            cursor_key,
+            trusted_proxies,
+            host_port,
+            &[],
+            extra,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn start_with_mounts(
+        binary: &Path,
+        name: &str,
+        network: &str,
+        database_url: &str,
+        cursor_key: &str,
+        trusted_proxies: &str,
+        host_port: u16,
+        read_only_mounts: &[(&Path, &str)],
+        extra: &[(&str, &str)],
+    ) -> Self {
         let binary = binary
             .canonicalize()
             .expect("packaged ferl-server executable resolves");
@@ -249,6 +278,11 @@ impl ContainerServer {
                 "--env",
                 "FERL_SHUTDOWN_TIMEOUT_SECS=20",
             ]);
+        for (host_path, container_path) in read_only_mounts {
+            child
+                .args(["--volume"])
+                .arg(format!("{}:{container_path}:ro", host_path.display()));
+        }
         for (key, value) in extra {
             child.arg("--env").arg(format!("{key}={value}"));
         }

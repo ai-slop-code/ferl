@@ -74,6 +74,41 @@ platform/hosted-CI scope are recorded in the [Part 11 handoff](progress.md#part-
 and [execution results](../../docs/release-verification.md#observed-local-results).
 Hosted CI was not run; this is a local verification result only.
 
+## Post-release hardening addendum — 2026-10-29
+
+Part 11 remains historically complete as recorded above. The bounded follow-up
+on `maintenance/post-release-hardening` uses implementation revision
+`9755fb61a42fa8d328ca5723a0cec1927afe0541` and strengthens evidence for existing
+scenarios; it adds no business behavior or normative contract change.
+
+- **19, 37–40:** the clean-source `sh scripts/check-proxy.sh` gate passed the
+  production TCP proxy test after assigning unique ports to the host-gateway
+  probe, proxy-peer observation, and trusted replacement. It preserves the
+  observed loopback host-gateway peer as distinct from the trusted NGINX peer.
+- **29, 31:** `tests/release_tls.rs::packaged_binary_verifies_postgres_tls_and_otlp_https`
+  passed through `sh scripts/check-tls.sh` and `sh scripts/check-release.sh`.
+  The packaged binary sent OTLP over HTTPS; the Collector decoded nonempty
+  traces, metrics, and log records. Certificate rejection did not affect
+  requests/readiness or the bounded process shutdown.
+- **51:** `sh scripts/check-openapi.sh` passed 3 tests with the normative
+  document's required response maps checked positively, actual protected-route
+  ownership outcomes, received response headers, all 22 reviewed
+  `(method,path,operationId)` entries, supported schema dialects, boolean
+  Schema Objects, local `$ref`/`$dynamicRef` checks, and invalid controls.
+- **Release provenance/restart:** the clean-checkout `sh scripts/check-release.sh`
+  passed from the exact implementation commit with fresh Cargo targets and full
+  Git history. Its archived artifact has source revision
+  `9755fb61a42fa8d328ca5723a0cec1927afe0541` and SHA-256
+  `8f170dcb3d4f7a0cb88dc86554694ec9280c26755ea2622843d66e3ed1ea5915`; the
+  packaged smoke performs the explicit migrate/bootstrap/API/GET/HEAD/report/
+  rotation/delete/restart-without-reseeding flow. Registry cache reuse is
+  recorded in `progress.md` and `docs/release-verification.md`.
+
+The final consolidated local result was **228 all-target tests plus 3 doctests**
+with no failures or ignored tests. Rust 1.94 and TLS are new hardening evidence;
+hosted CI and the amd64 runtime remain unverified and are not represented as
+passing.
+
 ## Additional derived checks
 
 ### Part 05 cross-scenario contributions

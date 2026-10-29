@@ -82,6 +82,26 @@ run-isolated capture files for audit.
 The process suite exercises real `ferl-server` TCP processes, not the in-process
 router as export evidence.
 
+## Packaged PostgreSQL TLS and OTLP HTTPS fixture
+
+Run `sh scripts/check-tls.sh` from a clean committed checkout to exercise TLS
+with the packaged production executable. It creates a unique disposable Podman
+network, PostgreSQL 17.6 and Collector containers, short-lived root/intermediate/
+server certificates, and a private run directory under ignored `target/`. The
+PostgreSQL URL uses SQLx `sslmode=verify-full` plus an explicit fixture CA; the
+test rejects an untrusted CA and a hostname mismatch. The TLS-enabled Collector
+receives and decodes actual production traces, metrics, and logs over HTTPS.
+Untrusted-CA and hostname-mismatch Collector endpoints must fail export while
+readiness/API handling continue and the process exits under its configured total
+shutdown deadline.
+
+Cleanup is scoped to the test's UUID-named containers/network and generated
+certificate directory, including bounded cleanup on unwinding/cancellation.
+The test never joins, restarts, resets, or removes the pre-existing
+`ferl-stage01-postgres` container or its `ferl-stage01-postgres-data` volume. No
+host trust store is modified, and fixture keys/captures are not printed or
+tracked.
+
 ## Shutdown and health
 
 On SIGTERM/SIGINT and unexpected server exit, ferl marks readiness false first.

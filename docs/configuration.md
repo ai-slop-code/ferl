@@ -52,6 +52,15 @@ values are never included in configuration debug output or logs.
 | `FERL_ENVIRONMENT` | `local` | Safe 1–64 character deployment-environment fallback for `deployment.environment.name`; an explicit allowlisted resource attribute wins. |
 | `FERL_INSTANCE_ID` | Generated | Overrides are rejected. `service.instance.id` is a new opaque UUID generated for every process run and shared across all three signals. |
 
+PostgreSQL TLS options are parsed by the pinned SQLx PostgreSQL driver from
+`FERL_DATABASE_URL`. For private deployments use
+`sslmode=verify-full&sslrootcert=/absolute/path/to/ca-bundle.pem`; the `verify-full`
+mode verifies both the trusted certificate chain and the hostname in the URL.
+The configured PEM CA is added to the driver's bundled web-PKI public roots.
+Do not use `sslmode=disable` or weaken verification to work around a certificate
+or hostname error. See [release TLS verification](release.md#runtime-tls-and-ca-trust)
+for the OTLP HTTPS trust source as well.
+
 ## Migration command settings
 
 `ferl-server migrate` validates its applicable static settings before opening a

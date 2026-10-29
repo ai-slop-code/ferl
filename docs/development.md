@@ -14,13 +14,21 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-targets
 ```
 
-The all-targets test command includes the domain, decoding, cursor, existing
-OpenAPI component-conformance, and Part 11 `openapi_release` suites. The required
-whole-document OpenAPI command is `sh scripts/check-openapi.sh`: it validates
+The all-targets test command includes the domain, decoding, cursor, OpenAPI
+component/release conformance, packaged release smoke, and packaged TLS suites.
+The required whole-document OpenAPI command is
+`sh scripts/check-openapi.sh`: it validates
 the checked-in document against the pinned OAI OpenAPI 3.1 schema, compiles all
 applicable JSON Schema roots using locked Draft 2020-12 tooling, rejects invalid
 controls, checks the method/path/operationId inventory, and probes the
 production executable over TCP. `spec/openapi.yaml` remains authoritative.
+
+Run the declared compiler floor with `sh scripts/check-msrv.sh` after installing
+Rust 1.94.0. It uses separate `target/msrv-1.94/` directories for the locked
+all-target/all-feature workspace check and production release build. If the
+compiler is installed in an isolated prefix rather than through rustup, set
+`FERL_MSRV_TOOLCHAIN_DIR` to that prefix. This is a real compiler gate, not
+`cargo metadata` evidence.
 
 The PostgreSQL integration test is required by the ordinary test command. It
 fails with an actionable message if the harness environment is missing; it is
@@ -32,6 +40,10 @@ independent-process/proxy/release-smoke evidence. Collector/process tests are
 mandatory and fail rather than skip if a fixture cannot be reached. Use
 `sh scripts/check-openapi.sh`, `sh scripts/check-proxy.sh`, and
 `sh scripts/check-release.sh` for independently repeatable focused release gates.
+`sh scripts/check-tls.sh` builds/verifies a packaged executable from a clean
+source tree, then tests PostgreSQL `verify-full` chain/hostname validation and
+OTLP HTTPS signal export/rejection using disposable, run-isolated TLS fixtures.
+It does not restart or remove the retained `ferl-stage01-postgres-data` volume.
 
 ## PostgreSQL with Podman
 

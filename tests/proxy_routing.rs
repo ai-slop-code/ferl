@@ -46,7 +46,14 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
     let proxy_id = format!("part11-proxy-{run_id}");
     let network = format!("ferl-part11-net-{run_id}");
     let host_proxy_port = reserve_port().await;
-    let proxy_port = reserve_port().await;
+    let proxy_port = reserve_distinct_port(&[host_proxy_port]).await;
+    let probe_proxy_port = reserve_distinct_port(&[host_proxy_port, proxy_port]).await;
+    assert_ne!(host_proxy_port, proxy_port);
+    assert_ne!(host_proxy_port, probe_proxy_port);
+    assert_ne!(
+        probe_proxy_port, proxy_port,
+        "host-gateway probe and trusted proxy replacement use independent ports"
+    );
     let host_runtime = std::env::current_dir()
         .unwrap()
         .join("target/proxy")
@@ -179,7 +186,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     .await;
                     proxy_action(
                         &probe_proxy_id,
-                        proxy_port,
+                        probe_proxy_port,
                         "8080",
                         "ferl-backend",
                         Some(&network_for_test),
@@ -189,7 +196,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     .await;
                     proxy_action(
                         &probe_proxy_id,
-                        proxy_port,
+                        probe_proxy_port,
                         "8080",
                         "ferl-backend",
                         Some(&network_for_test),
@@ -197,6 +204,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                         "ready",
                     )
                     .await;
+                    let probe_proxy = SocketAddr::from(([127, 0, 0, 1], probe_proxy_port));
                     let proxy = SocketAddr::from(([127, 0, 0, 1], proxy_port));
                     let nginx_container = format!("ferl-part11-proxy-{probe_proxy_id}");
                     let upstream_probe = podman_server::command_output(
@@ -227,17 +235,17 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     .unwrap();
                     assert_eq!(direct_api.status, 201, "packaged API works directly over its published port");
 
-                    let root = send(proxy, "GET", "/", None, "").await.unwrap();
+                    let root = send(probe_proxy, "GET", "/", None, "").await.unwrap();
                     assert_eq!(root.status, 200);
                     assert!(String::from_utf8_lossy(&root.body).contains("Separate static fixture"));
-                    let asset = send(proxy, "GET", "/assets/example.js", None, "")
+                    let asset = send(probe_proxy, "GET", "/assets/example.js", None, "")
                         .await
                         .unwrap();
                     assert_eq!(asset.status, 200);
                     assert!(String::from_utf8_lossy(&asset.body).contains("static asset served outside"));
 
                     let observed = send_with_headers(
-                        proxy,
+                        probe_proxy,
                         "GET",
                         "/proxy-observe",
                         None,
@@ -310,7 +318,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                     assert!(!server_a_exit.oom_killed);
                     let probe_cleanup = proxy_action(
                         &probe_proxy_id,
-                        proxy_port,
+                        probe_proxy_port,
                         "8080",
                         "ferl-backend",
                         Some(&network_for_test),
@@ -636,7 +644,7 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
     .await;
     let cleanup_probe_proxy = proxy_action(
         &cleanup_probe_proxy_id,
-        proxy_port,
+        probe_proxy_port,
         "8080",
         "ferl-backend",
         Some(&network),
@@ -699,6 +707,15 @@ async fn reserve_port() -> u16 {
     let port = listener.local_addr().unwrap().port();
     drop(listener);
     port
+}
+
+async fn reserve_distinct_port(excluded: &[u16]) -> u16 {
+    loop {
+        let candidate = reserve_port().await;
+        if !excluded.contains(&candidate) {
+            return candidate;
+        }
+    }
 }
 
 async fn container_ip(name: &str) -> IpAddr {

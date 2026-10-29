@@ -70,6 +70,90 @@ pre-correction package hash is intentionally not presented as a release
 artifact; only the clean-source checksum above is the final local package
 evidence.
 
+## Post-release hardening verification — 2026-10-29
+
+This is a new bounded hardening milestone on top of the historically complete
+Part 11 baseline. The implementation revision is
+`9755fb61a42fa8d328ca5723a0cec1927afe0541` on
+`maintenance/post-release-hardening`, based on Part 11 merge
+`6038cbe6703ed81e387b7d9fa5998e686bedcd21`. No business/OpenAPI contract or
+migration was changed.
+
+### Demonstrated defects and fixes
+
+- The OpenAPI gate tested missing operation responses only on a negative fixture,
+  accepted any documented status (including 404) for its route probes, and
+  synthesized `Cache-Control` in a 405 header map. It also overwrote `$schema`,
+  which could hide an unsupported dialect and destroy boolean Schema Object
+  semantics. The normative document now passes the actual required-response
+  helper; route probes require the precise unauthenticated result, including a
+  seeded real GET/HEAD redirect; received response headers are validated as
+  received. Dialects and `$ref`/`$dynamicRef` targets are explicitly checked,
+  boolean schemas preserve allow/deny semantics, and negative controls cover
+  these cases.
+- The proxy test reused the same published port for its peer-observation probe
+  and the later trusted-proxy replacement, then initially sent probe traffic to
+  the replacement port before it was started. It now allocates three distinct
+  host ports and directs each phase to its own NGINX instance. Observed peer
+  addresses remain the basis for trust configuration.
+- The native Ubuntu x86_64 build path did not use the Bookworm builder even
+  though the packaged executable was smoked in that runtime. In addition,
+  Podman selected the wrong architecture when only the other child of a local
+  multi-architecture image was present. The build/runtime now select separate
+  digest-pinned Debian Bookworm child manifests for arm64 and amd64, pass an
+  explicit platform, and verify Debian Bookworm, Rust/Cargo 1.99.1, and the
+  target triple inside the builder. Packaging refuses a dirty checkout or a
+  revision override that differs from HEAD; the verifier requires exact release
+  inventory, migration paths, source OpenAPI bytes, provenance, checksums, ELF
+  target, and archive payload/extraction consistency. Three focused Python
+  regression controls reject a mismatched archive payload, unsafe paths, and
+  forged source-revision metadata.
+- A full-suite run exposed that the TLS fixture waited for PostgreSQL readiness
+  over its Unix socket before the packaged client connected over TCP. Readiness
+  now waits for the loopback TCP listener used by the client, and a failure
+  reports only the migration command's sanitized category.
+
+### Commands and results
+
+| Command | Result |
+|---|---|
+| `sh scripts/check-openapi.sh` | Passed: 3 tests, 0 failures/ignored. Actual route outcomes, all 22 method/path/operation IDs, received headers, response maps, Draft 2020-12 roots, references, dialect controls, and boolean schemas are checked. |
+| `sh scripts/check-proxy.sh` | Passed: 1 packaged production TCP proxy test, 0 failures/ignored. The host-gateway probe and trusted replacement use distinct host ports. |
+| `sh scripts/check-release.sh` | Passed: 6 packaged Rust tests (3 OpenAPI, proxy, release smoke, TLS), 0 failures/ignored; the 3 Python release-verifier tests also passed. |
+| `sh scripts/check-tls.sh` | Passed: 1 packaged TLS test. PostgreSQL `verify-full` migration/bootstrap/readiness succeeded; untrusted CA and hostname mismatch were rejected. OTLP HTTPS delivered and decoded 10 traces, 14 metrics, and 11 log records. Untrusted CA/hostname OTLP controls emitted exporter-failure diagnostics while readiness/requests succeeded and shutdown remained under the 20-second configured total bound. |
+| `sh scripts/check.sh` | Passed: 228 all-target tests and 3 doctests, 0 failures/ignored. It includes the locked workspace check, warning-denied Clippy, release package, independent-process/PostgreSQL/Collector gates, release smoke, and TLS test. |
+| `FERL_MSRV_TOOLCHAIN_DIR=target/toolchains/rust-1.94.0 sh scripts/check-msrv.sh` | Passed using actual `rustc 1.94.0 (4a4ef493e 2026-03-02)` and `cargo 1.94.0 (85eff7c80 2026-01-15)` on `aarch64-apple-darwin`: locked workspace check `--all-targets --all-features` and locked production release build. The official Rust distribution archive SHA-256 was `9e55893e014e6aa76924b4cc244a289ad56de4d89d3721fbd5c7f497b31ea33c`. Registry cache was reused; check and release target directories were separate. |
+
+### Clean-checkout artifact and limits
+
+`sh scripts/check-release.sh` passed in a disposable detached worktree at the
+implementation commit above, with complete Git history, retained compatibility
+commit `9bcf7c0c021c994e76d0696633fe822f0a49a5e1`, and initially absent Cargo
+target directories. The existing Cargo registry cache was reused (and populated
+with `cargo fetch --locked`); this was not a cold registry build. The packaged
+executable ran as UID 65532 in the same pinned Debian Bookworm arm64 image used
+to build it. It migrated and bootstrapped the isolated database, created/listed
+a titled/tagged link, followed GET/HEAD, observed reports, rotated credentials,
+deleted the link, and restarted without reseeding. The archive contained 17
+verified files, including exact OpenAPI bytes and both migrations, with
+`source_tree_clean=true`.
+
+- Artifact:
+  `target/hardening-evidence/9755fb6-clean-checkout/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`
+- Archive SHA-256: `8f170dcb3d4f7a0cb88dc86554694ec9280c26755ea2622843d66e3ed1ea5915`
+- Binary SHA-256: `76fb42bffd1e224c616b87ca19b22ec52201e9fe101d4a7954a247bab3c32919`
+- OpenAPI SHA-256: `45677d0d0c0afda4687fada791ce492682ad546f2fbc612113890cffecbb6b5e`
+- Provenance source revision: `9755fb61a42fa8d328ca5723a0cec1927afe0541`
+
+Separate fresh target builds for this source revision used the same pinned
+arm64 Bookworm builder and shared registry cache; they produced identical binary
+and archive checksums. Repackaging identical inputs was byte-identical. This is
+a local same-host, warm-registry measurement, not a cold-cache or cross-machine
+reproducibility claim. Hosted CI was not run. The amd64 child image was pulled
+by its pinned digest, but local execution under the arm64 Podman QEMU emulator
+segfaulted; no x86_64 runtime result is claimed. Other runtime distributions
+and hosted workflows remain unverified.
+
 ## Scenario-by-scenario gap matrix
 
 `sh scripts/check.sh` is the consolidated gate for Rust, PostgreSQL, account,

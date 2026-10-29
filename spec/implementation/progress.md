@@ -2,6 +2,102 @@
 
 Handoff summary: Parts 01–11 are complete and merged into local `main`. Part 11 — Release verification was verified on `implementation/11-release-verification` from baseline `71d77b3f3838081add13d46cdefe0a91cdd70efd` and integrated by the explicit no-ff merge recorded below.
 
+## Post-release hardening milestone — 2026-10-29
+
+Status: **Complete** on `maintenance/post-release-hardening`, based on the
+verified, clean Part 11 merge `6038cbe6703ed81e387b7d9fa5998e686bedcd21`.
+That commit has the expected parents `71d77b3f3838081add13d46cdefe0a91cdd70efd`
+and `4226cd63298a7599e5866ae545845a590e32616f`; the retained Part 11 branch is
+at `4226cd63298a7599e5866ae545845a590e32616f`, with implementation
+`95d053d70c47c7199cfbd45545fa8c08b8d945d1`. The required legacy compatibility
+commit `9bcf7c0c021c994e76d0696633fe822f0a49a5e1` is reachable from this base.
+The repository root is `$PWD`; no remote is
+configured, only this worktree exists, the index/tree were clean, no Git
+operation was pending, and configured identity is
+`LubosBa <30705301+LubosBa@users.noreply.github.com>`. No `AGENTS.md` was found. The existing
+`ferl-stage01-postgres` container and `ferl-stage01-postgres-data` volume are
+pre-existing and must be preserved.
+
+The milestone is bounded to independent verification hardening, demonstrated
+test/package/CI/documentation corrections, an actual Rust 1.94 build, packaged
+PostgreSQL TLS and OTLP HTTPS exercises, clean-checkout packaging/smoke evidence,
+and local Git integration. It does not reopen Part 11 or add business behavior.
+
+### Evidence-based worklist
+
+| Finding/location | Plausible false green or failure | Planned verification | Acceptance condition |
+| --- | --- | --- | --- |
+| `tests/openapi_release.rs` and `tests/support/openapi.rs`: response-map helper is only applied to a negative control; runtime inventory accepts any declared status, including 404 for an unregistered protected route; the 405 test synthesizes `Cache-Control`; schema helpers overwrite `$schema`. | Missing operation responses, misrouted routes, absent received headers, or an unsupported dialect can pass the documented gate. | Add negative controls that exercise the same validation path, assert the normative document's response maps, require exact unauthenticated route ownership outcomes, validate received headers, and reject unsupported effective dialects. Run `sh scripts/check-openapi.sh` plus focused controls. | Each plausible defect fails its control; all actual operation/route/header and schema checks accept the normative document and fail malformed variants. |
+| `tests/proxy_routing.rs`: the host-gateway probe, untrusted-peer probe, and subsequent trusted-proxy container reused one published host port; after separating ports, the first static-host probes still targeted the replacement port before it was started. | Replacement startup could race with another local listener, or an endpoint probe could connect to no listener and fail before reaching its intended fixture. | Assign distinct independently reserved ports and route each probe phase through its corresponding run-specific NGINX container; run the clean-source proxy gate. | Each probe reaches the intended container and the replacement topology does not rely on immediate address reuse. |
+| `tests/release_tls.rs`: PostgreSQL readiness polling used `pg_isready` over the container's Unix socket before the packaged TLS client connected over TCP. | Local database readiness could pass before the TCP listener accepts the verified TLS connection, creating an intermittent migration failure under the full-suite load. | Poll PostgreSQL's loopback TCP listener before the packaged migration and include only the CLI's sanitized failure category in diagnostics; rerun standalone and consolidated TLS gates. | A passing readiness precondition covers the same TCP transport used by the packaged verifier; TLS remains verified by the real `verify-full` migration. |
+| `scripts/build-linux.sh`, `scripts/package_release.py`, `scripts/verify-release.py`, and `tests/release_smoke.rs`. | A native Ubuntu build may not run on the documented Bookworm runtime; a multiarch image tag can select the wrong local architecture; metadata can describe source inputs without proving the clean revision used; archive inventory/extraction checks may miss discrepancies. | Pin target-specific Bookworm builder manifests, assert compiler/OS/target in the builder, bind metadata to the clean checkout, and test archive members/checksums/OpenAPI/migrations in a complete clean checkout with a fresh Cargo target. | The clean checkout's exact committed source, target-specific builder/runtime, package members and smoke behavior agree; make no independent bit-for-bit build claim unless measured. |
+| `Cargo.toml` declares Rust 1.94; prior evidence used only 1.99.1. | A locked dependency or source feature requires a newer compiler despite metadata. | Obtain and execute actual isolated Rust/Cargo 1.94.0; run locked workspace all-target/all-feature check and locked production release build. | Both requested commands pass on the recorded target, or a specific blocker is documented without claiming MSRV compatibility. |
+| `src/db/pool.rs`, migration/bootstrap connection options, `src/telemetry/providers.rs`, and release smoke currently have no end-to-end TLS evidence. | PostgreSQL server verification may skip chain/hostname validation, or OTLP HTTPS export may fail despite exporter configuration. | Use run-isolated short-lived CA/server fixtures and the packaged binary; test valid chain+hostname, untrusted CA, hostname mismatch, actual decoded OTLP signals, and exporter failure/readiness/shutdown controls. | Valid TLS handshakes and actual telemetry receipt are observed; both certificate controls reject; request/readiness stay independent and shutdown remains within its total deadline. |
+| `.github/workflows/ci.yml` and release build scripts. | CI builds a native Ubuntu executable but exercises it in Debian Bookworm, while local macOS uses the pinned Bookworm builder; hosted success is not available locally. | Compare build/runtime prerequisites; pin or align the Linux builder/runtime where justified, run local equivalents, and state hosted CI is unverified. | The local Linux artifact is built with the same pinned runtime-generation baseline used by smoke; no hosted result is claimed. |
+
+### Hardening handoff — verified implementation
+
+Verified implementation revision: `9755fb61a42fa8d328ca5723a0cec1927afe0541`
+(`fix: gate TLS migration on PostgreSQL TCP readiness`), descended from base
+`6038cbe6703ed81e387b7d9fa5998e686bedcd21`. Handoff-only follow-up:
+`8453dc6cea92ae4f6e842e5fe17e9bd18e233142`.
+
+Integration: explicit no-ff merge into local `main`, with parents
+`6038cbe6703ed81e387b7d9fa5998e686bedcd21` and
+`8453dc6cea92ae4f6e842e5fe17e9bd18e233142`. The staged implementation matched
+the retained branch tip; only completion handoff metadata in this file differs
+in the merge commit. The resulting merge hash is reported after creation, not
+embedded here. The `maintenance/post-release-hardening` branch is retained.
+
+Final local gates on the committed implementation:
+
+- `sh scripts/check-openapi.sh` — 3 tests passed; the normative OpenAPI document
+  and actual production method/path/response/header probes passed.
+- `sh scripts/check-proxy.sh` — 1 packaged TCP proxy test passed. The host
+  gateway, probe proxy, and trusted replacement use distinct reserved ports.
+- `sh scripts/check-release.sh` — 6 packaged Rust tests and 3 Python verifier
+  regression controls passed; no failures or ignored tests.
+- `sh scripts/check-tls.sh` — 1 packaged TLS test passed. The Collector decoded
+  10 traces, 14 metrics, and 11 log records; invalid CA and hostname controls
+  rejected export while API/readiness stayed healthy and shutdown stayed under
+  the configured 20-second total bound.
+- `sh scripts/check.sh` — **228 all-target tests plus 3 doctests passed**, with
+  0 failures and 0 ignored tests. This includes formatting, locked check,
+  warning-denied Clippy, PostgreSQL, independent-process, Collector, proxy,
+  packaged release, and TLS suites.
+- `FERL_MSRV_TOOLCHAIN_DIR=target/toolchains/rust-1.94.0 sh scripts/check-msrv.sh`
+  — actual Rust/Cargo 1.94.0 passed the locked workspace check
+  (`--all-targets --all-features`) and locked production release build on
+  `aarch64-apple-darwin`. The standard pinned project toolchain remains 1.99.1.
+
+Clean-checkout release verification passed in a disposable detached worktree at
+this exact implementation revision, with complete Git history, the required
+legacy commit reachable, and fresh Cargo target directories. The existing
+Cargo registry cache was reused (not a cold dependency-cache build). The
+packaged `aarch64-unknown-linux-gnu` executable ran as UID 65532 in the same
+digest-pinned Debian Bookworm arm64 image used for its build. The archive has 17
+verified files, exact `spec/openapi.yaml` bytes, both migrations, matching
+provenance and checksums, and `source_tree_clean=true`.
+
+Artifact from the clean-checkout run:
+
+- Path: `target/hardening-evidence/9755fb6-clean-checkout/packages/ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`
+- Archive SHA-256: `8f170dcb3d4f7a0cb88dc86554694ec9280c26755ea2622843d66e3ed1ea5915`
+- Binary SHA-256: `76fb42bffd1e224c616b87ca19b22ec52201e9fe101d4a7954a247bab3c32919`
+- OpenAPI SHA-256: `45677d0d0c0afda4687fada791ce492682ad546f2fbc612113890cffecbb6b5e`
+
+Independent builds from this commit used separate fresh Cargo target directories
+and the same pinned arm64 Bookworm builder; their binary and archive checksums
+matched. Repackaging identical inputs was byte-identical. The Cargo registry
+cache was shared, so this is not a cold-cache or cross-machine reproducibility
+claim. Hosted CI was not run. The pinned amd64 image was pulled, but local
+execution under the arm64 Podman QEMU emulator segfaulted; no x86_64 runtime
+result is claimed. Other runtime distributions remain unverified. No remote,
+push, published tag, deployment, migration, or business-contract change was made.
+
+Historical Part 11 evidence below remains a separate record and is not new
+evidence for this milestone.
+
 Status lifecycle: Planned → In progress → Verified (awaiting merge) → Complete. Use Blocked when a required implementation, verification or Git integration step cannot finish. Complete requires a committed merge into local `main`, as defined in [git-workflow.md](git-workflow.md).
 
 ## Part status

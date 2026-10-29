@@ -1,5 +1,8 @@
 use serde_json::{Value, json};
 
+const OAS_31_BASE_DIALECT: &str = "https://spec.openapis.org/oas/3.1/dialect/base";
+const DRAFT_2020_12_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
+
 pub fn document() -> Value {
     let yaml: yaml_serde::Value = yaml_serde::from_str(include_str!("../../spec/openapi.yaml"))
         .expect("checked-in OpenAPI YAML parses");
@@ -22,9 +25,133 @@ pub fn resolve_schema(name: &str) -> Value {
 #[allow(dead_code)]
 pub fn resolve_schema_value(schema: &Value) -> Result<Value, String> {
     let root = document();
-    resolve_refs(schema, &root, &mut Vec::new())
+    resolve_schema_value_in_document(&root, schema)
+}
+
+#[allow(dead_code)]
+pub fn resolve_schema_value_in_document(doc: &Value, schema: &Value) -> Result<Value, String> {
+    let document_dialect = document_schema_dialect(doc)?;
+    if !schema_dialect_supported(schema, document_dialect) {
+        return Err("schema declares an unsupported JSON Schema dialect".to_owned());
+    }
+    resolve_refs(schema, doc, &mut Vec::new())
         .map(with_draft)
         .map_err(|()| "schema contains an unresolved, external, or cyclic reference".to_owned())
+}
+
+/// Confirm the effective OpenAPI 3.1 dialect before adapting its JSON Schema
+/// keywords to the pinned Draft 2020-12 validator. The OpenAPI base dialect is
+/// accepted because its validation vocabulary is Draft 2020-12; custom dialects
+/// are rejected rather than silently overwritten.
+#[allow(dead_code)]
+pub fn document_schema_dialects_supported(doc: &Value) -> bool {
+    let Ok(document_dialect) = document_schema_dialect(doc) else {
+        return false;
+    };
+
+    let mut roots = Vec::new();
+    if let Some(schemas) = doc["components"]["schemas"].as_object() {
+        roots.extend(schemas.values());
+    }
+    collect_schema_roots(&doc["paths"], &mut roots);
+    collect_schema_roots(&doc["webhooks"], &mut roots);
+    if let Some(components) = doc["components"].as_object() {
+        for (name, component) in components {
+            if name != "schemas" {
+                collect_schema_roots(component, &mut roots);
+            }
+        }
+    }
+
+    roots
+        .into_iter()
+        .all(|schema| schema_dialect_supported(schema, document_dialect))
+}
+
+fn document_schema_dialect(doc: &Value) -> Result<&'static str, String> {
+    match doc.get("jsonSchemaDialect") {
+        None => Ok(OAS_31_BASE_DIALECT),
+        Some(Value::String(dialect)) if dialect == OAS_31_BASE_DIALECT => Ok(OAS_31_BASE_DIALECT),
+        Some(Value::String(dialect)) if dialect == DRAFT_2020_12_DIALECT => {
+            Ok(DRAFT_2020_12_DIALECT)
+        }
+        Some(Value::String(_)) => {
+            Err("document declares an unsupported JSON Schema dialect".to_owned())
+        }
+        Some(_) => Err("document declares an invalid JSON Schema dialect value".to_owned()),
+    }
+}
+
+#[allow(dead_code)]
+fn collect_schema_roots<'a>(value: &'a Value, roots: &mut Vec<&'a Value>) {
+    match value {
+        Value::Object(object) => {
+            for (key, nested) in object {
+                if key == "schema" {
+                    roots.push(nested);
+                } else {
+                    collect_schema_roots(nested, roots);
+                }
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                collect_schema_roots(nested, roots);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn schema_dialect_supported(schema: &Value, inherited: &str) -> bool {
+    const NESTED_SCHEMA_KEYWORDS: &[&str] = &[
+        "$defs",
+        "additionalItems",
+        "additionalProperties",
+        "allOf",
+        "anyOf",
+        "contains",
+        "contentSchema",
+        "definitions",
+        "dependencies",
+        "dependentSchemas",
+        "else",
+        "if",
+        "items",
+        "not",
+        "oneOf",
+        "patternProperties",
+        "prefixItems",
+        "properties",
+        "propertyNames",
+        "then",
+        "unevaluatedItems",
+        "unevaluatedProperties",
+    ];
+
+    match schema {
+        Value::Object(object) => {
+            let effective = match object.get("$schema") {
+                None => inherited,
+                Some(Value::String(dialect))
+                    if dialect == OAS_31_BASE_DIALECT || dialect == DRAFT_2020_12_DIALECT =>
+                {
+                    dialect
+                }
+                Some(_) => return false,
+            };
+            NESTED_SCHEMA_KEYWORDS.iter().all(|keyword| {
+                object
+                    .get(*keyword)
+                    .is_none_or(|nested| schema_dialect_supported(nested, effective))
+            })
+        }
+        Value::Array(values) => values
+            .iter()
+            .all(|nested| schema_dialect_supported(nested, inherited)),
+        Value::Bool(_) => true,
+        _ => true,
+    }
 }
 
 /// OpenAPI 3.1 inherits JSON Schema 2020-12 reference semantics: `$ref` and
@@ -32,6 +159,16 @@ pub fn resolve_schema_value(schema: &Value) -> Result<Value, String> {
 fn resolve_refs(schema: &Value, root: &Value, stack: &mut Vec<String>) -> Result<Value, ()> {
     match schema {
         Value::Object(object) => {
+            if let Some(dynamic_reference) = object.get("$dynamicRef") {
+                let Some(reference) = dynamic_reference.as_str() else {
+                    return Err(());
+                };
+                if !reference.starts_with("#/")
+                    || root.pointer(reference.trim_start_matches('#')).is_none()
+                {
+                    return Err(());
+                }
+            }
             if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
                 if !reference.starts_with("#/") || stack.iter().any(|entry| entry == reference) {
                     return Err(());
@@ -79,9 +216,19 @@ pub fn validates_ref_with_siblings(schema: &Value, value: &Value) -> bool {
     validates_schema(&with_draft(resolved), value)
 }
 
-fn with_draft(mut schema: Value) -> Value {
-    schema["$schema"] = json!("https://json-schema.org/draft/2020-12/schema");
-    schema
+fn with_draft(schema: Value) -> Value {
+    match schema {
+        Value::Object(mut object) => {
+            object.insert("$schema".to_owned(), json!(DRAFT_2020_12_DIALECT));
+            Value::Object(object)
+        }
+        // Boolean Schema Objects are valid in OpenAPI 3.1. Preserve their
+        // allow-all/deny-all semantics while declaring the validator dialect.
+        boolean_schema => json!({
+            "$schema": DRAFT_2020_12_DIALECT,
+            "allOf": [boolean_schema]
+        }),
+    }
 }
 
 fn validates_schema(schema: &Value, value: &Value) -> bool {
