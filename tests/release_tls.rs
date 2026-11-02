@@ -1190,7 +1190,8 @@ async fn verify_tls_fixture_paths_and_dns(
     .await;
     assert!(
         output.status.success(),
-        "untrusted-root file and both certificate hostnames exist before negative controls"
+        "untrusted-root file and both certificate hostnames exist before negative controls: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
     );
 }
 
