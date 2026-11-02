@@ -1,21 +1,21 @@
 # CI/CD and container delivery
 
 This guide describes the GitHub Actions pipeline, the Podman-compatible
-runtime image, and the version-tag release procedure for ferl. It separates
-what is implemented from what has been executed: the workflows and scripts are
-in the repository, but they have **not yet run in hosted CI**. Until the
-activation steps below are performed and a run succeeds, treat the pipeline as
-unverified.
+runtime image, and the version-tag release procedure for ferl. The pipeline has
+run on hosted runners: verification passed on pull requests and `main`, and the
+`v0.1.0` release published the image described in [Current state](#current-state).
+The sections below describe how each path works and how to run it again.
 
 ## Current state
 
 | Area | State |
 | --- | --- |
-| Repository | `https://github.com/ai-slop-code/ferl`, public. |
-| Actions | Disabled at repository level. No workflow has run. |
-| Build gates | `FERL_CI_ENABLED` and `FERL_RELEASE_ENABLED` are unset, so no build or publication job runs. |
-| Tags | No release tag exists. The first planned release is `v0.1.0`, matching `Cargo.toml`. |
-| Image | Not published. The image name, digest, and pull commands in the [README](../readme.md#docker-image) apply after the first release. |
+| Repository | `https://github.com/ai-slop-code/ferl`, public, MIT licensed. |
+| Actions | Enabled. Verification runs on pull requests and `main` pushes. |
+| Build gates | `FERL_CI_ENABLED=true` and `FERL_RELEASE_ENABLED=true`. |
+| Tags | `v0.1.0` is published from `main`. |
+| Image | `ghcr.io/ai-slop-code/ferl@sha256:f75c9e9f7bc06e2007246b85691b8f6605a21655900a26921addb03e91ffeac9` (tags `v0.1.0`, `sha-c6ddec2…`). Public, with provenance and SBOM attestations. |
+| Protection | `main` blocks force-pushes and deletion. Tags matching `v*` are protected by the `release-version-tags` ruleset. |
 
 ## Activation
 

@@ -10,6 +10,7 @@ ARG FERL_REVISION
 LABEL org.opencontainers.image.source="https://github.com/ai-slop-code/ferl" \
       org.opencontainers.image.version="${FERL_VERSION}" \
       org.opencontainers.image.revision="${FERL_REVISION}" \
+      org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.title="ferl"
 
 COPY bin/ferl-server /usr/local/bin/ferl-server
