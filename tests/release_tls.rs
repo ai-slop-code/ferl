@@ -433,7 +433,7 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
         let capture = tls.path().join("capture/telemetry.json");
         let successful_instance = instance_id_from_logs(&successful_exit.logs);
         let (traces, metrics, logs) =
-            wait_for_decoded_signals(&capture, &successful_instance).await;
+            wait_for_decoded_signals(&capture, &successful_instance, &successful_exit.logs).await;
         assert!(traces > 0, "Collector decoded actual production OTLP traces");
         assert!(metrics > 0, "Collector decoded actual production OTLP metrics");
         assert!(logs > 0, "Collector decoded actual production OTLP log records");
@@ -1301,7 +1301,7 @@ async fn run_valid_otlp_recovery(
         &[api_key, database_url, "https://tls-smoke.example/path"],
     );
     let instance = instance_id_from_logs(&exit.logs);
-    let counts = wait_for_decoded_signals(capture, &instance).await;
+    let counts = wait_for_decoded_signals(capture, &instance, &exit.logs).await;
     assert!(
         counts.0 > 0 && counts.1 > 0 && counts.2 > 0,
         "same-Collector recovery receives this process's decoded traces, metrics, and logs"
@@ -1320,8 +1320,8 @@ fn instance_id_from_logs(logs: &str) -> String {
         .expect("production startup logs its run-specific instance UUID")
 }
 
-async fn wait_for_decoded_signals(path: &Path, instance_id: &str) -> (usize, usize, usize) {
-    timeout(Duration::from_secs(20), async {
+async fn wait_for_decoded_signals(path: &Path, instance_id: &str, logs: &str) -> (usize, usize, usize) {
+    let waited = timeout(Duration::from_secs(20), async {
         loop {
             let counts = fs::read_to_string(path)
                 .ok()
@@ -1333,8 +1333,24 @@ async fn wait_for_decoded_signals(path: &Path, instance_id: &str) -> (usize, usi
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await
-    .expect("Collector receives and decodes each OTLP signal before the deadline")
+    .await;
+    match waited {
+        Ok(counts) => counts,
+        Err(_) => {
+            let capture = fs::read_to_string(path).unwrap_or_default();
+            let telemetry_lines: Vec<&str> = logs
+                .lines()
+                .filter(|line| line.contains("otlp") || line.contains("telemetry") || line.contains("export"))
+                .take(12)
+                .collect();
+            panic!(
+                "Collector receives and decodes each OTLP signal before the deadline: capture_bytes={} counts={:?} server_telemetry_lines={:?}",
+                capture.len(),
+                decode_signal_counts(&capture, instance_id),
+                telemetry_lines
+            );
+        }
+    }
 }
 
 fn decode_signal_counts(capture: &str, instance_id: &str) -> (usize, usize, usize) {
