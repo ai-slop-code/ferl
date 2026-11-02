@@ -1,0 +1,141 @@
+name: verify
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  msrv:
+    if: vars.FERL_CI_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust 1.94.0
+        run: rustup toolchain install 1.94.0 --profile minimal
+
+      - name: Check declared MSRV and production release build
+        run: |
+          TOOLCHAIN_PREFIX="$(dirname "$(dirname "$(rustup which rustc --toolchain 1.94.0)")")"
+          FERL_MSRV_TOOLCHAIN_DIR="$TOOLCHAIN_PREFIX" sh scripts/check-msrv.sh
+
+  release-gate:
+    if: vars.FERL_CI_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0 # retained Part 07 commit is built by legacy_compatibility
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          rustup default 1.99.1
+          rustc --version
+          cargo --version
+
+      - name: Install and verify Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes podman
+          podman --version
+          podman info
+
+      - name: Pull pinned verification images with TLS verification
+        run: |
+          podman pull docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+          podman pull docker.io/otel/opentelemetry-collector-contrib@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
+          podman pull docker.io/library/nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951
+          podman pull docker.io/library/rust@sha256:8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8
+
+      - name: Validate full OpenAPI 3.1 contract
+        run: sh scripts/check-openapi.sh
+
+      - name: Verify packaged executable through TCP proxy
+        run: sh scripts/check-proxy.sh
+
+      - name: Run Rust, PostgreSQL, process, Collector, and release gate
+        run: sh scripts/check.sh
+
+      - name: Repeat clean packaged release smoke
+        run: sh scripts/check-release.sh
+
+  candidate-image:
+    if: vars.FERL_CI_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out complete history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify native x86_64 host
+        run: |
+          test "$(uname -m)" = x86_64
+          test "$(uname -s)" = Linux
+
+      - name: Install rustup, pinned Rust toolchain, and Podman
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          sudo apt-get update
+          sudo apt-get install --yes podman
+          podman --version
+          podman info
+
+      - name: Build the release archive and candidate image
+        run: |
+          set -eu
+          export FERL_RELEASE_TARGET=x86_64-unknown-linux-gnu
+          export FERL_REQUIRE_CLEAN_RELEASE_SOURCE=true
+          . scripts/prepare-release-package.sh
+          sh scripts/build-image.sh "$FERL_RELEASE_ARCHIVE"
+
+      - name: Accept the candidate image against PostgreSQL 17 with TLS
+        run: sh scripts/check-image.sh target/image-candidate/image-metadata.json
+
+      - name: Install pinned Syft and Grype binaries
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/syft.tar.gz" \
+            https://github.com/anchore/syft/releases/download/v1.55.0/syft_1.55.0_linux_amd64.tar.gz
+          echo "bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d  $RUNNER_TEMP/syft.tar.gz" | sha256sum --check --strict -
+          tar --extract --gzip --file "$RUNNER_TEMP/syft.tar.gz" --directory "$RUNNER_TEMP/bin" syft
+          curl --fail --silent --show-error --location --output "$RUNNER_TEMP/grype.tar.gz" \
+            https://github.com/anchore/grype/releases/download/v0.121.0/grype_0.121.0_linux_amd64.tar.gz
+          echo "64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519  $RUNNER_TEMP/grype.tar.gz" | sha256sum --check --strict -
+          tar --extract --gzip --file "$RUNNER_TEMP/grype.tar.gz" --directory "$RUNNER_TEMP/bin" grype
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Generate the candidate SBOM
+        run: |
+          set -eu
+          OUT=target/image-candidate
+          ARCHIVE=$(jq --raw-output .image_archive "$OUT/image-metadata.json")
+          syft "oci-archive:$OUT/$ARCHIVE" --output "spdx-json=$OUT/sbom.spdx.json"
+
+      - name: Enforce the vulnerability policy
+        run: |
+          set -eu
+          grype "sbom:target/image-candidate/sbom.spdx.json" --fail-on high --only-fixed
+
+      - name: Upload the accepted candidate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ferl-candidate-${{ github.run_id }}
+          path: target/image-candidate
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14

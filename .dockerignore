@@ -1,0 +1,6 @@
+# Deny by default. The image context is staged by scripts/build-image.sh from
+# verified inputs only; never build from the repository root with COPY . .
+*
+!Dockerfile
+!.dockerignore
+!bin/ferl-server

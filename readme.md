@@ -7,7 +7,7 @@ API for managing accounts, links, and visit analytics, backed by PostgreSQL.
 Public short links redirect directly to their destinations.
 
 [Getting started](#getting-started) · [API examples](#use-the-api) ·
-[Self-hosting](#running-on-your-own-domain) · [Docker image](#docker-image-planned) ·
+[Self-hosting](#running-on-your-own-domain) · [Docker image](#docker-image) ·
 [Documentation](#documentation)
 
 ## What you get
@@ -276,18 +276,238 @@ Deleting a link permanently reserves its code. Visit ingestion is best effort:
 queued events may be lost on abrupt process termination. See the
 [release and operator guide](docs/release.md) for the complete operational model.
 
-## Docker image (planned)
+## Docker image
 
-The intended distribution path is a prebuilt Docker-compatible image published
-to **GitHub Container Registry (`ghcr.io`)**. You will pull that image and run it
-on your own server with an external PostgreSQL database.
+> **Not yet published.** The first image will be available after the `v0.1.0`
+> release is published. Until then, use the source build above. The commands
+> below describe the intended deployment; they become valid once the digest in
+> the release summary is available.
 
-There is currently no published ferl image or ready-to-run Compose deployment
-documented in this repository. The image name, version tags, supported
-architectures, and Docker/Compose commands will be added here when the image is
-available. For now, use the source-build instructions above; the
-[release guide](docs/release.md) also documents building and verifying a Linux
-release archive with Podman.
+ferl publishes a Docker-compatible image for **`linux/amd64`** to GitHub
+Container Registry: `ghcr.io/ai-slop-code/ferl`. It runs with Podman on a native
+x86_64 Linux host and uses an **external PostgreSQL 17.x** database. The image
+contains only the `ferl-server` executable, CA certificates, and a glibc runtime,
+and it runs as UID `65532`.
+
+Release automation and the verification behind each image are described in
+[CI/CD and container delivery](docs/cicd.md).
+
+### Prepare an external PostgreSQL 17 database
+
+You need PostgreSQL **17.x** with TLS and SCRAM authentication, reachable from the
+host where ferl runs. Use the primary (read-write) endpoint. Replace the
+placeholders and connect as an administrative account allowed to create a role
+and a database. Use a verified CA certificate:
+
+```sh
+psql \
+  "host=db.example.com port=5432 dbname=postgres user=DB_ADMIN sslmode=verify-full sslrootcert=/path/to/db-ca.pem" \
+  -X -W -v ON_ERROR_STOP=1
+```
+
+Confirm the server version before continuing:
+
+```sql
+SHOW server_version;
+```
+
+For a new deployment, create a dedicated, non-superuser application role that
+owns its database. It runs migrations as well as serving:
+
+```sql
+CREATE ROLE ferl
+  LOGIN
+  NOSUPERUSER
+  NOCREATEDB
+  NOCREATEROLE
+  NOREPLICATION;
+
+SET password_encryption = 'scram-sha-256';
+\password ferl
+
+CREATE DATABASE ferl OWNER ferl;
+
+\connect ferl
+
+REVOKE ALL ON DATABASE ferl FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+
+GRANT USAGE, CREATE ON SCHEMA public TO ferl;
+
+ALTER ROLE ferl IN DATABASE ferl
+  SET search_path = public;
+```
+
+`\password` prompts for the password, so it is not written into the SQL. These
+are initialization commands. Do not run them against an existing role or
+database you do not intend to change. On a managed database, use the provider's
+equivalent operations with the same ownership and search path.
+
+Prerequisites:
+
+- The application host can resolve and reach the database host.
+- The server certificate matches the hostname in `FERL_DATABASE_URL`.
+- The `pg_hba.conf` (or the provider's equivalent) allows SCRAM from the
+  application host for the `ferl` role.
+- The CA certificate is readable inside the container.
+
+ferl does not need any PostgreSQL extensions. Use the same database, schema,
+and search path for migration, bootstrap, and serving.
+
+### Create private runtime configuration
+
+```sh
+umask 077
+mkdir -p "$HOME/.config/ferl"
+touch "$HOME/.config/ferl/ferl.env"
+chmod 600 "$HOME/.config/ferl/ferl.env"
+```
+
+Write the Podman environment file. Use plain `KEY=value` lines with no quotes and
+no `export`. Podman passes these values to the process. Do not `source` the file:
+
+```dotenv
+FERL_DATABASE_URL=postgres://ferl:URL_ENCODED_PASSWORD@db.example.com:5432/ferl?sslmode=verify-full&sslrootcert=/etc/ferl/db-ca.pem
+FERL_PUBLIC_BASE_URL=https://s.example.com
+FERL_LISTEN_ADDR=0.0.0.0:8080
+FERL_CURSOR_KEY=REPLACE_WITH_GENERATED_KEY
+FERL_ANONYMOUS_CREATION=false
+FERL_ENVIRONMENT=production
+FERL_SHUTDOWN_TIMEOUT_SECS=45
+```
+
+Percent-encode special characters in the password part of the database URL. The
+`sslrootcert` path is the path inside the container, not on the host.
+
+Generate the cursor key once per deployment and store it privately with the
+environment file. Keep a separate backup of it, and reuse it across restarts and
+instances. Changing it invalidates existing pagination cursors:
+
+```sh
+python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode())'
+```
+
+Place the trusted database CA at `$HOME/.config/ferl/db-ca.pem`. The container's
+non-root process must be able to read it. Podman's `--env-file` supplies the
+settings. ferl does not load `.env` files on its own.
+
+### Pull and migrate
+
+Use the digest from the release summary. Tags are convenient, but the digest is
+the immutable reference:
+
+```sh
+FERL_CONFIG="$HOME/.config/ferl"
+FERL_IMAGE='ghcr.io/ai-slop-code/ferl@sha256:REPLACE_WITH_PUBLISHED_DIGEST'
+
+podman pull --platform linux/amd64 "$FERL_IMAGE"
+```
+
+Define a one-shot helper for the current shell session:
+
+```sh
+ferl_once() {
+  podman run --rm \
+    --platform linux/amd64 \
+    --pull=never \
+    --log-driver=none \
+    --read-only \
+    --cap-drop=all \
+    --security-opt=no-new-privileges \
+    --env-file "$FERL_CONFIG/ferl.env" \
+    --volume "$FERL_CONFIG/db-ca.pem:/etc/ferl/db-ca.pem:ro" \
+    "$FERL_IMAGE" "$@"
+}
+
+ferl_once migrate
+```
+
+Migration must succeed before bootstrap or startup. Do not apply the SQL by hand
+or edit migration history to force readiness.
+
+### Bootstrap the first administrator once
+
+Run this after migration succeeds. It writes the one-time key to a private file:
+
+```sh
+(
+  umask 077
+  set -C
+  ferl_once bootstrap-admin --username ferl-admin \
+    > "$FERL_CONFIG/bootstrap.json"
+)
+```
+
+The helper disables container logging, so the returned key is not kept in a log
+driver. Store the key in your secret manager, then delete the bootstrap file.
+Bootstrap is recorded in PostgreSQL. Running the command again does not recover
+a lost key or create a replacement administrator. If output fails after the
+database commit, follow the [release and operator guide](docs/release.md) for
+recovery. Do not automate retries or reset the database.
+
+### Start the server
+
+For a reverse proxy on the same host:
+
+```sh
+podman run --detach \
+  --name ferl \
+  --platform linux/amd64 \
+  --pull=never \
+  --read-only \
+  --cap-drop=all \
+  --security-opt=no-new-privileges \
+  --stop-timeout=60 \
+  --publish 127.0.0.1:8080:8080 \
+  --env-file "$FERL_CONFIG/ferl.env" \
+  --volume "$FERL_CONFIG/db-ca.pem:/etc/ferl/db-ca.pem:ro" \
+  "$FERL_IMAGE" serve
+```
+
+On SELinux hosts, the CA mount may need a relabel option such as `:ro,z`. Check
+that the mount is readable by the non-root process in your environment.
+
+```sh
+curl --fail-with-body http://127.0.0.1:8080/api/health/ready
+```
+
+A ready server returns:
+
+```json
+{"status":"ok"}
+```
+
+Readiness can return `503` while schema verification completes.
+`/api/health/live` checks that the process responds. `/api/health/ready` also
+checks database and schema readiness. The root path `/` is not a health endpoint.
+
+Keep these points in mind:
+
+- `FERL_PUBLIC_BASE_URL` sets the origin used in returned short URLs. It does not
+  configure DNS and does not terminate TLS.
+- HTTPS terminates at your reverse proxy. ferl serves plain HTTP internally. See
+  [Running on your own domain](#running-on-your-own-domain) for routing.
+- Set `FERL_TRUSTED_PROXIES` to the addresses of your actual proxy. Do not trust
+  an entire private network by default.
+- The loopback publish address is for a proxy on the same host. Adapt it for any
+  other network topology.
+- For unattended hosting, use a service manager. A rootless Podman Quadlet should
+  keep the same image, environment file, and CA mount, with a stop allowance
+  longer than `FERL_SHUTDOWN_TIMEOUT_SECS`. If the service needs to run without a
+  login session, enable lingering for that user.
+
+### Upgrade and roll back
+
+Record the running image digest, back up PostgreSQL, and keep the cursor key
+separately. Then review the release notes for migration compatibility. Stop the
+old instances if the migration requires it, run `migrate` with the new digest,
+start the new image, and wait for readiness before sending traffic.
+
+ferl's schema changes are not overlapping-compatible. Restoring the previous image
+alone does not undo a migration. Restore a compatible database backup, or apply a
+deliberate forward fix. The full procedure is in
+[Restart, upgrade, and back up](#restart-upgrade-and-back-up) and
+[the release and operator guide](docs/release.md).
 
 ## Project status
 

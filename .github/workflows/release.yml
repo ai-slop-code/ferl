@@ -1,0 +1,141 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: vars.FERL_RELEASE_ENABLED == 'true' && github.repository == 'ai-slop-code/ferl'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Check out complete history and tags
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate the release tag and committed source
+        id: validate
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          case "$RELEASE_TAG" in
+            v*) ;;
+            *) echo "release tags must start with v" >&2; exit 1 ;;
+          esac
+          VERSION=${RELEASE_TAG#v}
+          printf '%s\n' "$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || {
+            echo "release tags must be vMAJOR.MINOR.PATCH without leading zeroes" >&2
+            exit 1
+          }
+          TAG_COMMIT=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
+          [ "$TAG_COMMIT" = "$(git rev-parse HEAD)" ] || {
+            echo "checkout does not match the tagged commit" >&2
+            exit 1
+          }
+          git fetch --no-tags --quiet origin '+refs/heads/main:refs/remotes/origin/main'
+          git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main || {
+            echo "release tag must point to a commit reachable from main" >&2
+            exit 1
+          }
+          [ -z "$(git status --porcelain --untracked-files=normal)" ] || {
+            echo "release source tree must be clean" >&2
+            exit 1
+          }
+          VERSION="$VERSION" python3 - <<'PY'
+          import os
+          import tomllib
+
+          version = os.environ["VERSION"]
+          with open("Cargo.toml", "rb") as stream:
+              package_version = tomllib.load(stream)["package"]["version"]
+          with open("Cargo.lock", "rb") as stream:
+              lock = tomllib.load(stream)
+          roots = [
+              package for package in lock["package"]
+              if package["name"] == "ferl-server" and "source" not in package
+          ]
+          if package_version != version or len(roots) != 1 or roots[0]["version"] != version:
+              raise SystemExit("tag, Cargo.toml, and the root Cargo.lock entry must agree")
+          PY
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: preflight
+    if: vars.FERL_RELEASE_ENABLED == 'true'
+    uses: ./.github/workflows/verify.yml
+
+  publish:
+    needs: [preflight, verify]
+    if: vars.FERL_RELEASE_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Install and verify Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes podman
+          podman --version
+
+      - name: Download the accepted candidate from this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ferl-candidate-${{ github.run_id }}
+          path: candidate
+
+      - name: Publish the accepted candidate image
+        id: publish
+        env:
+          CANDIDATE_DIR: candidate
+          EXPECTED_VERSION: ${{ needs.preflight.outputs.version }}
+          EXPECTED_REVISION: ${{ github.sha }}
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/ferl-registry-auth.json
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: sh scripts/publish-image.sh
+
+      - name: Attest build provenance for the published digest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/ai-slop-code/ferl
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest the SBOM for the published digest
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ghcr.io/ai-slop-code/ferl
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          sbom-path: candidate/sbom.spdx.json
+          push-to-registry: true
+
+      - name: Summarize the published reference
+        env:
+          PUBLISHED_REFERENCE: ${{ steps.publish.outputs.reference }}
+        run: printf 'Published `%s`\n' "$PUBLISHED_REFERENCE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove registry authentication
+        if: always()
+        env:
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/ferl-registry-auth.json
+        run: rm -f "$REGISTRY_AUTH_FILE"
