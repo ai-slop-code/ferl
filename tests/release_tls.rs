@@ -1350,7 +1350,14 @@ async fn wait_for_decoded_signals(
                 .take(12)
                 .collect();
             let collectors = std::process::Command::new("podman")
-                .args(["ps", "-a", "--filter", "name=ferl-hardening-tls-otel", "--format", "{{.Names}}"])
+                .args([
+                    "ps",
+                    "-a",
+                    "--filter",
+                    "name=ferl-hardening-tls-otel",
+                    "--format",
+                    "{{.Names}}",
+                ])
                 .output()
                 .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
                 .unwrap_or_default();
