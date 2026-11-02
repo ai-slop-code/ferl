@@ -1349,11 +1349,27 @@ async fn wait_for_decoded_signals(
                 })
                 .take(12)
                 .collect();
+            let collectors = std::process::Command::new("podman")
+                .args(["ps", "-a", "--filter", "name=ferl-hardening-tls-otel", "--format", "{{.Names}}"])
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default();
+            let mut collector_logs = String::new();
+            for name in collectors.lines().filter(|name| !name.is_empty()) {
+                let output = std::process::Command::new("podman")
+                    .args(["logs", "--tail", "60", name])
+                    .output();
+                if let Ok(output) = output {
+                    collector_logs.push_str(&String::from_utf8_lossy(&output.stdout));
+                    collector_logs.push_str(&String::from_utf8_lossy(&output.stderr));
+                }
+            }
             panic!(
-                "Collector receives and decodes each OTLP signal before the deadline: capture_bytes={} counts={:?} server_telemetry_lines={:?}",
+                "Collector receives and decodes each OTLP signal before the deadline: capture_bytes={} counts={:?} server_telemetry_lines={:?} collector_logs={:?}",
                 capture.len(),
                 decode_signal_counts(&capture, instance_id),
-                telemetry_lines
+                telemetry_lines,
+                collector_logs
             );
         }
     }
