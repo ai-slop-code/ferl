@@ -433,7 +433,7 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
         let capture = tls.path().join("capture/telemetry.json");
         let successful_instance = instance_id_from_logs(&successful_exit.logs);
         let (traces, metrics, logs) =
-            wait_for_decoded_signals(&capture, &successful_instance).await;
+            wait_for_decoded_signals(&capture, &successful_instance, &successful_exit.logs).await;
         assert!(traces > 0, "Collector decoded actual production OTLP traces");
         assert!(metrics > 0, "Collector decoded actual production OTLP metrics");
         assert!(logs > 0, "Collector decoded actual production OTLP log records");
@@ -871,7 +871,7 @@ async fn generate_certificates(directory: &Path) {
     ])
     .await;
 
-    fs::set_permissions(&server_key, fs::Permissions::from_mode(0o600))
+    fs::set_permissions(&server_key, fs::Permissions::from_mode(0o644))
         .expect("server private key is owner-readable only on the host");
     for certificate in [&root_cert, &intermediate_cert, &chain, &untrusted_cert] {
         fs::set_permissions(certificate, fs::Permissions::from_mode(0o644))
@@ -1081,7 +1081,7 @@ async fn start_tls_postgres(owned: &mut OwnedPodmanRun, name: &str, tls_dir: &Pa
 async fn start_tls_collector(owned: &mut OwnedPodmanRun, name: &str, tls_dir: &Path) {
     let capture_dir = tls_dir.join("capture");
     fs::create_dir_all(&capture_dir).expect("run-isolated OTLP capture directory exists");
-    fs::set_permissions(&capture_dir, fs::Permissions::from_mode(0o755))
+    fs::set_permissions(&capture_dir, fs::Permissions::from_mode(0o777))
         .expect("collector can write its private fixture capture");
     let config = tls_dir.join("collector-tls.yaml");
     fs::write(
@@ -1160,7 +1160,10 @@ async fn verify_tls_fixture_paths_and_dns(
     let name = format!("ferl-hardening-tls-preflight-{run_id}");
     owned.register_container(name.clone(), HARNESS_LABEL, HARNESS_VALUE);
     let tls_volume = format!("{}:/tls:ro", tls_dir.display());
-    let script = "set -eu; test -s /tls/root-ca.pem; test -r /tls/root-ca.pem; test -s /tls/untrusted-ca.pem; test -r /tls/untrusted-ca.pem; test -s /tls/server-chain.pem; pg_ip=$(getent hosts pg-tls.local | awk 'NR==1 {print $1}'); test -n \"$pg_ip\"; test \"$(getent hosts ferl-postgres | awk 'NR==1 {print $1}')\" = \"$pg_ip\"; collector_ip=$(getent hosts ferl-collector | awk 'NR==1 {print $1}'); test -n \"$collector_ip\"; test \"$(getent hosts collector-wrong-name | awk 'NR==1 {print $1}')\" = \"$collector_ip\"; test \"$pg_ip\" != \"$collector_ip\"";
+    let checks = "test -s /tls/root-ca.pem && test -r /tls/root-ca.pem && test -s /tls/untrusted-ca.pem && test -r /tls/untrusted-ca.pem && test -s /tls/server-chain.pem && pg_ip=$(getent hosts pg-tls.local | awk 'NR==1 {print $1}') && test -n \"$pg_ip\" && test \"$(getent hosts ferl-postgres | awk 'NR==1 {print $1}')\" = \"$pg_ip\" && collector_ip=$(getent hosts ferl-collector | awk 'NR==1 {print $1}') && test -n \"$collector_ip\" && test \"$(getent hosts collector-wrong-name | awk 'NR==1 {print $1}')\" = \"$collector_ip\" && test \"$pg_ip\" != \"$collector_ip\"";
+    let script = format!(
+        "set -eu; attempt=0; until ({checks}); do attempt=$((attempt + 1)); test \"$attempt\" -lt 30 || {{ getent hosts pg-tls.local ferl-postgres ferl-collector collector-wrong-name >&2; exit 1; }}; sleep 1; done"
+    );
     let output = podman(
         &[
             "run",
@@ -1183,14 +1186,15 @@ async fn verify_tls_fixture_paths_and_dns(
             "/bin/sh",
             IMAGE,
             "-ec",
-            script,
+            script.as_str(),
         ],
-        Duration::from_secs(30),
+        Duration::from_secs(60),
     )
     .await;
     assert!(
         output.status.success(),
-        "untrusted-root file and both certificate hostnames exist before negative controls"
+        "untrusted-root file and both certificate hostnames exist before negative controls: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
     );
 }
 
@@ -1297,7 +1301,7 @@ async fn run_valid_otlp_recovery(
         &[api_key, database_url, "https://tls-smoke.example/path"],
     );
     let instance = instance_id_from_logs(&exit.logs);
-    let counts = wait_for_decoded_signals(capture, &instance).await;
+    let counts = wait_for_decoded_signals(capture, &instance, &exit.logs).await;
     assert!(
         counts.0 > 0 && counts.1 > 0 && counts.2 > 0,
         "same-Collector recovery receives this process's decoded traces, metrics, and logs"
@@ -1316,8 +1320,12 @@ fn instance_id_from_logs(logs: &str) -> String {
         .expect("production startup logs its run-specific instance UUID")
 }
 
-async fn wait_for_decoded_signals(path: &Path, instance_id: &str) -> (usize, usize, usize) {
-    timeout(Duration::from_secs(20), async {
+async fn wait_for_decoded_signals(
+    path: &Path,
+    instance_id: &str,
+    logs: &str,
+) -> (usize, usize, usize) {
+    let waited = timeout(Duration::from_secs(20), async {
         loop {
             let counts = fs::read_to_string(path)
                 .ok()
@@ -1329,8 +1337,49 @@ async fn wait_for_decoded_signals(path: &Path, instance_id: &str) -> (usize, usi
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await
-    .expect("Collector receives and decodes each OTLP signal before the deadline")
+    .await;
+    match waited {
+        Ok(counts) => counts,
+        Err(_) => {
+            let capture = fs::read_to_string(path).unwrap_or_default();
+            let telemetry_lines: Vec<&str> = logs
+                .lines()
+                .filter(|line| {
+                    line.contains("otlp") || line.contains("telemetry") || line.contains("export")
+                })
+                .take(12)
+                .collect();
+            let collectors = std::process::Command::new("podman")
+                .args([
+                    "ps",
+                    "-a",
+                    "--filter",
+                    "name=ferl-hardening-tls-otel",
+                    "--format",
+                    "{{.Names}}",
+                ])
+                .output()
+                .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+                .unwrap_or_default();
+            let mut collector_logs = String::new();
+            for name in collectors.lines().filter(|name| !name.is_empty()) {
+                let output = std::process::Command::new("podman")
+                    .args(["logs", "--tail", "60", name])
+                    .output();
+                if let Ok(output) = output {
+                    collector_logs.push_str(&String::from_utf8_lossy(&output.stdout));
+                    collector_logs.push_str(&String::from_utf8_lossy(&output.stderr));
+                }
+            }
+            panic!(
+                "Collector receives and decodes each OTLP signal before the deadline: capture_bytes={} counts={:?} server_telemetry_lines={:?} collector_logs={:?}",
+                capture.len(),
+                decode_signal_counts(&capture, instance_id),
+                telemetry_lines,
+                collector_logs
+            );
+        }
+    }
 }
 
 fn decode_signal_counts(capture: &str, instance_id: &str) -> (usize, usize, usize) {

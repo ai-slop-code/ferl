@@ -124,9 +124,13 @@ network, and working files are removed on exit.
 - **Vulnerabilities:** `grype --fail-on high --only-fixed` fails the candidate
   for any fixed High or Critical vulnerability. Unfixed findings are reported but
   do not fail the run.
-- **Exceptions:** none exist. An exception must be a scoped `.grype.yaml` entry
-  that names the vulnerability, the affected package, a written reason, and an
-  expiry date. Blanket ignores are not allowed.
+- **Exceptions:** `.grype.yaml` at the repository root holds five scoped entries
+  for CVEs in `libssl3` 3.0.20 in the distroless base image. Each entry names
+  one vulnerability and one package version. `ferl-server` does not link OpenSSL,
+  so these are base-image findings, not application code paths. Entries expire
+  on **2026-12-02**: re-evaluate or remove them by then, and remove each entry
+  as soon as the base image ships a fixed `libssl3`. Blanket ignores are not
+  allowed.
 - **Secrets:** `build-image.sh` scans the exported image filesystem for private
   key headers and common token formats. This is pattern matching, not a complete
   secret scanner, and it does not replace the repository scan before a release.

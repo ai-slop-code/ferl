@@ -665,8 +665,14 @@ async fn pinned_tcp_proxy_routes_raw_paths_trusts_only_observed_hops_and_carries
                             assert!(redirect.body.is_empty(), "redirect through NGINX has no body bytes");
                         }
                     }
-                    wait_for_user_agent(database.pool(), "proxyquote", &quote_value).await;
-                    wait_for_user_agent(database.pool(), "proxyutf8", &utf8_value).await;
+                    for (code, maximum) in [
+                        ("proxyquote", quote_value.as_str()),
+                        ("proxyutf8", utf8_value.as_str()),
+                    ] {
+                        for user_agent in ["A", maximum, "N", "Z"] {
+                            wait_for_user_agent(database.pool(), code, user_agent).await;
+                        }
+                    }
                     for (code, maximum, minimum_cursor) in [
                         ("proxyquote", quote_value.as_str(), 16_000),
                         ("proxyutf8", utf8_value.as_str(), 8_192),

@@ -33,6 +33,7 @@ CHECKS=""
 
 umask 077
 mkdir -p "$WORK/ca" "$WORK/untrusted-ca" "$WORK/db-tls"
+chmod 0755 "$WORK/ca" "$WORK/untrusted-ca" "$WORK/db-tls"
 
 cleanup() {
     podman ps -aq --filter "label=$LABEL" | xargs -r podman rm -f -t 0 >/dev/null 2>&1 || true
@@ -52,6 +53,13 @@ fail() {
     exit 1
 }
 
+show_log() {
+    python3 -c 'import sys
+password = open(sys.argv[2]).read().strip()
+text = open(sys.argv[1], errors="replace").read().replace(password, "<redacted>")
+print(text[-3000:], file=sys.stderr)' "$1" "$PASSWORD_FILE" || true
+}
+
 podman info >/dev/null
 podman pull --platform linux/amd64 "$PG_IMAGE" >/dev/null
 
@@ -68,8 +76,8 @@ if Path(sidecar).read_text().split()[0] != expected:
 PY
 pass "oci-archive-checksum"
 
-LOADED=$(podman load --quiet -i "$ARCHIVE" | tail -n 1)
-podman tag "$LOADED" "$IMAGE"
+podman load --quiet -i "$ARCHIVE" >/dev/null
+podman tag "$IMAGE_ID" "$IMAGE"
 [ "$(podman image inspect --format '{{.Id}}' "$IMAGE")" = "$IMAGE_ID" ] || fail "loaded image ID differs from metadata"
 pass "loaded-candidate-identity"
 
@@ -184,7 +192,7 @@ ferl_once() {
         --env-file "$env_file" --volume "$ca_dir:/tls:ro" "$IMAGE" "$@"
 }
 
-ferl_once "$WORK/ferl.env" "$WORK/ca" migrate >"$WORK/migrate.log" 2>&1 || fail "migrate over verified TLS"
+ferl_once "$WORK/ferl.env" "$WORK/ca" migrate >"$WORK/migrate.log" 2>&1 || { show_log "$WORK/migrate.log"; fail "migrate over verified TLS"; }
 ferl_once "$WORK/ferl.env" "$WORK/ca" migrate >"$WORK/migrate-again.log" 2>&1 || fail "repeated migrate is idempotent"
 pass "migrate-fresh-database"
 

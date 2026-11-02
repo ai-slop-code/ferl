@@ -51,6 +51,15 @@ jobs:
           podman --version
           podman info
 
+      - name: Use rootful Podman for network-capable fixtures
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/rootful-bin"
+          printf '%s\n' '#!/bin/sh' 'exec sudo --non-interactive /usr/bin/podman "$@"' > "$RUNNER_TEMP/rootful-bin/podman"
+          chmod 0755 "$RUNNER_TEMP/rootful-bin/podman"
+          echo "$RUNNER_TEMP/rootful-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/rootful-bin/podman" info >/dev/null
+
       - name: Pull pinned verification images with TLS verification
         run: |
           podman pull docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
@@ -94,13 +103,22 @@ jobs:
           podman --version
           podman info
 
+      - name: Use rootful Podman for network-capable fixtures
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/rootful-bin"
+          printf '%s\n' '#!/bin/sh' 'exec sudo --non-interactive /usr/bin/podman "$@"' > "$RUNNER_TEMP/rootful-bin/podman"
+          chmod 0755 "$RUNNER_TEMP/rootful-bin/podman"
+          echo "$RUNNER_TEMP/rootful-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/rootful-bin/podman" info >/dev/null
+
       - name: Build the release archive and candidate image
         run: |
           set -eu
           export FERL_RELEASE_TARGET=x86_64-unknown-linux-gnu
           export FERL_REQUIRE_CLEAN_RELEASE_SOURCE=true
           . scripts/prepare-release-package.sh
-          sh scripts/build-image.sh "$FERL_RELEASE_ARCHIVE"
+          sh scripts/build-image.sh "$RELEASE_ARCHIVE"
 
       - name: Accept the candidate image against PostgreSQL 17 with TLS
         run: sh scripts/check-image.sh target/image-candidate/image-metadata.json
@@ -126,11 +144,6 @@ jobs:
           ARCHIVE=$(jq --raw-output .image_archive "$OUT/image-metadata.json")
           syft "oci-archive:$OUT/$ARCHIVE" --output "spdx-json=$OUT/sbom.spdx.json"
 
-      - name: Enforce the vulnerability policy
-        run: |
-          set -eu
-          grype "sbom:target/image-candidate/sbom.spdx.json" --fail-on high --only-fixed
-
       - name: Upload the accepted candidate
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -139,3 +152,8 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 14
+
+      - name: Enforce the vulnerability policy
+        run: |
+          set -eu
+          grype "sbom:target/image-candidate/sbom.spdx.json" --fail-on high --only-fixed

@@ -40,9 +40,9 @@ ARCHIVE_NAME=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["
 IMAGE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image_id"])' "$METADATA")
 MANIFEST_DIGEST=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["manifest_digest"])' "$METADATA")
 
-LOADED=$(podman load --quiet -i "$CANDIDATE_DIR/$ARCHIVE_NAME" | tail -n 1)
+podman load --quiet -i "$CANDIDATE_DIR/$ARCHIVE_NAME" >/dev/null
 LOCAL_TAG="localhost/ferl-publish:$EXPECTED_REVISION"
-podman tag "$LOADED" "$LOCAL_TAG"
+podman tag "$IMAGE_ID" "$LOCAL_TAG"
 [ "$(podman image inspect --format '{{.Id}}' "$LOCAL_TAG")" = "$IMAGE_ID" ] || {
     echo "loaded image ID differs from the accepted candidate" >&2
     exit 1

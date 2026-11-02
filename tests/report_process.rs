@@ -426,8 +426,11 @@ async fn report_authority_history_and_maximum_breakdown_cursors_cross_tcp_instan
                         assert_eq!(visit.status, 302, "transport accepts exact 8,192-byte header");
                     }
                 }
-                wait_for_user_agent(database.pool(), quote_code, &max_quote).await;
-                wait_for_user_agent(database.pool(), utf8_code, &max_utf8).await;
+                for (code, values) in [(quote_code, &quote_values), (utf8_code, &utf8_values)] {
+                    for value in values {
+                        wait_for_user_agent(database.pool(), code, value).await;
+                    }
+                }
                 let stored_quote: String = sqlx::query_scalar(
                     "SELECT user_agent FROM visits v JOIN links l ON l.id = v.link_id WHERE l.short_code = $1 AND user_agent = $2",
                 )
