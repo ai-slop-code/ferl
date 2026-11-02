@@ -209,13 +209,18 @@ Release is not required.
 
 ## Protection to configure
 
-These settings are not yet applied except where noted:
+These settings are applied:
 
-- `main` has no force-push or deletion permission. This is applied.
-- Required status checks use the `ci` workflow's job names after the first
-  successful run. Not yet configured.
-- A tag ruleset for `v*` should block creation by non-maintainers and block
-  update and deletion for everyone. Not yet configured.
+- `main` has no force-push or deletion permission.
+- Tags matching `v*` are protected by the ruleset `release-version-tags`. It
+  restricts creation, update, deletion, and non-fast-forward changes. Only the
+  repository owner can bypass it, so a maintainer cannot move or delete a
+  published version tag without the owner's account.
+
+Not yet configured:
+
+- Required status checks. Check names such as `verify / msrv` appear only after
+  the first successful run. Add them to `main` at that point.
 
 ## Related documents
 
