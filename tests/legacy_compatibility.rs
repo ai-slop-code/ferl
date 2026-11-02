@@ -168,6 +168,15 @@ async fn v1_server_runs_on_v1_then_fails_closed_after_v2_upgrade_and_v2_runs_rea
                             Err(_) => break None,
                         }
                     };
+                    let observation_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+                    loop {
+                        let observed = incompatible.stdout_snapshot().contains("schema_version_newer_than_binary")
+                            || incompatible.stderr_snapshot().contains("schema_version_newer_than_binary");
+                        if observed || tokio::time::Instant::now() >= observation_deadline {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
                     let old_output = incompatible.stop_and_capture().await;
                     assert!(
                         response.is_some(),
