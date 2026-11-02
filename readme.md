@@ -334,6 +334,10 @@ If you cannot use the published image, build the server with the pinned Rust
 toolchain. [Development](docs/development.md) describes the toolchain, local
 PostgreSQL fixtures, and the verification commands.
 
+## License
+
+ferl is released under the [MIT License](LICENSE).
+
 ## Documentation
 
 | Guide | Contents |
