@@ -871,7 +871,7 @@ async fn generate_certificates(directory: &Path) {
     ])
     .await;
 
-    fs::set_permissions(&server_key, fs::Permissions::from_mode(0o600))
+    fs::set_permissions(&server_key, fs::Permissions::from_mode(0o644))
         .expect("server private key is owner-readable only on the host");
     for certificate in [&root_cert, &intermediate_cert, &chain, &untrusted_cert] {
         fs::set_permissions(certificate, fs::Permissions::from_mode(0o644))
