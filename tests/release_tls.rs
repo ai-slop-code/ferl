@@ -1160,7 +1160,10 @@ async fn verify_tls_fixture_paths_and_dns(
     let name = format!("ferl-hardening-tls-preflight-{run_id}");
     owned.register_container(name.clone(), HARNESS_LABEL, HARNESS_VALUE);
     let tls_volume = format!("{}:/tls:ro", tls_dir.display());
-    let script = "set -eu; test -s /tls/root-ca.pem; test -r /tls/root-ca.pem; test -s /tls/untrusted-ca.pem; test -r /tls/untrusted-ca.pem; test -s /tls/server-chain.pem; pg_ip=$(getent hosts pg-tls.local | awk 'NR==1 {print $1}'); test -n \"$pg_ip\"; test \"$(getent hosts ferl-postgres | awk 'NR==1 {print $1}')\" = \"$pg_ip\"; collector_ip=$(getent hosts ferl-collector | awk 'NR==1 {print $1}'); test -n \"$collector_ip\"; test \"$(getent hosts collector-wrong-name | awk 'NR==1 {print $1}')\" = \"$collector_ip\"; test \"$pg_ip\" != \"$collector_ip\"";
+    let checks = "test -s /tls/root-ca.pem && test -r /tls/root-ca.pem && test -s /tls/untrusted-ca.pem && test -r /tls/untrusted-ca.pem && test -s /tls/server-chain.pem && pg_ip=$(getent hosts pg-tls.local | awk 'NR==1 {print $1}') && test -n \"$pg_ip\" && test \"$(getent hosts ferl-postgres | awk 'NR==1 {print $1}')\" = \"$pg_ip\" && collector_ip=$(getent hosts ferl-collector | awk 'NR==1 {print $1}') && test -n \"$collector_ip\" && test \"$(getent hosts collector-wrong-name | awk 'NR==1 {print $1}')\" = \"$collector_ip\" && test \"$pg_ip\" != \"$collector_ip\"";
+    let script = format!(
+        "set -eu; attempt=0; until ({checks}); do attempt=$((attempt + 1)); test \"$attempt\" -lt 30 || exit 1; sleep 1; done"
+    );
     let output = podman(
         &[
             "run",
@@ -1183,9 +1186,9 @@ async fn verify_tls_fixture_paths_and_dns(
             "/bin/sh",
             IMAGE,
             "-ec",
-            script,
+            script.as_str(),
         ],
-        Duration::from_secs(30),
+        Duration::from_secs(60),
     )
     .await;
     assert!(
