@@ -1320,7 +1320,11 @@ fn instance_id_from_logs(logs: &str) -> String {
         .expect("production startup logs its run-specific instance UUID")
 }
 
-async fn wait_for_decoded_signals(path: &Path, instance_id: &str, logs: &str) -> (usize, usize, usize) {
+async fn wait_for_decoded_signals(
+    path: &Path,
+    instance_id: &str,
+    logs: &str,
+) -> (usize, usize, usize) {
     let waited = timeout(Duration::from_secs(20), async {
         loop {
             let counts = fs::read_to_string(path)
@@ -1340,7 +1344,9 @@ async fn wait_for_decoded_signals(path: &Path, instance_id: &str, logs: &str) ->
             let capture = fs::read_to_string(path).unwrap_or_default();
             let telemetry_lines: Vec<&str> = logs
                 .lines()
-                .filter(|line| line.contains("otlp") || line.contains("telemetry") || line.contains("export"))
+                .filter(|line| {
+                    line.contains("otlp") || line.contains("telemetry") || line.contains("export")
+                })
                 .take(12)
                 .collect();
             panic!(
