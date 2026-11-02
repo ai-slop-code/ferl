@@ -27,7 +27,7 @@ struct LegacyWorktree {
 impl LegacyWorktree {
     async fn build() -> Result<(Self, PathBuf), String> {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let scratch = std::env::temp_dir().join("opencode");
+        let scratch = std::env::temp_dir().join("ferl-legacy-compatibility");
         tokio::fs::create_dir_all(&scratch)
             .await
             .expect("approved compatibility scratch directory exists");

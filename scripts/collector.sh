@@ -54,9 +54,7 @@ assert_configuration() {
 }
 
 pull_image() {
-    # This Podman VM is behind the owner-confirmed TLS-intercepting proxy.
-    # TLS verification is disabled for this pinned image pull only.
-    podman pull --tls-verify=false "$IMAGE"
+    podman pull "$IMAGE"
 }
 
 probe() {

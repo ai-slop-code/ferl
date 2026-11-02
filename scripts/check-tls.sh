@@ -13,10 +13,10 @@ podman info >/dev/null
 POSTGRES_IMAGE=docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
 COLLECTOR_IMAGE=docker.io/otel/opentelemetry-collector-contrib@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
 if ! podman image exists "$POSTGRES_IMAGE"; then
-    podman pull --tls-verify=false "$POSTGRES_IMAGE"
+    podman pull "$POSTGRES_IMAGE"
 fi
 if ! podman image exists "$COLLECTOR_IMAGE"; then
-    podman pull --tls-verify=false "$COLLECTOR_IMAGE"
+    podman pull "$COLLECTOR_IMAGE"
 fi
 
 RUN_ID=$(python3 -c 'import uuid; print(uuid.uuid4().hex)')

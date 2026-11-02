@@ -64,8 +64,7 @@ directory; concurrent runs do not share capture files. The no-endpoint process
 test separately watches the SDK default `localhost:4318` port with a loopback
 sentinel, or checks the real Collector capture directly when the Collector itself
 is bound there, to detect accidental default-exporter connections. If a different
-service occupies 4318, free that port before the full gate. Podman pulls in this environment use `--tls-verify=false` only for the
-explicitly authorized pinned image pull; ferl HTTP/HTTPS and PostgreSQL TLS
+service occupies 4318, free that port before the full gate. Podman pulls use normal TLS verification; ferl HTTP/HTTPS and PostgreSQL TLS
 verification are unchanged.
 
 Run the mandatory PostgreSQL + Collector + production-process verification with:

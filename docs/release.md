@@ -73,10 +73,10 @@ sh scripts/package-release.sh
 sh scripts/check-release.sh
 ```
 
-The documented builder-image pull uses ordinary TLS verification. In the
-owner-authorized local intercepting-registry environment, the fixture scripts
-may use `--tls-verify=false` only for fully qualified, digest-pinned image pulls;
-this does not change runtime TLS. `scripts/package-release.sh` requires a clean
+The documented builder-image pull uses ordinary TLS verification. The fixture
+scripts always pull with normal TLS verification; a network that intercepts
+registry TLS must trust its CA in the Podman environment. This does not change
+runtime TLS. `scripts/package-release.sh` requires a clean
 checkout, archives the exact committed Git tree into a run-specific source
 snapshot. It checks every snapshot path, mode, and byte against committed Git
 blobs, mounts that snapshot read-only for the locked build, and records the source tree, target,

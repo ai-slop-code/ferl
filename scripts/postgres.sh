@@ -101,10 +101,7 @@ wait_ready() {
 }
 
 pull_image() {
-    # TLS verification is disabled only for this Podman image pull in the
-    # owner-authorized corporate TLS-interception environment. Application
-    # database and HTTP TLS verification settings are not changed.
-    podman pull --tls-verify=false "$IMAGE"
+    podman pull "$IMAGE"
 }
 
 case "${1:-}" in

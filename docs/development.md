@@ -73,9 +73,9 @@ cargo test --test foundation_postgres -- --nocapture
 sh scripts/postgres.sh stop
 ```
 
-The image pull is pinned by digest. In environments where the corporate proxy
-intercepts registry TLS, `pull` uses `podman pull --tls-verify=false`; that
-exception applies only to pulling this container image. `start` uses
+The image pull is pinned by digest and uses normal TLS verification. If your
+network intercepts registry TLS, add the trusted CA to the Podman trust store
+instead of disabling verification. `start` uses
 `--pull=never`, so container creation cannot perform an implicit second pull.
 PostgreSQL application connections and other application TLS connections retain
 normal certificate verification. `ready` waits up to 60 seconds for
