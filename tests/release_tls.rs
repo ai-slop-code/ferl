@@ -1081,7 +1081,7 @@ async fn start_tls_postgres(owned: &mut OwnedPodmanRun, name: &str, tls_dir: &Pa
 async fn start_tls_collector(owned: &mut OwnedPodmanRun, name: &str, tls_dir: &Path) {
     let capture_dir = tls_dir.join("capture");
     fs::create_dir_all(&capture_dir).expect("run-isolated OTLP capture directory exists");
-    fs::set_permissions(&capture_dir, fs::Permissions::from_mode(0o755))
+    fs::set_permissions(&capture_dir, fs::Permissions::from_mode(0o777))
         .expect("collector can write its private fixture capture");
     let config = tls_dir.join("collector-tls.yaml");
     fs::write(
