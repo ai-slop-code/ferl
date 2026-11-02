@@ -51,6 +51,15 @@ jobs:
           podman --version
           podman info
 
+      - name: Use rootful Podman for network-capable fixtures
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/rootful-bin"
+          printf '%s\n' '#!/bin/sh' 'exec sudo --non-interactive /usr/bin/podman "$@"' > "$RUNNER_TEMP/rootful-bin/podman"
+          chmod 0755 "$RUNNER_TEMP/rootful-bin/podman"
+          echo "$RUNNER_TEMP/rootful-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/rootful-bin/podman" info >/dev/null
+
       - name: Pull pinned verification images with TLS verification
         run: |
           podman pull docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
@@ -93,6 +102,15 @@ jobs:
           sudo apt-get install --yes podman
           podman --version
           podman info
+
+      - name: Use rootful Podman for network-capable fixtures
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/rootful-bin"
+          printf '%s\n' '#!/bin/sh' 'exec sudo --non-interactive /usr/bin/podman "$@"' > "$RUNNER_TEMP/rootful-bin/podman"
+          chmod 0755 "$RUNNER_TEMP/rootful-bin/podman"
+          echo "$RUNNER_TEMP/rootful-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/rootful-bin/podman" info >/dev/null
 
       - name: Build the release archive and candidate image
         run: |

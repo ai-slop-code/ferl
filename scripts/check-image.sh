@@ -68,8 +68,8 @@ if Path(sidecar).read_text().split()[0] != expected:
 PY
 pass "oci-archive-checksum"
 
-LOADED=$(podman load --quiet -i "$ARCHIVE" | tail -n 1)
-podman tag "$LOADED" "$IMAGE"
+podman load --quiet -i "$ARCHIVE" >/dev/null
+podman tag "$IMAGE_ID" "$IMAGE"
 [ "$(podman image inspect --format '{{.Id}}' "$IMAGE")" = "$IMAGE_ID" ] || fail "loaded image ID differs from metadata"
 pass "loaded-candidate-identity"
 
