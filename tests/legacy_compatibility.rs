@@ -183,7 +183,9 @@ async fn v1_server_runs_on_v1_then_fails_closed_after_v2_upgrade_and_v2_runs_rea
                             || old_output
                                 .stderr
                                 .contains("schema_version_newer_than_binary"),
-                        "old binary reports the safe incompatibility category"
+                        "old binary reports the safe incompatibility category; stdout={:?} stderr={:?}",
+                        old_output.stdout,
+                        old_output.stderr
                     );
 
                     let current = ServingProcess::start(&schema_url, CURSOR_KEY).await;
