@@ -1,0 +1,34 @@
+# Scoped exceptions for the candidate-image vulnerability gate. Each entry must
+# name one vulnerability and one installed package version, and carries its
+# rationale. Remove an entry when the base image ships a fixed package. Expires
+# 2026-12-02: re-evaluate or remove all entries by then.
+#
+# libssl3 3.0.20 is present in gcr.io/distroless/cc-debian12 (checked on the
+# nonroot and latest tags, which both ship it). ferl-server does not link
+# OpenSSL: Cargo.lock has no openssl-sys or native-tls, and TLS is rustls.
+ignore:
+  - vulnerability: CVE-2026-63076
+    package:
+      name: libssl3
+      version: 3.0.20-1~deb12u2
+      type: deb
+  - vulnerability: CVE-2026-63072
+    package:
+      name: libssl3
+      version: 3.0.20-1~deb12u2
+      type: deb
+  - vulnerability: CVE-2026-84782
+    package:
+      name: libssl3
+      version: 3.0.20-1~deb12u2
+      type: deb
+  - vulnerability: CVE-2026-54874
+    package:
+      name: libssl3
+      version: 3.0.20-1~deb12u2
+      type: deb
+  - vulnerability: CVE-2026-75803
+    package:
+      name: libssl3
+      version: 3.0.20-1~deb12u2
+      type: deb
