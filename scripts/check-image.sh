@@ -33,6 +33,7 @@ CHECKS=""
 
 umask 077
 mkdir -p "$WORK/ca" "$WORK/untrusted-ca" "$WORK/db-tls"
+chmod 0755 "$WORK/ca" "$WORK/untrusted-ca" "$WORK/db-tls"
 
 cleanup() {
     podman ps -aq --filter "label=$LABEL" | xargs -r podman rm -f -t 0 >/dev/null 2>&1 || true
@@ -50,6 +51,13 @@ pass() {
 fail() {
     echo "check failed: $1" >&2
     exit 1
+}
+
+show_log() {
+    python3 -c 'import sys
+password = open(sys.argv[2]).read().strip()
+text = open(sys.argv[1], errors="replace").read().replace(password, "<redacted>")
+print(text[-3000:], file=sys.stderr)' "$1" "$PASSWORD_FILE" || true
 }
 
 podman info >/dev/null
@@ -184,7 +192,7 @@ ferl_once() {
         --env-file "$env_file" --volume "$ca_dir:/tls:ro" "$IMAGE" "$@"
 }
 
-ferl_once "$WORK/ferl.env" "$WORK/ca" migrate >"$WORK/migrate.log" 2>&1 || fail "migrate over verified TLS"
+ferl_once "$WORK/ferl.env" "$WORK/ca" migrate >"$WORK/migrate.log" 2>&1 || { show_log "$WORK/migrate.log"; fail "migrate over verified TLS"; }
 ferl_once "$WORK/ferl.env" "$WORK/ca" migrate >"$WORK/migrate-again.log" 2>&1 || fail "repeated migrate is idempotent"
 pass "migrate-fresh-database"
 
