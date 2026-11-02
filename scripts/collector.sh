@@ -86,6 +86,9 @@ case "${1:-}" in
     start)
         podman info >/dev/null
         mkdir -p "$CAPTURE_DIR"
+        # The upstream Collector image runs as a non-root user; its per-run
+        # capture directory must be writable by that user under rootful Podman.
+        chmod 0777 "$CAPTURE_DIR"
         if container_exists; then
             assert_owned
             assert_configuration

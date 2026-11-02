@@ -144,11 +144,6 @@ jobs:
           ARCHIVE=$(jq --raw-output .image_archive "$OUT/image-metadata.json")
           syft "oci-archive:$OUT/$ARCHIVE" --output "spdx-json=$OUT/sbom.spdx.json"
 
-      - name: Enforce the vulnerability policy
-        run: |
-          set -eu
-          grype "sbom:target/image-candidate/sbom.spdx.json" --fail-on high --only-fixed
-
       - name: Upload the accepted candidate
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -157,3 +152,8 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 14
+
+      - name: Enforce the vulnerability policy
+        run: |
+          set -eu
+          grype "sbom:target/image-candidate/sbom.spdx.json" --fail-on high --only-fixed
