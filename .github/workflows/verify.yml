@@ -100,7 +100,7 @@ jobs:
           export FERL_RELEASE_TARGET=x86_64-unknown-linux-gnu
           export FERL_REQUIRE_CLEAN_RELEASE_SOURCE=true
           . scripts/prepare-release-package.sh
-          sh scripts/build-image.sh "$FERL_RELEASE_ARCHIVE"
+          sh scripts/build-image.sh "$RELEASE_ARCHIVE"
 
       - name: Accept the candidate image against PostgreSQL 17 with TLS
         run: sh scripts/check-image.sh target/image-candidate/image-metadata.json

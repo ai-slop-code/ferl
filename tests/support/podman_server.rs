@@ -182,7 +182,8 @@ pub async fn create_network(run_id: &str) -> String {
     .await;
     assert!(
         connected.status.success(),
-        "only the verified PostgreSQL harness joins the isolated test network"
+        "only the verified PostgreSQL harness joins the isolated test network: {}",
+        String::from_utf8_lossy(&connected.stderr).trim()
     );
     network
 }
