@@ -1,5 +1,68 @@
 # Implementation progress and agent handoff
 
+## Runtime hardening follow-up — owner-approved plan, 2026-11-06
+
+Parts 12 and 13 are **Planned**. This entry records instructions and owner
+decisions; it does not claim either implementation or its regression tests exist.
+Historical parts 01–11 and maintenance completion records remain intact.
+
+The review baseline was `0d4cdcc499f02edaedef70ffb332012935a8af9e`. It identified
+two bounded runtime changes:
+
+| Part | Task | Branch | Dependency |
+|---|---|---|---|
+| [12](12-stdout-backpressure.md) | Prevent serving stdout backpressure from stalling requests or process shutdown | `implementation/12-stdout-backpressure` | Completed part 11 |
+| [13](13-liveness-admission.md) | Isolate exact liveness routing from business admission, with the approved contract amendment | `implementation/13-liveness-admission` | Part 12 verified and merged into `main` |
+
+Owner decisions:
+
+- Diagnostic logs may be dropped when a finite stdout buffer is full or the
+  existing shutdown deadline expires. The one-time bootstrap credential result
+  is separate and retains its existing acknowledged output/error behavior.
+- Isolate **liveness only**. Readiness retains its existing admission and
+  schema/database/accepting-state behavior. Current business section 14.3 and
+  OpenAPI explicitly permit liveness overload 503; part 13 must amend those
+  passages narrowly and consistently rather than call the old behavior a
+  contract violation. Part 12 may clarify the approved stdout-loss policy in
+  business section 14.
+- Continue the numbered implementation-file pattern with one expert Rust agent
+  per task, sequential execution, a separate branch/commit history for each fix,
+  and verified explicit local merges into `main` following git-workflow.md.
+- Existing architecture testing is accepted for these tasks. Additional platform
+  testing and hosted CI are not prerequisites for either part. The review's
+  restore/capacity observations do not authorize a new code feature or redesign.
+- This preparatory session is documentation-only. Implementation agents must
+  inspect their actual starting source and ask about unresolved requirements or
+  scope expansion instead of assuming new behavior.
+
+### Specification integration
+
+Status: **Complete** for documentation preparation on
+`maintenance/runtime-hardening-specs`, based on
+`0d4cdcc499f02edaedef70ffb332012935a8af9e`. The owner authorized committing and
+merging these instruction files separately from the future fixes. A clean
+documentation worktree preserves the primary checkout's pre-existing untracked
+`readme.md`, `docs/cli-api-handoff.md` and `docs/publication-cicd-agent-handoff.md`.
+Documentation verification passed:
+
+- `git diff --cached --check`.
+- An inline Python 3 check of the exact five-file documentation scope, 28 local
+  Markdown links/anchors, balanced code fences, the two task files' required
+  sections, their separate agent/branch assignments, and both Planned statuses.
+- Review against the existing numbered-part and local no-ff integration patterns,
+  the current health contracts and the owner's explicit decisions.
+
+Only the two task briefs, implementation README, developer prompt and progress
+record changed. Runtime code, test code and normative contracts are not changed
+by this preparation; the future agents own their specified implementation gates.
+Verified specification commit `84146063dbf463793888e94b988af1e3ecd46263` is
+integrated by this explicit no-ff merge into local `main`. Only this specification
+integration handoff differs from the verified branch tree. Both implementation
+parts remain **Planned**; neither fix has been implemented or verified by this
+documentation session. The merge hash is reported after creation, not embedded
+in its own tree. The original untracked documents are preserved separately from
+the committed specification changes.
+
 ## Release-readiness acceptance — worklist recorded before implementation
 
 Branch `maintenance/release-readiness-acceptance`; verified starting `main`
@@ -423,6 +486,8 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 09 Analytics reports | Complete | Verified implementation `178e297` and handoff-only part tip `f08b805` from `implementation/09-analytics-reports`, based on Part 08 merge `12c10c234c492dcbdf554a3cc6e1321d83474361`, are integrated by the explicit no-ff merge recorded below. |
 | 10 Observability and lifecycle | Complete | Verified implementation `1d84f0a` and handoff-only branch tip `3f21bb4` are integrated from `implementation/10-observability-and-lifecycle` by the explicit no-ff merge from base `6153b768`; see the Part 10 handoff below. |
 | 11 Release verification | Complete | Verified implementation `95d053d70c47c7199cfbd45545fa8c08b8d945d1` and handoff-only branch tip `4226cd63298a7599e5866ae545845a590e32616f` from `implementation/11-release-verification`, based on `71d77b3f3838081add13d46cdefe0a91cdd70efd`, are integrated by the explicit local no-ff merge recorded below. The full local gate, OpenAPI, clean-source proxy/package gates, and all 51 scenario evidence mappings are recorded in the Part 11 handoff. |
+| 12 Stdout backpressure | Planned | Owner-approved bounded diagnostic-loss policy; implement and verify on `implementation/12-stdout-backpressure`, then merge independently. See the part 12 spec. |
+| 13 Liveness admission | Planned | Requires part 12 integrated into `main`; owner approved liveness-only isolation and the corresponding narrow business/OpenAPI amendment. See the part 13 spec. |
 
 ## Recorded decisions
 

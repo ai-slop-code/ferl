@@ -215,3 +215,73 @@ Finish with a concise, self-contained handoff:
 
 Begin by reading the implementation documents and inspecting the repository.
 ```
+
+## Runtime hardening assignments
+
+Use one assignment per expert Rust agent session with the reusable execution
+instructions above. Run agent 1 through its verified merge before starting agent 2
+from the updated `main`. The shared Git workflow permits coherent checkpoint
+commits, but each fix has its own branch, verified implementation and explicit
+merge commit. Specification preparation does not complete either fix.
+
+### Agent 1 — Part 12: stdout backpressure
+
+```text
+You are an expert Rust backend engineer working on ferl. Follow the reusable
+instructions in spec/implementation/developer-prompt.md and implement only
+spec/implementation/12-stdout-backpressure.md.
+
+Read the shared agent contract, architecture, git-workflow.md, progress.md,
+acceptance-map.md and the relevant business/OpenAPI contracts first. Inspect
+actual source, tests, Git history and working-tree state before changing code.
+
+Create or resume implementation/12-stdout-backpressure from current verified main.
+Fix serving stdout backpressure so a stalled log consumer cannot block requests
+or defeat the configured total shutdown deadline. The owner permits bounded
+best-effort loss of diagnostics; bootstrap credential output retains its existing
+separate one-time acknowledged output/error contract. Reuse the current patterns
+and implement the spec's controlled failing/passing regression and local gates.
+
+Ask about unresolved requirements or any needed dependency/public-setting/scope
+expansion. Additional architecture testing, hosted CI, staging/restore work and
+capacity redesign are outside this task. Preserve unrelated user work; use a clean
+worktree if necessary for the existing clean-source packaging gate.
+
+After verification, update progress.md and acceptance-map.md with exact evidence,
+commit this fix and its tests/docs on its branch, and merge it into local main
+using git-workflow.md's explicit no-ff/no-commit handoff procedure. Never merge
+failed or unverified work. Report the verified commit, merge commit, checks and
+final Git state. Stop after part 12; a separate agent will implement part 13.
+```
+
+### Agent 2 — Part 13: liveness admission
+
+```text
+You are an expert Rust backend engineer working on ferl. Follow the reusable
+instructions in spec/implementation/developer-prompt.md and implement only
+spec/implementation/13-liveness-admission.md.
+
+Read the shared agent contract, architecture, git-workflow.md, progress.md,
+acceptance-map.md and the relevant business/OpenAPI contracts first. Confirm in
+Git that part 12 is verified and merged into main; do not start this fix on an
+earlier baseline or silently implement the prerequisite yourself.
+
+Create or resume implementation/13-liveness-admission from that updated main.
+Isolate the exact liveness route from business-request admission. Preserve
+readiness admission and its existing schema/database/draining behavior, business
+capacity bounds, and the common HTTP envelope. The owner explicitly approved
+the narrow business/OpenAPI change removing liveness's current overload allowance.
+Implement the controlled saturation, exact-route, lifecycle and contract tests
+specified in the part, retaining part 12's backpressure regression.
+
+Ask about unresolved requirements or scope expansion. Follow existing patterns;
+additional architecture testing, hosted CI, staging/restore work and capacity
+redesign are outside this task. Preserve unrelated files and use a clean worktree
+where necessary to execute the existing clean-source packaging gate.
+
+After the required checks pass, record exact evidence in progress.md and
+acceptance-map.md, commit this fix and its tests/contracts/docs on its own branch,
+and perform the explicit no-ff/no-commit merge into local main from git-workflow.md.
+Never merge failed or unverified work. Report the verified commit, merge commit,
+checks and final Git state. Stop after part 13.
+```
