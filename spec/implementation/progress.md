@@ -486,8 +486,151 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 09 Analytics reports | Complete | Verified implementation `178e297` and handoff-only part tip `f08b805` from `implementation/09-analytics-reports`, based on Part 08 merge `12c10c234c492dcbdf554a3cc6e1321d83474361`, are integrated by the explicit no-ff merge recorded below. |
 | 10 Observability and lifecycle | Complete | Verified implementation `1d84f0a` and handoff-only branch tip `3f21bb4` are integrated from `implementation/10-observability-and-lifecycle` by the explicit no-ff merge from base `6153b768`; see the Part 10 handoff below. |
 | 11 Release verification | Complete | Verified implementation `95d053d70c47c7199cfbd45545fa8c08b8d945d1` and handoff-only branch tip `4226cd63298a7599e5866ae545845a590e32616f` from `implementation/11-release-verification`, based on `71d77b3f3838081add13d46cdefe0a91cdd70efd`, are integrated by the explicit local no-ff merge recorded below. The full local gate, OpenAPI, clean-source proxy/package gates, and all 51 scenario evidence mappings are recorded in the Part 11 handoff. |
-| 12 Stdout backpressure | Planned | Owner-approved bounded diagnostic-loss policy; implement and verify on `implementation/12-stdout-backpressure`, then merge independently. See the part 12 spec. |
+| 12 Stdout backpressure | Complete | Verified implementation `77f11a86c78fe06706460689e4772c2ac6a3fc9b` and evidence tip `01ebaf8c7cfb3914d72f57727650ba433a778ef4` from `implementation/12-stdout-backpressure`, base `ea1691b7bb5cc375956bcc6a7cdd3b17dd435f98`, integrated by the explicit no-ff merge into `main`; clean-source `sh scripts/check.sh` passed. See the Part 12 handoff below. |
 | 13 Liveness admission | Planned | Requires part 12 integrated into `main`; owner approved liveness-only isolation and the corresponding narrow business/OpenAPI amendment. See the part 13 spec. |
+
+## Part 12 — Bounded stdout diagnostics under backpressure
+
+Status: **Complete** (integrated into local `main` by the explicit no-ff merge; the merge commit hash is reported after creation, not embedded here). Branch `implementation/12-stdout-backpressure`;
+base `main` commit `ea1691b7bb5cc375956bcc6a7cdd3b17dd435f98`; verified
+implementation commit `77f11a86c78fe06706460689e4772c2ac6a3fc9b`. The implementation
+commit contains source, tests, and the owner-approved policy/operator docs; this
+evidence commit adds only progress and acceptance-map records. Merge into `main` is
+pending the explicit no-ff/no-commit handoff.
+
+### Failure and sink design
+
+- Root cause: the production subscriber wrote each event synchronously to
+  `std::io::stdout`, and exporter diagnostics used `println!`. A stalled reader
+  blocked the request that emitted an event.
+- Serving stdout now uses `DiagnosticWriter`: each tracing event is staged in a
+  per-event buffer and enqueued as one complete record on a fixed
+  `sync_channel` of **256 records**. Each record is capped at **8 KiB**
+  (about 2 MiB retained). One detached `ferl-stdout-diagnostics` OS thread owns
+  stdout and is the only thread that can block on it. No new dependency, setting,
+  or async-looking blocking queue is used.
+- Overflow, oversized records and write errors discard the record and increment a
+  counter. When the consumer resumes, one sanitized record
+  (`fields.category = "diagnostic_records_dropped"`, `fields.dropped_records = N`)
+  precedes the next complete record. A failed summary write restores its count.
+- Exporter diagnostics (`otel_export_failed`, `otel_export_queue_full`) use the
+  same queue through `emit_diagnostic_line`, bypassing tracing, so they cannot
+  recurse into OTLP.
+- Shutdown: `Telemetry::shutdown` drains last with the same absolute total
+  deadline. At the deadline the writer is abandoned and pending records are
+  discarded; the drain never extends `FERL_SHUTDOWN_TIMEOUT_SECS`. `main` also
+  calls `finish_stdout` with a fixed 1-second budget for `migrate` and config
+  rejection; serving calls it again and it returns immediately.
+- Bootstrap is unchanged: its one-time result remains a direct stdout write with
+  its separate stderr diagnostics (`init_stderr`), and its failure exit behavior
+  is unchanged.
+- Audit notes: the writer thread is detached (no join/Drop block); the runtime
+  never performs a stdout write; a partial line from an OS-reported failed write
+  remains and is not retried. Stdout is a pipe the process does not own, so
+  `EPIPE` is counted as loss and does not stop later attempts.
+
+### Files changed
+
+- `src/telemetry/logging.rs`: sink, writer, drain, bounds, unit tests (5).
+- `src/telemetry/providers.rs`: writer composition, nonrecursive exporter line,
+  drain at end of `Telemetry::shutdown`.
+- `src/main.rs`: bounded drain for non-serving commands.
+- `tests/stdout_backpressure.rs` (new, 3 process tests);
+  `tests/support/serving_process.rs`: a withheld-stdout gate (`start_with_withheld_stdout`,
+  `release_stdout`); `tests/rate_limit_process.rs`: worker drains before exit
+  (its parent asserts a log record).
+- `spec/server-business-logic.md` (sections 14.1, 14.3 narrow approved policy),
+  `docs/observability.md` (new "Stdout diagnostic bounds"), `docs/operations.md`,
+  `docs/configuration.md`.
+- No migration, dependency, HTTP contract or configuration default changed.
+
+### Controlled failing and passing evidence
+
+Old implementation (base commit, before the fix):
+
+- `target/stdout-backpressure/old-baseline.log`:
+  `cargo test --locked --test stdout_backpressure -- --test-threads=1`: 1 passed
+  (healthy control), 2 failed. Both withheld-consumer tests stalled at
+  `liveness request 173 ... HTTP test deadline exceeded`.
+- Out-of-tree production-process driver `target/stdout-backpressure/measure_exit.py`
+  (ad-hoc; stdout never read; SIGTERM; 3 s/1 s/0 s budgets). Runs 1 and 2
+  (`old-unread-stdout*.json`): 174 health requests completed, then timeouts;
+  process still alive 15 s after SIGTERM and killed as failure cleanup. This
+  matches the review's 174-request observation.
+- `RUST_LOG=off` control, 800 requests (`old-logs-off-control.json`): exit 0 after
+  0.002 s.
+
+Fixed implementation (commit `77f11a8`):
+
+- `target/stdout-backpressure/fixed-run1.log`: 3 passed, 0 failed.
+- Same driver (`fixed-unread-stdout.json`, 600 requests, stdout never read):
+  exit status 0 after SIGTERM in **3.005 s, 3.006 s, 3.004 s** against the 3 s total
+  budget; the drain consumed the budget and the writer was abandoned.
+- `RUST_LOG=off` control (`fixed-logs-off-control.json`): 800 requests, exit 0 in
+  0.014 s.
+- Process test assertion tolerance: exit ≤ budget + 1.5 s (scheduler/spawn
+  allowance). Observed exits were within the budget.
+- Unit tests (`cargo test --locked --lib telemetry::logging`, 5 passed): exact
+  overflow accounting with a blocked writer (producers finish under a 5 s bound),
+  oversized discard with later delivery, failed-write report then recovery,
+  abandon at drain deadline, exporter line queueing.
+
+### Commands and results (clean-source gate)
+
+Harness: `ferl-stage01-postgres` was Exited (its volume intact). `sh scripts/postgres.sh start`
+failed because the harness port check cannot read a stopped container's published
+port; `podman start ferl-stage01-postgres` started the same owned container (same
+image digest, mount and `127.0.0.1:55432`), then `sh scripts/postgres.sh ready`
+passed. The script was not changed; this harness restart limitation is recorded for
+separate attention.
+
+Focused checks in the primary checkout before the commit: `cargo fmt --all -- --check`
+clean; `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`
+clean; focused `cargo test --locked --lib --test bootstrap --test foundation_process
+--test rate_limit_process --test link_failures --test analytics_failures
+--test report_failures --test rate_limit_failures --test stdout_backpressure`
+passed (102 lib; 5 bootstrap; 2 foundation_process; 2 link_failures; 1 analytics;
+1 report_failures; 1 rate_limit_failures; 1 rate_limit_process; 3 stdout_backpressure).
+
+Packaged gate: the primary checkout cannot run `package_release.py`, whose
+clean-source check fails on the user's pre-existing untracked files (`readme.md`,
+`docs/cli-api-handoff.md`, `docs/publication-cicd-agent-handoff.md`, preserved
+unchanged). Therefore a detached clean worktree was created at the exact
+implementation commit (`/private/var/folders/.../T/opencode/ferl-part12-77f11a8`) and
+ran `sh scripts/check.sh` there, logged at
+`target/stdout-backpressure/gate-check-sh-77f11a8.log`, **exit 0**:
+
+- Totals across all result blocks: **238 passed, 0 failed, 0 ignored** (includes 102
+  library tests, the process/fixture suites, and 3 doctests).
+- Includes `telemetry_signals` (1 passed, Collector decoded signals),
+  `release_tls` (2), `release_smoke` (1), `proxy_routing` (1), `rate_limit_process`
+  (1), `legacy_compatibility` (1), `multi_instance_process` (3), and `stdout_backpressure` (3).
+- Packaged artifact: `ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`, archive
+  sha256 `00b247384b97d2bc6bb236ed382782bc7d8ab6ca03c47a213514fc74eb033565`,
+  binary sha256 `9495b88dd903f8507ec3a06b525d172d91d948535a88bd88a2d497819f7778ef`,
+  OpenAPI sha256 `45677d0d0c0afda4687fada791ce492682ad546f2fbc612113890cffecbb6b5e`,
+  `source_tree_clean=true`, built in the pinned Bookworm builder
+  `docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`.
+
+Not run: hosted CI, native Linux/amd64 runtime, and the MSRV script (not part of
+this part's gate; `check.sh` does not include it). Only Linux/arm64 packaged execution
+through the existing gate is claimed.
+
+### Acceptance scenarios
+
+- Scenario 31 (collector outage/backpressure, bounded shutdown) gains stdout
+  evidence: request continuity and exit-budget under a withheld consumer
+  (`tests/stdout_backpressure.rs::withheld_stdout_consumer_keeps_requests_business_success_and_shutdown_bounded`).
+- Scenario 30 privacy and the all-signal test continue to pass unchanged.
+- Scenario 29, 36, 50 are unaffected; see `acceptance-map.md`.
+
+### Residual items and next stage
+
+- Diagnostic loss is the owner-approved policy above; a crash can lose records already
+  queued. A stalled consumer costs the process its total shutdown budget (bounded).
+- Harness: restart of a stopped `ferl-stage01-postgres` through `scripts/postgres.sh start`
+  fails its port check; needs a separate harness fix. Not changed here.
+- Part 13 (liveness admission) is next, starting from `main` after this merge.
 
 ## Recorded decisions
 

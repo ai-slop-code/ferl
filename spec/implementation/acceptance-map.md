@@ -376,6 +376,31 @@ output and asserts they remain within each configured total deadline.
 Part 10 is a scoped contribution, not the independent release-wide
 rollout/OpenAPI/packaging verification in Part 11.
 
+## Part 12 stdout-backpressure contribution — 2026-11-06
+
+Serving stdout diagnostics are bounded and nonblocking (see
+`progress.md`, Part 12). Executable evidence for this part:
+
+- **31:** `tests/stdout_backpressure.rs::withheld_stdout_consumer_keeps_requests_business_success_and_shutdown_bounded`
+  keeps stdout unread through SIGTERM. Liveness, readiness, a 201 link creation and
+  a 302 redirect complete over TCP, and the process exits within the 3 s total
+  budget plus tolerance.
+- **31 (overflow/recovery):** `tests/stdout_backpressure.rs::temporary_stdout_stall_is_bounded_and_then_delivers_complete_records`
+  observes a `diagnostic_records_dropped` count after release and delivery of a
+  post-stall request record.
+- **29/30 control:** `tests/stdout_backpressure.rs::healthy_stdout_consumer_control_retains_every_request_record`
+  keeps logging enabled, retains every request-completion record and the lifecycle record.
+- **Queue bounds:** `src/telemetry/logging.rs` unit tests
+  (`full_queue_discards_excess_records_without_blocking_producers`,
+  `oversized_record_is_discarded_and_later_records_still_flow`,
+  `failed_write_is_counted_and_reported_before_the_next_record`,
+  `stalled_consumer_is_abandoned_at_the_drain_deadline`,
+  `exporter_diagnostic_lines_enter_the_bounded_queue_without_waiting`).
+- **36/50:** unchanged; existing references remain valid.
+
+Evidence and the clean-source gate result (238 passed, 0 failed) are recorded in
+`progress.md`, Part 12.
+
 ## Historical release-audit placeholder
 
 The original placeholder recorded “not executed” before the later Part 11,

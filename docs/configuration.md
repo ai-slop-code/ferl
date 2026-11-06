@@ -133,7 +133,9 @@ construction. With no endpoint, the process keeps structured stdout and valid
 in-process instruments but starts no exporter task and makes no OTLP attempt.
 See [observability.md](observability.md) for SDK versions, metric schema, queue
 bounds, sampling/correlation, and diagnostics. See [operations.md](operations.md)
-for the pinned Collector and shutdown operations.
+for the pinned Collector and shutdown operations. Serving stdout diagnostic bounds
+(256 complete records, 8 KiB each, one writer) are fixed and have no configuration
+setting.
 
 Compatibility correction: `FERL_INSTANCE_ID` was previously accepted as a UUID
 override, and arbitrary `FERL_OTEL_RESOURCE_ATTRIBUTES` were accepted. Part 10

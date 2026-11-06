@@ -138,6 +138,10 @@ async fn worker(url: &str) {
         }
     }
     close(&state.pool).await;
+    ferl_server::telemetry::logging::finish_stdout(
+        std::time::Instant::now() + Duration::from_secs(2),
+    )
+    .await;
     println!("RATE_WORKER_RESULT={admitted}");
 }
 

@@ -109,7 +109,8 @@ stdout, traces, and LogRecords.
 OpenTelemetry SDK internal events are not exported as application logs. A
 separate diagnostic layer reads only their fixed event name, maps it to one of
 `otel_export_failed` or `otel_export_queue_full` plus a signal (`traces`,
-`metrics`, or `logs`), and writes one structured JSON line directly to stdout.
+`metrics`, or `logs`), and queues one structured JSON line for the bounded stdout
+writer (see [Stdout diagnostic bounds](#stdout-diagnostic-bounds)).
 One bounded six-slot rate limiter allows at most one diagnostic per category and
 signal per 10 seconds. Error strings, URLs, headers, stack traces, and exporter
 configuration are never read by the diagnostic visitor. This path does not use
@@ -178,3 +179,40 @@ process failure can lose buffered traces, logs, metrics, and in-memory visits.
 Readiness requires accepting state, verified schema, and a bounded PostgreSQL
 probe; it does not depend on exporter health or analytics backlog. `operations.md`
 documents the actual Collector fixture and process-exit measurements.
+
+## Stdout diagnostic bounds
+
+Structured stdout is a nonblocking, best-effort diagnostic sink. HTTP handlers,
+redirects, and readiness never wait for the consumer to read it. The subscriber
+writes each tracing event into a per-event staging buffer. On drop, a complete
+record enters one fixed `sync_channel` of 256 records. Each record is capped at
+8 KiB, so retained diagnostic records use at most about 2 MiB. One detached
+`ferl-stdout-diagnostics` OS thread owns the process stdout handle and is the only
+thread that can block on it.
+
+Overflow policy: when the queue is full, or a record exceeds 8 KiB, that record is
+discarded and counted. The count is not logged while the consumer is stalled. When
+the consumer resumes, the writer emits one sanitized JSON record,
+`fields.category = "diagnostic_records_dropped"` with `fields.dropped_records`,
+before the next complete record. A failed write discards its record, is counted the
+same way, and does not stop later writes. A failed summary write restores its count
+for the next attempt. Staging holds no more than one record. If the OS accepts part of
+a record before reporting a failure, that partial line remains on the stream; it is
+not retried as a duplicate record.
+
+Exporter diagnostics (`otel_export_failed`, `otel_export_queue_full`) use the same
+bounded queue through a nonrecursive helper. They bypass tracing, so they are never
+exported as LogRecords and cannot restore a synchronous stdout write.
+
+Shutdown ownership: `Telemetry::shutdown` attempts the stdout drain last, using the
+same absolute total deadline as signal flushes. The drain stops accepting records,
+writes queued records while the consumer keeps up, and flushes the writer. If the
+deadline expires first, the writer is abandoned and remaining records are discarded.
+A stalled writer therefore cannot keep the process alive, and the drain cannot
+extend `FERL_SHUTDOWN_TIMEOUT_SECS`. Commands that have no serving budget
+(`migrate` and configuration rejection) use a fixed one-second drain. Bootstrap
+keeps its one-time result on a direct stdout path and does not use this queue.
+
+Loss is intentional for diagnostic logs, which are not an authoritative record.
+Records delivered to a healthy consumer keep their complete JSON fields and request
+or trace correlation. Crash or kill can lose records already accepted into the queue.

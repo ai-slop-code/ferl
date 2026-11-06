@@ -138,6 +138,13 @@ budget cannot cover a signal provider's calculated bound, that best-effort flush
 is skipped; the process does not invoke an SDK Drop default that can extend the
 deadline.
 
+Serving stdout diagnostics drain last, inside the same total deadline (see
+[observability.md](observability.md#stdout-diagnostic-bounds)). A stalled stdout
+consumer cannot block requests, redirects, or readiness. When the deadline expires,
+pending diagnostic records are discarded and the writer is abandoned, so the
+process exits within `FERL_SHUTDOWN_TIMEOUT_SECS` even while stdout is withheld.
+Bootstrap's one-time credential result is not part of this diagnostic drain.
+
 When HTTP exceeds budget, outstanding handler futures are cancelled before
 analytics producers close; already-started connection response writes may remain
 until runtime teardown. A late enqueue after producer closure is dropped and
@@ -157,6 +164,8 @@ admission overload remains the structured `service_unavailable` error.
 
 Executable lifecycle evidence is in
 `tests/telemetry_signals.rs::production_otlp_privacy_sampling_outage_drain_and_replacement_are_verified`.
+Stdout backpressure evidence (withheld consumer through SIGTERM, temporary stall
+with observed overflow, and healthy control) is in `tests/stdout_backpressure.rs`.
 The test observes readiness 503 and liveness 200 over TCP before listener
 removal, stops/restarts the real Collector, holds OTLP responses in a controlled
 loopback receiver while flooding HTTP and stalling an HTTP body, observes a real

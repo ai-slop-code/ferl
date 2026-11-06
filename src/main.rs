@@ -1,4 +1,4 @@
-use std::{future::IntoFuture, io::Write, process::ExitCode, time::Instant};
+use std::{future::IntoFuture, io::Write, process::ExitCode, time::Duration, time::Instant};
 
 use clap::{Parser, Subcommand};
 use tokio::{net::TcpListener, time::timeout};
@@ -20,6 +20,10 @@ use ferl_server::{
     },
 };
 
+/// Bounded stdout drain for commands without a serving shutdown budget. Serving
+/// drains inside its own total deadline before this call.
+const COMMAND_STDOUT_FLUSH: Duration = Duration::from_secs(1);
+
 #[derive(Parser)]
 #[command(name = "ferl-server", version = BUILD_VERSION, about = "ferl backend server")]
 struct Cli {
@@ -40,7 +44,7 @@ enum Command {
 #[tokio::main]
 async fn main() -> ExitCode {
     let command = Cli::parse().command.unwrap_or(Command::Serve);
-    match command {
+    let exit = match command {
         Command::Serve => serve_command().await,
         Command::Migrate => {
             logging::init_stdout();
@@ -50,7 +54,9 @@ async fn main() -> ExitCode {
             logging::init_stderr();
             bootstrap_admin(&username).await
         }
-    }
+    };
+    logging::finish_stdout(Instant::now() + COMMAND_STDOUT_FLUSH).await;
+    exit
 }
 
 async fn serve_command() -> ExitCode {

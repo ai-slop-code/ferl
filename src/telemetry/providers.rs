@@ -83,10 +83,10 @@ pub(crate) mod diagnostics {
             return;
         }
         last[index] = Some(now);
-        println!(
+        logging::emit_diagnostic_line(&format!(
             "{{\"category\":\"{category}\",\"signal\":\"{}\",\"message\":\"OTLP diagnostics are sanitized; details suppressed\"}}",
             signal.label()
-        );
+        ));
     }
 
     fn signal_index(signal: Signal) -> usize {
@@ -288,7 +288,7 @@ impl Telemetry {
             .transpose()?;
 
         if logging::init_with_providers(
-            std::io::stdout,
+            logging::DiagnosticWriter::stdout(),
             logger_provider.clone(),
             trace_provider.tracer("ferl.server"),
         )
@@ -413,6 +413,8 @@ impl Telemetry {
                 "insufficient total shutdown budget remains for bounded provider flushes"
             );
         }
+
+        logging::finish_stdout(deadline).await;
     }
 }
 

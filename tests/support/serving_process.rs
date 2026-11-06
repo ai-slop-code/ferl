@@ -5,6 +5,7 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpSocket, TcpStream},
     process::{Child, Command},
+    sync::watch,
     task::JoinHandle,
     time::{sleep, timeout},
 };
@@ -18,6 +19,7 @@ pub struct ServingProcess {
     stderr: Option<JoinHandle<Vec<u8>>>,
     stdout_shared: Arc<Mutex<Vec<u8>>>,
     stderr_shared: Arc<Mutex<Vec<u8>>>,
+    stdout_gate: Option<watch::Sender<bool>>,
 }
 
 pub struct HttpResult {
@@ -57,7 +59,7 @@ impl ServingProcess {
         cursor_key: &str,
         extra: &[(&str, &str)],
     ) -> Self {
-        Self::start_binary(binary, database_url, cursor_key, extra, true).await
+        Self::start_binary(binary, database_url, cursor_key, extra, true, false).await
     }
 
     #[allow(dead_code)]
@@ -67,7 +69,36 @@ impl ServingProcess {
         cursor_key: &str,
         extra: &[(&str, &str)],
     ) -> Self {
-        Self::start_binary(binary, database_url, cursor_key, extra, false).await
+        Self::start_binary(binary, database_url, cursor_key, extra, false, false).await
+    }
+
+    /// Start the production executable with its stdout pipe connected but not
+    /// read until `release_stdout`. The child keeps logging into that pipe, so
+    /// a blocked consumer is the only condition under test.
+    #[allow(dead_code)]
+    pub async fn start_with_withheld_stdout(
+        database_url: &str,
+        cursor_key: &str,
+        extra: &[(&str, &str)],
+    ) -> Self {
+        Self::start_binary(
+            env!("CARGO_BIN_EXE_ferl-server"),
+            database_url,
+            cursor_key,
+            extra,
+            true,
+            true,
+        )
+        .await
+    }
+
+    /// Begin reading the withheld stdout pipe. Calling it on an ungated process
+    /// has no effect.
+    #[allow(dead_code)]
+    pub fn release_stdout(&self) {
+        if let Some(gate) = &self.stdout_gate {
+            gate.send_replace(true);
+        }
     }
 
     /// Start a real production executable on all host interfaces so a local
@@ -104,6 +135,7 @@ impl ServingProcess {
             true,
             bind,
             loopback,
+            false,
         )
         .await
     }
@@ -114,6 +146,7 @@ impl ServingProcess {
         cursor_key: &str,
         extra: &[(&str, &str)],
         wait_for_ready: bool,
+        withhold_stdout: bool,
     ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -128,10 +161,12 @@ impl ServingProcess {
             wait_for_ready,
             address,
             address,
+            withhold_stdout,
         )
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn start_binary_at(
         binary: &str,
         database_url: &str,
@@ -140,6 +175,7 @@ impl ServingProcess {
         wait_for_ready: bool,
         bind_address: std::net::SocketAddr,
         probe_address: std::net::SocketAddr,
+        withhold_stdout: bool,
     ) -> Self {
         let mut child = Command::new(binary);
         child
@@ -164,14 +200,23 @@ impl ServingProcess {
         let mut child = child;
         let stdout_shared = Arc::new(Mutex::new(Vec::new()));
         let stderr_shared = Arc::new(Mutex::new(Vec::new()));
-        let stdout = child
-            .stdout
-            .take()
-            .map(|pipe| tokio::spawn(capture_output(pipe, Arc::clone(&stdout_shared))));
+        let (stdout_gate, stdout_reader_gate) = if withhold_stdout {
+            let (sender, receiver) = watch::channel(false);
+            (Some(sender), Some(receiver))
+        } else {
+            (None, None)
+        };
+        let stdout = child.stdout.take().map(|pipe| {
+            tokio::spawn(capture_output(
+                pipe,
+                Arc::clone(&stdout_shared),
+                stdout_reader_gate,
+            ))
+        });
         let stderr = child
             .stderr
             .take()
-            .map(|pipe| tokio::spawn(capture_output(pipe, Arc::clone(&stderr_shared))));
+            .map(|pipe| tokio::spawn(capture_output(pipe, Arc::clone(&stderr_shared), None)));
         let mut process = Self {
             child,
             address: probe_address,
@@ -180,6 +225,7 @@ impl ServingProcess {
             stderr,
             stdout_shared,
             stderr_shared,
+            stdout_gate,
         };
         if wait_for_ready {
             process.wait_until_ready().await;
@@ -332,7 +378,11 @@ impl Drop for ServingProcess {
     }
 }
 
-async fn capture_output<R>(mut reader: R, shared: Arc<Mutex<Vec<u8>>>) -> Vec<u8>
+async fn capture_output<R>(
+    mut reader: R,
+    shared: Arc<Mutex<Vec<u8>>>,
+    mut gate: Option<watch::Receiver<bool>>,
+) -> Vec<u8>
 where
     R: AsyncRead + Unpin + Send + 'static,
 {
@@ -340,6 +390,11 @@ where
     let mut captured = Vec::new();
     let mut buffer = [0_u8; 8192];
     loop {
+        if let Some(gate) = gate.as_mut()
+            && gate.wait_for(|open| *open).await.is_err()
+        {
+            break;
+        }
         let read = match timeout(Duration::from_secs(30), reader.read(&mut buffer)).await {
             Ok(Ok(0)) | Err(_) | Ok(Err(_)) => break,
             Ok(Ok(read)) => read,
@@ -536,6 +591,7 @@ fn parse_response(bytes: &[u8]) -> std::io::Result<HttpResult> {
     })
 }
 
+#[allow(dead_code)]
 pub fn json(response: &HttpResult) -> serde_json::Value {
     serde_json::from_slice(&response.body).expect("HTTP response body is JSON")
 }
