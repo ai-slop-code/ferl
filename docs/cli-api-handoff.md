@@ -51,11 +51,11 @@ Reference snapshot:
 
 | Item | Value |
 | --- | --- |
-| Server repository revision | `486eeeb78ec6898d94630efebee1fac32942019f` |
+| Server repository revision | `833feedccb3755f9641617673b3471c2fe871f1d` |
 | OpenAPI `info.version` | `1.0.0` |
 | Business API prefix | `/api/v1` |
-| OpenAPI SHA-256 | `45677d0d0c0afda4687fada791ce492682ad546f2fbc612113890cffecbb6b5e` |
-| Business specification SHA-256 | `c9fd70817b687df1e44dc6d3c4eb64e68af5b92b91fe2264903f7d0e05352c36` |
+| OpenAPI SHA-256 | `566e467b0e8fbc51e4492b276c8b44d2a03cfa1a0d854833b9d3380961a78860` |
+| Business specification SHA-256 | `abe90313a6fedd1e8bbd912672c66c9978ed76b38037a638f510d86af591a6cd` |
 
 The server package version, API version, and future CLI version are distinct.
 Record the imported contract revision in the client project and review contract
@@ -460,8 +460,9 @@ There are **22 documented operations**. Schema names below refer to
 - `TagInfo`: required `name` (canonical tag) and `link_count` (positive Count).
 - `Healthy`: `{"status":"ok"}`. `Unready`: `{"status":"unavailable"}`.
   Admission overload can instead return a structured `service_unavailable`
-  error on either health endpoint; inspect the status/body rather than infer a
-  database failure from every health 503.
+  error on readiness; inspect the status/body rather than infer a database
+  failure from every readiness 503. Liveness is isolated from business admission
+  and retains its normal response or method/query rejection under overload.
 
 Account list accepts only `limit` and `cursor`, ordered creation time/UUID
 descending. Tag discovery accepts only `scope`, `owner_id`, `q`, `limit`,
