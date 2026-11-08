@@ -86,7 +86,8 @@ async fn serve_command() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-    match serve(config, &mut telemetry).await {
+    let ServeOutcome { result, deadline } = serve(config).await;
+    let exit = match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(
@@ -95,7 +96,9 @@ async fn serve_command() -> ExitCode {
             );
             ExitCode::FAILURE
         }
-    }
+    };
+    telemetry.shutdown(deadline).await;
+    exit
 }
 
 async fn migrate() -> ExitCode {
@@ -222,24 +225,40 @@ impl ServerError {
     }
 }
 
-async fn serve(config: Config, telemetry: &mut Telemetry) -> Result<(), ServerError> {
+/// The terminal serving result and the absolute deadline that remains for the
+/// caller's diagnostic emission and telemetry shutdown.
+struct ServeOutcome {
+    result: Result<(), ServerError>,
+    deadline: Instant,
+}
+
+impl ServeOutcome {
+    fn terminal(error: ServerError, total_timeout: Duration) -> Self {
+        Self {
+            result: Err(error),
+            deadline: Instant::now() + total_timeout,
+        }
+    }
+}
+
+async fn serve(config: Config) -> ServeOutcome {
     let state = match AppState::from_config(&config) {
         Ok(state) => state,
         Err(PoolBuildError::InvalidConnectionOptions) => {
-            telemetry
-                .shutdown(Instant::now() + config.shutdown.total_timeout)
-                .await;
-            return Err(ServerError::DatabaseConfiguration);
+            return ServeOutcome::terminal(
+                ServerError::DatabaseConfiguration,
+                config.shutdown.total_timeout,
+            );
         }
     };
     let pool = state.pool.clone();
     let analytics_workers = match state.start_analytics_workers() {
         Ok(workers) => workers,
         Err(_) => {
-            telemetry
-                .shutdown(Instant::now() + config.shutdown.total_timeout)
-                .await;
-            return Err(ServerError::AnalyticsWorkerStart);
+            return ServeOutcome::terminal(
+                ServerError::AnalyticsWorkerStart,
+                config.shutdown.total_timeout,
+            );
         }
     };
     let mut analytics_workers = Some(analytics_workers);
@@ -249,8 +268,10 @@ async fn serve(config: Config, telemetry: &mut Telemetry) -> Result<(), ServerEr
             let deadline = Instant::now() + config.shutdown.total_timeout;
             let _ =
                 close_pool_bounded(&pool, deadline.saturating_duration_since(Instant::now())).await;
-            telemetry.shutdown(deadline).await;
-            return Err(ServerError::ListenerBind);
+            return ServeOutcome {
+                result: Err(ServerError::ListenerBind),
+                deadline,
+            };
         }
     };
 
@@ -371,12 +392,15 @@ async fn serve(config: Config, telemetry: &mut Telemetry) -> Result<(), ServerEr
         elapsed_ms = shutdown_started.elapsed().as_millis() as u64,
         "server shutdown completed"
     );
-    telemetry.shutdown(total_deadline).await;
-
-    if unexpected || drain == shutdown::HttpDrainOutcome::ServerFailed {
-        return Err(ServerError::HttpServer);
+    let result = if unexpected || drain == shutdown::HttpDrainOutcome::ServerFailed {
+        Err(ServerError::HttpServer)
+    } else {
+        Ok(())
+    };
+    ServeOutcome {
+        result,
+        deadline: total_deadline,
     }
-    Ok(())
 }
 
 fn report_analytics_shutdown(outcome: WorkerStopOutcome) {

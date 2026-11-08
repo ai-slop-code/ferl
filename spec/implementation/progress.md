@@ -529,7 +529,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 11 Release verification | Complete | Verified implementation `95d053d70c47c7199cfbd45545fa8c08b8d945d1` and handoff-only branch tip `4226cd63298a7599e5866ae545845a590e32616f` from `implementation/11-release-verification`, based on `71d77b3f3838081add13d46cdefe0a91cdd70efd`, are integrated by the explicit local no-ff merge recorded below. The full local gate, OpenAPI, clean-source proxy/package gates, and all 51 scenario evidence mappings are recorded in the Part 11 handoff. |
 | 12 Stdout backpressure | Complete | Verified implementation `77f11a86c78fe06706460689e4772c2ac6a3fc9b` and evidence tip `01ebaf8c7cfb3914d72f57727650ba433a778ef4` from `implementation/12-stdout-backpressure`, base `ea1691b7bb5cc375956bcc6a7cdd3b17dd435f98`, integrated by the explicit no-ff merge into `main`; clean-source `sh scripts/check.sh` passed. See the Part 12 handoff below. |
 | 13 Liveness admission | Complete | Verified implementation `f52af28` and evidence tip `352b844` from `implementation/13-liveness-admission`, base `91295dd` (part 12 merge), integrated into `main` by the explicit no-ff merge recorded in the Part 13 handoff. Clean-source `sh scripts/check.sh` (244 passed, 0 failed, 0 ignored) and `sh scripts/check-openapi.sh` passed. See the Part 13 handoff below. |
-| 14 Terminal error logging | Planned | Emit terminal serving errors before provider/stdout closure; separate branch `implementation/14-terminal-error-logging`, controlled failure-path regressions and existing local verification required. See the part 14 spec. |
+| 14 Terminal error logging | Complete | Verified implementation `dfe49d3927ef9136e6d937402cc79977f0932d70` and evidence tip `8b619d54a6ccb4eefa0572d6607e1e875e419ad1` from `implementation/14-terminal-error-logging`, base `9e688bb`, integrated into `main` by the explicit no-ff merge recorded in the Part 14 section (merge hash reported after creation). Clean-source `sh scripts/check.sh` passed with 246 tests, 0 failed, 0 ignored. |
 
 ## Part 12 — Bounded stdout diagnostics under backpressure
 
@@ -804,6 +804,157 @@ claimed.
   only through the harness.
 - Part 13 is the last planned runtime-hardening part; no next implementation
   stage is defined by these briefs.
+
+## Part 14 — Terminal serving errors before diagnostic shutdown
+
+Status: **Complete** upon the explicit no-ff merge into local `main` that contains
+this record (the merge hash is reported after creation, not embedded here). Earlier
+text below describes the verified state.
+
+Status (at verification): **Verified (awaiting merge)**. Branch
+`implementation/14-terminal-error-logging`; base `main` commit
+`9e688bb117e1e4e6847cd9e22b9e8c7c68630da6` (spec handoff). Prerequisites were
+confirmed in Git before work: part 12 (`91295dd` merge, implementation `77f11a8`)
+and part 13 (`d1abbc6` merge, implementation `f52af28`) are ancestors of `main`,
+and `main` had no pending merge. The local identity is `Lubos Babjak
+<lubos@lubos.sk>`. Verified implementation commit:
+`dfe49d3927ef9136e6d937402cc79977f0932d70` (`fix(part-14): emit terminal serving
+errors before telemetry shutdown`). Evidence commit:
+`8b619d54a6ccb4eefa0572d6607e1e875e419ad1`. The integration merge hash is reported
+after creation, not embedded here.
+
+### Root cause and ordering decision
+
+`serve()` called `Telemetry::shutdown()` on every terminal path. That closed the
+stdout sink (`finish_stdout` sets `closing`), so the `server terminated with a
+sanitized failure` event that `serve_command()` emitted afterwards was discarded by
+`DiagnosticSink::submit()`. Decision: `serve()` no longer touches telemetry. It
+returns `ServeOutcome { result, deadline }`, where `deadline` is the absolute
+deadline already computed on that path (the same one used for pool close and the
+drain). `serve_command()` then emits the single sanitized terminal record while the
+subscriber and bounded sink still accept it, and only afterward calls
+`telemetry.shutdown(deadline)`. This covers every `ServerError` path (database
+configuration, analytics worker start, listener bind, and the unexpected/failed
+HTTP server exit), not just the two demonstrated branches. Signal-driven success
+still logs `server_shutdown_complete` before shutdown and exits 0; initialization
+and configuration rejection (exit 2 / telemetry init failure) are unchanged.
+
+No synchronous stdout/stderr fallback, reopened sink, disabled logging or new
+unbounded writer was added. Exit codes, the bootstrap one-time result stream,
+the bounded `DiagnosticSink`, the approved loss policy and liveness isolation are
+unchanged. No migration, dependency, public setting, business contract or
+OpenAPI change was needed. The absolute shutdown deadline is preserved: the
+terminal record and provider flush share the single `deadline`, and a stalled
+consumer is still abandoned at that deadline (part 12 policy).
+
+### Changed files
+
+- `src/main.rs`: `ServeOutcome`/`ServeOutcome::terminal`; `serve(config)` returns
+  the terminal result and deadline; `serve_command()` emits the error, then shuts
+  telemetry down. Early bind, configuration and analytics-start failures keep
+  their pool/worker cleanup before the same deadline.
+- `tests/foundation_process.rs`: two real-process regressions
+  (`occupied_listener_port_emits_sanitized_bind_failure_before_exit`,
+  `invalid_sqlx_connection_options_emit_sanitized_category_before_exit`) with a
+  bounded `run_terminal_failure` runner and `assert_terminal_diagnostic`, which
+  requires exit 1, a parsed ERROR record with the expected category and message,
+  and the absence of canaries/raw driver or bind text.
+- `docs/observability.md`: a short paragraph on terminal-diagnostic ordering.
+- `spec/implementation/{progress,acceptance-map}.md`: this record and evidence.
+- The existing exit-2 control, `bootstrap_requires_its_database_profile_and_invalid_startup_fails_safely`,
+  is retained unchanged.
+
+### Controlled old versus fixed results
+
+Old code (base `9e688be`, detached worktree, new `tests/foundation_process.rs`):
+`cargo test --locked --test foundation_process -- --test-threads=1`, log
+`target/part14-evidence/old-baseline-foundation-process.log`:
+
+- `occupied_listener_port_emits_sanitized_bind_failure_before_exit` FAILED:
+  `stdout lacks the listener_bind_failed terminal diagnostic; stdout: ` (empty).
+  Exit status 1 was observed before the diagnostic assertion.
+- `invalid_sqlx_connection_options_emit_sanitized_category_before_exit` FAILED:
+  `stdout lacks the database_configuration_invalid terminal diagnostic; stdout: `
+  (empty). Exit 1.
+- `bootstrap_requires_its_database_profile_and_invalid_startup_fails_safely`
+  (exit-2 control) passed; `executable_starts_without_database...` passed.
+  Result: 2 passed, 2 failed.
+
+Fixed (`dfe49d3`, primary checkout and clean worktree):
+`cargo test --locked --test foundation_process` — 4 passed, 0 failed. Both
+regressions pass, the exit-2 control and the normal SIGTERM shutdown test
+(`executable_starts...`) pass.
+
+Manual real-binary observations of the fixed `target/debug/ferl-server` (stdout
+captured to `target/part14-evidence/manual-*.log`; stderr empty):
+
+- Invalid SQLx option (`sslmode=not-a-mode` with a probe password): exit **1**;
+  stdout `{"timestamp":"…","level":"ERROR","fields":{"message":"server terminated with a sanitized failure","category":"database_configuration_invalid"}}`.
+- Occupied loopback port (a separate listener held open): exit **1**; stdout
+  `…"category":"listener_bind_failed"}}` with the same message; no raw
+  `Address already in use` text.
+
+### Commands and results
+
+- Harness: `sh scripts/postgres.sh start` and `sh scripts/postgres.sh ready`
+  passed against the owned `ferl-stage01-postgres` (PostgreSQL 17.6, port 55432).
+  The exported `FERL_TEST_DATABASE_URL`, `FERL_TEST_POSTGRES_CONTAINER` and
+  `FERL_TEST_POSTGRES_PORT` values match `scripts/check.sh`.
+- Focused, primary checkout: `cargo fmt --all -- --check` clean (after one
+  `cargo fmt --all` for the new test's line wrapping);
+  `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`
+  clean (after replacing one redundant closure with the function path).
+  `cargo test --locked --lib telemetry` — 6 passed.
+  `cargo test --locked --test stdout_backpressure --test liveness_admission --test bootstrap --test foundation_process --test foundation_http -- --test-threads=1` — 3, 2, 5, 4 and 2 passed.
+- Full gate, clean detached worktree at the committed implementation
+  (`/private/var/folders/rs/gbl8dx2d0072fmd6fdyr2qs40000gp/T/opencode/ferl-part14-dfe49d3`,
+  excluding the user's untracked docs): `sh scripts/check.sh` exit **0**, log
+  `target/part14-evidence/check-dfe49d3.log`. It ran fmt, locked check,
+  warning-denied Clippy, the proxy pull, the packaged Linux/arm64 build, and
+  `cargo test --locked --workspace --all-targets` plus `cargo test --locked --doc`.
+  Totals across all result blocks: **246 passed, 0 failed, 0 ignored** (105 library,
+  0 binary, 138 integration cases, 3 doctests), which is the 244 from part 13 plus
+  the two new regressions. Included: `telemetry_signals` (1, real Collector,
+  privacy/sampling/outage/drain), `stdout_backpressure` (3), `liveness_admission`
+  (2), `proxy_routing` (1), `release_smoke`/`release_tls` and
+  `multi_instance_process`.
+- Packaging from clean source: `source_tree_clean=true`, `source_revision=dfe49d3927ef9136e6d937402cc79977f0932d70`,
+  target `aarch64-unknown-linux-gnu`, 17 inventoried files, archive
+  `ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz` SHA-256
+  `700268c5953039d5e034f33812a2d258cbe1572f68ffad72c518e6e6b2b3b59b`, binary
+  SHA-256 `1f0abc0b466b1a45bbe58d663d127dd015bd4f94b5e1e86dcc2055c6e2c00e56`,
+  OpenAPI SHA-256 `566e467b0e8fbc51e4492b276c8b44d2a03cfa1a0d854833b9d3380961a78860`
+  (unchanged from part 13). Built in the pinned Bookworm builder
+  `docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`.
+- `git diff --check 9e688be HEAD` passed. Toolchain: rustc/cargo 1.99.1
+  (Homebrew), the same as parts 12 and 13.
+
+### Acceptance scenarios
+
+- **30:** `tests/foundation_process.rs` terminal-diagnostic regressions parse the
+  delivered JSON and scan for the DB password, `postgres://`, `sqlx`, `not-a-mode`,
+  raw bind errors and `os error`. The existing telemetry-privacy suite is retained.
+- **31:** the terminal cleanup ordering, bounded exit and drain behavior are covered
+  by the two regressions, `stdout_backpressure` (withheld-consumer SIGTERM exit
+  within budget), `liveness_admission` (withdrawal and bounded exit), and
+  `telemetry_signals` (Collector outage and stalled-exporter exit).
+
+### Residual items and blockers
+
+- No blocker. No required check was left unexecuted.
+- Only Linux/arm64 packaged execution was run. Hosted CI, Rust 1.94 and any
+  native x86_64 runtime were not run and are not claimed.
+- Diagnostics remain best-effort: the terminal record is eligible for the bounded
+  final drain with a healthy consumer. A stalled consumer, a full sink, or an
+  exhausted deadline can still lose it (part 12 policy); OTLP delivery of the
+  terminal log is not promised when the exporter is unavailable or over budget.
+- The untracked user docs (`readme.md`, `docs/cli-api-handoff.md`,
+  `docs/publication-cicd-agent-handoff.md`) were not edited or committed.
+- The Podman harness container `ferl-stage01-postgres` was started/verified with
+  `sh scripts/postgres.sh start/ready`; it was not reset and its data volume is
+  intact. Other unrelated containers were not touched.
+- No next runtime-hardening part is defined by these briefs (part 13 was the last
+  planned part); the owner should decide the next work.
 
 ## Recorded decisions
 

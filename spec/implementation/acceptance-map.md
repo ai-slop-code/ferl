@@ -433,6 +433,27 @@ clean-source gate at `f52af28`: `sh scripts/check.sh` 244 passed, 0 failed,
 0 ignored; `sh scripts/check-openapi.sh` 5 passed. Details are in `progress.md`,
 Part 13.
 
+## Part 14 terminal-diagnostic contribution
+
+Terminal serving failures now deliver their sanitized diagnostic before telemetry
+and stdout shut down (`src/main.rs`, `serve`/`serve_command`; see `progress.md`,
+Part 14). Executable evidence:
+
+- **30:** `tests/foundation_process.rs::occupied_listener_port_emits_sanitized_bind_failure_before_exit`
+  and `::invalid_sqlx_connection_options_emit_sanitized_category_before_exit` run the
+  real `ferl-server` executable with canaries (probe password, raw driver/bind
+  text) and assert exit 1, a parsed ERROR record with `listener_bind_failed` or
+  `database_configuration_invalid`, and no leaked text. Pre-fix (base `9e688be`)
+  both failed with an empty stdout diagnostic; post-fix both pass.
+- **31:** the same two tests bound the terminal exit within 10 seconds of child
+  wall time; `tests/foundation_process.rs::bootstrap_requires_its_database_profile_and_invalid_startup_fails_safely`
+  keeps the exit-2 configuration control; `tests/stdout_backpressure.rs` and
+  `tests/liveness_admission.rs` (including SIGTERM exit with stdout withheld) and
+  `tests/telemetry_signals.rs` continue to pass unchanged.
+
+Clean-source gate at implementation `dfe49d3`: `sh scripts/check.sh` exit 0, 246
+passed, 0 failed, 0 ignored; details are in `progress.md`, Part 14.
+
 ## Historical release-audit placeholder
 
 The original placeholder recorded “not executed” before the later Part 11,

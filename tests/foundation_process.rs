@@ -240,6 +240,105 @@ async fn bootstrap_requires_its_database_profile_and_invalid_startup_fails_safel
     assert!(!stdout.contains("url-secret"));
 }
 
+const PROBE_SECRET: &str = "pg-probe-secret-not-for-logs";
+const VALID_CURSOR_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const TERMINAL_RUN_BUDGET: Duration = Duration::from_secs(10);
+
+#[tokio::test]
+async fn occupied_listener_port_emits_sanitized_bind_failure_before_exit() {
+    let occupied = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("hold an occupied local listener");
+    let address = occupied
+        .local_addr()
+        .expect("occupied listener has a local address");
+    let database_url = format!("postgres://probe:{PROBE_SECRET}@127.0.0.1:1/probe");
+    let listen_addr = address.to_string();
+    let output = run_terminal_failure(&[
+        ("FERL_DATABASE_URL", database_url.as_str()),
+        ("FERL_PUBLIC_BASE_URL", "https://links.example.test/"),
+        ("FERL_CURSOR_KEY", VALID_CURSOR_KEY),
+        ("FERL_LISTEN_ADDR", listen_addr.as_str()),
+    ])
+    .await;
+    drop(occupied);
+
+    assert_terminal_diagnostic(
+        &output,
+        "listener_bind_failed",
+        &[
+            PROBE_SECRET,
+            "postgres://",
+            "Address already in use",
+            "os error",
+        ],
+    );
+}
+
+#[tokio::test]
+async fn invalid_sqlx_connection_options_emit_sanitized_category_before_exit() {
+    let database_url =
+        format!("postgres://probe:{PROBE_SECRET}@127.0.0.1:1/probe?sslmode=not-a-mode");
+    let output = run_terminal_failure(&[
+        ("FERL_DATABASE_URL", database_url.as_str()),
+        ("FERL_PUBLIC_BASE_URL", "https://links.example.test/"),
+        ("FERL_CURSOR_KEY", VALID_CURSOR_KEY),
+    ])
+    .await;
+
+    assert_terminal_diagnostic(
+        &output,
+        "database_configuration_invalid",
+        &[PROBE_SECRET, "postgres://", "not-a-mode", "sqlx", "probe@"],
+    );
+}
+
+async fn run_terminal_failure(settings: &[(&str, &str)]) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_ferl-server"));
+    command
+        .env_clear()
+        .envs(settings.iter().copied())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    tokio::time::timeout(TERMINAL_RUN_BUDGET, command.output())
+        .await
+        .expect("terminal failure exits within its bounded test budget")
+        .expect("server executable runs")
+}
+
+fn assert_terminal_diagnostic(output: &std::process::Output, category: &str, forbidden: &[&str]) {
+    let stdout = String::from_utf8(output.stdout.clone()).expect("stdout is UTF-8");
+    let stderr = String::from_utf8(output.stderr.clone()).expect("stderr is UTF-8");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "terminal serving failure exits unsuccessfully; stdout: {stdout}; stderr: {stderr}"
+    );
+    let records = stdout
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("each stdout log line is JSON");
+    let record = records
+        .iter()
+        .find(|record| record["fields"]["category"] == category)
+        .unwrap_or_else(|| {
+            panic!("stdout lacks the {category} terminal diagnostic; stdout: {stdout}")
+        });
+    assert_eq!(record["level"], "ERROR");
+    assert_eq!(
+        record["fields"]["message"],
+        "server terminated with a sanitized failure"
+    );
+    for secret in forbidden {
+        assert!(
+            !stdout.contains(secret) && !stderr.contains(secret),
+            "terminal diagnostics leaked {secret:?}"
+        );
+    }
+}
+
 async fn wait_for_listener(address: std::net::SocketAddr, child: &mut Child) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {

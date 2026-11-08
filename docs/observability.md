@@ -204,6 +204,13 @@ Exporter diagnostics (`otel_export_failed`, `otel_export_queue_full`) use the sa
 bounded queue through a nonrecursive helper. They bypass tracing, so they are never
 exported as LogRecords and cannot restore a synchronous stdout write.
 
+Terminal serving failures (`database_configuration_invalid`, `listener_bind_failed`,
+`analytics_worker_start_failed`, `http_server_failed`) are logged as
+`server terminated with a sanitized failure` before telemetry shutdown closes the
+stdout sink, so a healthy consumer receives them within the same absolute deadline.
+A stalled consumer or exhausted deadline still uses the bounded best-effort loss
+policy below; the terminal record is not a durability guarantee.
+
 Shutdown ownership: `Telemetry::shutdown` attempts the stdout drain last, using the
 same absolute total deadline as signal flushes. The drain stops accepting records,
 writes queued records while the consumer keeps up, and flushes the writer. If the
