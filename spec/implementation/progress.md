@@ -1,5 +1,46 @@
 # Implementation progress and agent handoff
 
+## Terminal error logging follow-up — planned, 2026-11-08
+
+Part 14 is **Planned**; parts 12 and 13 are complete in Git and in the current
+part-status table below. The earlier planning and acceptance entries are retained
+as historical records.
+
+- Review baseline: `d1abbc6f309ac3e1eae28805aeb419064f677c9b`.
+- Task: [14 — Terminal error logging](14-terminal-error-logging.md).
+- Implementation branch: `implementation/14-terminal-error-logging`, from the
+  current verified `main` containing parts 12 and 13.
+- Confirmed finding: `serve()` shuts down telemetry and closes stdout before
+  `serve_command()` logs its terminal failure. With a healthy reader, an occupied
+  listener and invalid SQLx options each exited with 1 and empty stdout/stderr;
+  invalid cursor configuration remained an exit-2 control with a diagnostic.
+- Owner scope: production-readiness work covers code and the existing local
+  verification gates. Backups, restore exercises and staging/deployment operations
+  or acceptance are outside scope. Existing architecture coverage is accepted.
+  Historical pending external-acceptance entries are not prerequisites for part 14.
+- The fix must preserve bounded diagnostic loss, one existing serving shutdown
+  deadline, bootstrap output and liveness-only admission isolation.
+
+### Part 14 specification integration
+
+Status: **Complete** for documentation preparation on
+`maintenance/terminal-error-logging-spec`, based on the review baseline above.
+The new task, index, separate agent prompt and this planning record are the only
+intended changes. Runtime implementation and regression results belong to the
+future part 14 agent. A clean documentation worktree preserves the primary
+checkout's existing untracked user documents.
+
+Documentation verification passed: `git diff --cached --check`; an inline Python 3
+check of the exact four-file documentation scope, 30 local Markdown links/anchors,
+balanced code fences, required task sections, the two failure categories and control,
+explicit scope, Planned status and separate agent assignment; and review against
+the existing numbered-task and Git integration patterns. Verified specification
+commit `eb26525f5c34eef808970d85f72abfcf8e8bc917` is integrated into local `main`
+by this explicit no-ff merge; only this integration handoff differs from the
+verified branch tree. The merge hash is reported after creation, not embedded in
+its own tree. Part 14 remains **Planned**; this documentation integration does not
+implement or verify the production fix.
+
 ## Runtime hardening follow-up — owner-approved plan, 2026-11-06
 
 Parts 12 and 13 are **Planned**. This entry records instructions and owner
@@ -488,6 +529,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 11 Release verification | Complete | Verified implementation `95d053d70c47c7199cfbd45545fa8c08b8d945d1` and handoff-only branch tip `4226cd63298a7599e5866ae545845a590e32616f` from `implementation/11-release-verification`, based on `71d77b3f3838081add13d46cdefe0a91cdd70efd`, are integrated by the explicit local no-ff merge recorded below. The full local gate, OpenAPI, clean-source proxy/package gates, and all 51 scenario evidence mappings are recorded in the Part 11 handoff. |
 | 12 Stdout backpressure | Complete | Verified implementation `77f11a86c78fe06706460689e4772c2ac6a3fc9b` and evidence tip `01ebaf8c7cfb3914d72f57727650ba433a778ef4` from `implementation/12-stdout-backpressure`, base `ea1691b7bb5cc375956bcc6a7cdd3b17dd435f98`, integrated by the explicit no-ff merge into `main`; clean-source `sh scripts/check.sh` passed. See the Part 12 handoff below. |
 | 13 Liveness admission | Complete | Verified implementation `f52af28` and evidence tip `352b844` from `implementation/13-liveness-admission`, base `91295dd` (part 12 merge), integrated into `main` by the explicit no-ff merge recorded in the Part 13 handoff. Clean-source `sh scripts/check.sh` (244 passed, 0 failed, 0 ignored) and `sh scripts/check-openapi.sh` passed. See the Part 13 handoff below. |
+| 14 Terminal error logging | Planned | Emit terminal serving errors before provider/stdout closure; separate branch `implementation/14-terminal-error-logging`, controlled failure-path regressions and existing local verification required. See the part 14 spec. |
 
 ## Part 12 — Bounded stdout diagnostics under backpressure
 
