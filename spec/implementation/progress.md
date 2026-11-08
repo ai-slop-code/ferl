@@ -1,5 +1,164 @@
 # Implementation progress and agent handoff
 
+## Published-history integration and v0.1.1 preparation — 2026-11-08
+
+Status: **Complete** for local integration of `integration/local-hardening` into
+`main` by this explicit no-ff merge. Verified integration tip:
+`84d6bde063fe400ea245bd17387018f93d2c06e4`. Only this integration handoff differs
+from that verified branch tree. Image publication is a separate workflow outcome.
+
+The owner authorized integrating the reviewed local work onto the existing
+GitHub `main`, preserving its published history, CI/container delivery, license
+and later fixture fixes. Published baseline:
+`1b9847defadf43cacff247c6c21acd022aecfcd9`. The original local history and pending
+documents are retained locally on `backup/local-main-before-remote-integration`.
+
+The imported changes have these commits in the published lineage:
+
+| Work | Original local integration | Published-lineage commit |
+|---|---|---|
+| Parts 12–13 specifications | `ea1691b` | `f2cefe5` |
+| Part 12 stdout backpressure | `91295dd` | `bdb53a3` |
+| Part 13 liveness admission | `d1abbc6` | `b8ed0f8` |
+| Part 14 specification | `9e688be` | `c28d892` |
+| Part 14 terminal diagnostics | `f744f05` | `833feed` |
+| Pending README/client/publication handoffs | `c6b1f7c` | `aa10c8e` (reconciled) |
+
+Earlier handoffs below retain their original local verification IDs as historical
+evidence; use the published-lineage commits above for current ancestry checks.
+The runtime source, migrations, dependency lockfile and normative contracts at
+`aa10c8e` match the reviewed local runtime. The published MIT package metadata,
+container/release workflows, scripts and fixture fixes are preserved. The image
+README retains its published instructions and incorporates the local feature and
+source-build guidance. CLI contract digests and liveness semantics are updated;
+the publication handoff is labeled as a historical planning snapshot.
+
+Fresh integration verification at clean commit
+`aa10c8ebe8402e8508a6f33e32d24d0ad0924fdf`, before the version bump:
+
+- `sh scripts/check.sh`, with a reused Cargo target cache and two build jobs:
+  passed **243 all-target cases plus 3 doctests**, 0 failed/ignored. Included
+  formatting, locked check/Clippy, PostgreSQL, processes, Collector, OpenAPI,
+  proxy, packaged release smoke and TLS. The Linux/arm64 package was built from
+  the clean committed snapshot using the existing pinned Bookworm builder.
+- `python3 scripts/test_release_verification.py`: **8 passed**.
+- Published-only files and the rewritten schema-v1 compatibility baseline were
+  checked against the remote baseline; its required ancestor remains reachable.
+
+The owner additionally authorized publishing **v0.1.1** through the existing
+version-tag workflow. The package and root lock entry are updated to `0.1.1`;
+the application/API schema versions and dependencies retain their existing values.
+Version validation passed: manifest/root-lock agreement at `0.1.1`, a locked
+`cargo test --test foundation_process` run (4 passed), and the freshly built
+executable's `--version` output `ferl-server 0.1.1`. Documentation validation
+checked 88 local links/anchors, and `git diff --check` passed. Successful image
+publication must be established by the release
+workflow, not inferred from the local pre-version-bump gate above.
+
+## Terminal error logging follow-up — planned, 2026-11-08
+
+Part 14 is **Planned**; parts 12 and 13 are complete in Git and in the current
+part-status table below. The earlier planning and acceptance entries are retained
+as historical records.
+
+- Review baseline: `d1abbc6f309ac3e1eae28805aeb419064f677c9b`.
+- Task: [14 — Terminal error logging](14-terminal-error-logging.md).
+- Implementation branch: `implementation/14-terminal-error-logging`, from the
+  current verified `main` containing parts 12 and 13.
+- Confirmed finding: `serve()` shuts down telemetry and closes stdout before
+  `serve_command()` logs its terminal failure. With a healthy reader, an occupied
+  listener and invalid SQLx options each exited with 1 and empty stdout/stderr;
+  invalid cursor configuration remained an exit-2 control with a diagnostic.
+- Owner scope: production-readiness work covers code and the existing local
+  verification gates. Backups, restore exercises and staging/deployment operations
+  or acceptance are outside scope. Existing architecture coverage is accepted.
+  Historical pending external-acceptance entries are not prerequisites for part 14.
+- The fix must preserve bounded diagnostic loss, one existing serving shutdown
+  deadline, bootstrap output and liveness-only admission isolation.
+
+### Part 14 specification integration
+
+Status: **Complete** for documentation preparation on
+`maintenance/terminal-error-logging-spec`, based on the review baseline above.
+The new task, index, separate agent prompt and this planning record are the only
+intended changes. Runtime implementation and regression results belong to the
+future part 14 agent. A clean documentation worktree preserves the primary
+checkout's existing untracked user documents.
+
+Documentation verification passed: `git diff --cached --check`; an inline Python 3
+check of the exact four-file documentation scope, 30 local Markdown links/anchors,
+balanced code fences, required task sections, the two failure categories and control,
+explicit scope, Planned status and separate agent assignment; and review against
+the existing numbered-task and Git integration patterns. Verified specification
+commit `eb26525f5c34eef808970d85f72abfcf8e8bc917` is integrated into local `main`
+by this explicit no-ff merge; only this integration handoff differs from the
+verified branch tree. The merge hash is reported after creation, not embedded in
+its own tree. Part 14 remains **Planned**; this documentation integration does not
+implement or verify the production fix.
+
+## Runtime hardening follow-up — owner-approved plan, 2026-11-06
+
+Parts 12 and 13 are **Planned**. This entry records instructions and owner
+decisions; it does not claim either implementation or its regression tests exist.
+Historical parts 01–11 and maintenance completion records remain intact.
+
+The review baseline was `0d4cdcc499f02edaedef70ffb332012935a8af9e`. It identified
+two bounded runtime changes:
+
+| Part | Task | Branch | Dependency |
+|---|---|---|---|
+| [12](12-stdout-backpressure.md) | Prevent serving stdout backpressure from stalling requests or process shutdown | `implementation/12-stdout-backpressure` | Completed part 11 |
+| [13](13-liveness-admission.md) | Isolate exact liveness routing from business admission, with the approved contract amendment | `implementation/13-liveness-admission` | Part 12 verified and merged into `main` |
+
+Owner decisions:
+
+- Diagnostic logs may be dropped when a finite stdout buffer is full or the
+  existing shutdown deadline expires. The one-time bootstrap credential result
+  is separate and retains its existing acknowledged output/error behavior.
+- Isolate **liveness only**. Readiness retains its existing admission and
+  schema/database/accepting-state behavior. Current business section 14.3 and
+  OpenAPI explicitly permit liveness overload 503; part 13 must amend those
+  passages narrowly and consistently rather than call the old behavior a
+  contract violation. Part 12 may clarify the approved stdout-loss policy in
+  business section 14.
+- Continue the numbered implementation-file pattern with one expert Rust agent
+  per task, sequential execution, a separate branch/commit history for each fix,
+  and verified explicit local merges into `main` following git-workflow.md.
+- Existing architecture testing is accepted for these tasks. Additional platform
+  testing and hosted CI are not prerequisites for either part. The review's
+  restore/capacity observations do not authorize a new code feature or redesign.
+- This preparatory session is documentation-only. Implementation agents must
+  inspect their actual starting source and ask about unresolved requirements or
+  scope expansion instead of assuming new behavior.
+
+### Specification integration
+
+Status: **Complete** for documentation preparation on
+`maintenance/runtime-hardening-specs`, based on
+`0d4cdcc499f02edaedef70ffb332012935a8af9e`. The owner authorized committing and
+merging these instruction files separately from the future fixes. A clean
+documentation worktree preserves the primary checkout's pre-existing untracked
+`readme.md`, `docs/cli-api-handoff.md` and `docs/publication-cicd-agent-handoff.md`.
+Documentation verification passed:
+
+- `git diff --cached --check`.
+- An inline Python 3 check of the exact five-file documentation scope, 28 local
+  Markdown links/anchors, balanced code fences, the two task files' required
+  sections, their separate agent/branch assignments, and both Planned statuses.
+- Review against the existing numbered-part and local no-ff integration patterns,
+  the current health contracts and the owner's explicit decisions.
+
+Only the two task briefs, implementation README, developer prompt and progress
+record changed. Runtime code, test code and normative contracts are not changed
+by this preparation; the future agents own their specified implementation gates.
+Verified specification commit `84146063dbf463793888e94b988af1e3ecd46263` is
+integrated by this explicit no-ff merge into local `main`. Only this specification
+integration handoff differs from the verified branch tree. Both implementation
+parts remain **Planned**; neither fix has been implemented or verified by this
+documentation session. The merge hash is reported after creation, not embedded
+in its own tree. The original untracked documents are preserved separately from
+the committed specification changes.
+
 ## Release-readiness acceptance — worklist recorded before implementation
 
 Branch `maintenance/release-readiness-acceptance`; verified starting `main`
@@ -423,6 +582,434 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 09 Analytics reports | Complete | Verified implementation `178e297` and handoff-only part tip `f08b805` from `implementation/09-analytics-reports`, based on Part 08 merge `12c10c234c492dcbdf554a3cc6e1321d83474361`, are integrated by the explicit no-ff merge recorded below. |
 | 10 Observability and lifecycle | Complete | Verified implementation `1d84f0a` and handoff-only branch tip `3f21bb4` are integrated from `implementation/10-observability-and-lifecycle` by the explicit no-ff merge from base `6153b768`; see the Part 10 handoff below. |
 | 11 Release verification | Complete | Verified implementation `95d053d70c47c7199cfbd45545fa8c08b8d945d1` and handoff-only branch tip `4226cd63298a7599e5866ae545845a590e32616f` from `implementation/11-release-verification`, based on `71d77b3f3838081add13d46cdefe0a91cdd70efd`, are integrated by the explicit local no-ff merge recorded below. The full local gate, OpenAPI, clean-source proxy/package gates, and all 51 scenario evidence mappings are recorded in the Part 11 handoff. |
+| 12 Stdout backpressure | Complete | Verified implementation `77f11a86c78fe06706460689e4772c2ac6a3fc9b` and evidence tip `01ebaf8c7cfb3914d72f57727650ba433a778ef4` from `implementation/12-stdout-backpressure`, base `ea1691b7bb5cc375956bcc6a7cdd3b17dd435f98`, integrated by the explicit no-ff merge into `main`; clean-source `sh scripts/check.sh` passed. See the Part 12 handoff below. |
+| 13 Liveness admission | Complete | Verified implementation `f52af28` and evidence tip `352b844` from `implementation/13-liveness-admission`, base `91295dd` (part 12 merge), integrated into `main` by the explicit no-ff merge recorded in the Part 13 handoff. Clean-source `sh scripts/check.sh` (244 passed, 0 failed, 0 ignored) and `sh scripts/check-openapi.sh` passed. See the Part 13 handoff below. |
+| 14 Terminal error logging | Complete | Verified implementation `dfe49d3927ef9136e6d937402cc79977f0932d70` and evidence tip `8b619d54a6ccb4eefa0572d6607e1e875e419ad1` from `implementation/14-terminal-error-logging`, base `9e688be`, integrated into `main` by the explicit no-ff merge recorded in the Part 14 section (merge hash reported after creation). Clean-source `sh scripts/check.sh` passed with 246 tests, 0 failed, 0 ignored. |
+
+## Part 12 — Bounded stdout diagnostics under backpressure
+
+Status: **Complete** (integrated into local `main` by the explicit no-ff merge; the merge commit hash is reported after creation, not embedded here). Branch `implementation/12-stdout-backpressure`;
+base `main` commit `ea1691b7bb5cc375956bcc6a7cdd3b17dd435f98`; verified
+implementation commit `77f11a86c78fe06706460689e4772c2ac6a3fc9b`. The implementation
+commit contains source, tests, and the owner-approved policy/operator docs; this
+evidence commit adds only progress and acceptance-map records. Merge into `main` is
+pending the explicit no-ff/no-commit handoff.
+
+### Failure and sink design
+
+- Root cause: the production subscriber wrote each event synchronously to
+  `std::io::stdout`, and exporter diagnostics used `println!`. A stalled reader
+  blocked the request that emitted an event.
+- Serving stdout now uses `DiagnosticWriter`: each tracing event is staged in a
+  per-event buffer and enqueued as one complete record on a fixed
+  `sync_channel` of **256 records**. Each record is capped at **8 KiB**
+  (about 2 MiB retained). One detached `ferl-stdout-diagnostics` OS thread owns
+  stdout and is the only thread that can block on it. No new dependency, setting,
+  or async-looking blocking queue is used.
+- Overflow, oversized records and write errors discard the record and increment a
+  counter. When the consumer resumes, one sanitized record
+  (`fields.category = "diagnostic_records_dropped"`, `fields.dropped_records = N`)
+  precedes the next complete record. A failed summary write restores its count.
+- Exporter diagnostics (`otel_export_failed`, `otel_export_queue_full`) use the
+  same queue through `emit_diagnostic_line`, bypassing tracing, so they cannot
+  recurse into OTLP.
+- Shutdown: `Telemetry::shutdown` drains last with the same absolute total
+  deadline. At the deadline the writer is abandoned and pending records are
+  discarded; the drain never extends `FERL_SHUTDOWN_TIMEOUT_SECS`. `main` also
+  calls `finish_stdout` with a fixed 1-second budget for `migrate` and config
+  rejection; serving calls it again and it returns immediately.
+- Bootstrap is unchanged: its one-time result remains a direct stdout write with
+  its separate stderr diagnostics (`init_stderr`), and its failure exit behavior
+  is unchanged.
+- Audit notes: the writer thread is detached (no join/Drop block); the runtime
+  never performs a stdout write; a partial line from an OS-reported failed write
+  remains and is not retried. Stdout is a pipe the process does not own, so
+  `EPIPE` is counted as loss and does not stop later attempts.
+
+### Files changed
+
+- `src/telemetry/logging.rs`: sink, writer, drain, bounds, unit tests (5).
+- `src/telemetry/providers.rs`: writer composition, nonrecursive exporter line,
+  drain at end of `Telemetry::shutdown`.
+- `src/main.rs`: bounded drain for non-serving commands.
+- `tests/stdout_backpressure.rs` (new, 3 process tests);
+  `tests/support/serving_process.rs`: a withheld-stdout gate (`start_with_withheld_stdout`,
+  `release_stdout`); `tests/rate_limit_process.rs`: worker drains before exit
+  (its parent asserts a log record).
+- `spec/server-business-logic.md` (sections 14.1, 14.3 narrow approved policy),
+  `docs/observability.md` (new "Stdout diagnostic bounds"), `docs/operations.md`,
+  `docs/configuration.md`.
+- No migration, dependency, HTTP contract or configuration default changed.
+
+### Controlled failing and passing evidence
+
+Old implementation (base commit, before the fix):
+
+- `target/stdout-backpressure/old-baseline.log`:
+  `cargo test --locked --test stdout_backpressure -- --test-threads=1`: 1 passed
+  (healthy control), 2 failed. Both withheld-consumer tests stalled at
+  `liveness request 173 ... HTTP test deadline exceeded`.
+- Out-of-tree production-process driver `target/stdout-backpressure/measure_exit.py`
+  (ad-hoc; stdout never read; SIGTERM; 3 s/1 s/0 s budgets). Runs 1 and 2
+  (`old-unread-stdout*.json`): 174 health requests completed, then timeouts;
+  process still alive 15 s after SIGTERM and killed as failure cleanup. This
+  matches the review's 174-request observation.
+- `RUST_LOG=off` control, 800 requests (`old-logs-off-control.json`): exit 0 after
+  0.002 s.
+
+Fixed implementation (commit `77f11a8`):
+
+- `target/stdout-backpressure/fixed-run1.log`: 3 passed, 0 failed.
+- Same driver (`fixed-unread-stdout.json`, 600 requests, stdout never read):
+  exit status 0 after SIGTERM in **3.005 s, 3.006 s, 3.004 s** against the 3 s total
+  budget; the drain consumed the budget and the writer was abandoned.
+- `RUST_LOG=off` control (`fixed-logs-off-control.json`): 800 requests, exit 0 in
+  0.014 s.
+- Process test assertion tolerance: exit ≤ budget + 1.5 s (scheduler/spawn
+  allowance). Observed exits were within the budget.
+- Unit tests (`cargo test --locked --lib telemetry::logging`, 5 passed): exact
+  overflow accounting with a blocked writer (producers finish under a 5 s bound),
+  oversized discard with later delivery, failed-write report then recovery,
+  abandon at drain deadline, exporter line queueing.
+
+### Commands and results (clean-source gate)
+
+Harness: `ferl-stage01-postgres` was Exited (its volume intact). `sh scripts/postgres.sh start`
+failed because the harness port check cannot read a stopped container's published
+port; `podman start ferl-stage01-postgres` started the same owned container (same
+image digest, mount and `127.0.0.1:55432`), then `sh scripts/postgres.sh ready`
+passed. The script was not changed; this harness restart limitation is recorded for
+separate attention.
+
+Focused checks in the primary checkout before the commit: `cargo fmt --all -- --check`
+clean; `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`
+clean; focused `cargo test --locked --lib --test bootstrap --test foundation_process
+--test rate_limit_process --test link_failures --test analytics_failures
+--test report_failures --test rate_limit_failures --test stdout_backpressure`
+passed (102 lib; 5 bootstrap; 2 foundation_process; 2 link_failures; 1 analytics;
+1 report_failures; 1 rate_limit_failures; 1 rate_limit_process; 3 stdout_backpressure).
+
+Packaged gate: the primary checkout cannot run `package_release.py`, whose
+clean-source check fails on the user's pre-existing untracked files (`readme.md`,
+`docs/cli-api-handoff.md`, `docs/publication-cicd-agent-handoff.md`, preserved
+unchanged). Therefore a detached clean worktree was created at the exact
+implementation commit (`/private/var/folders/.../T/opencode/ferl-part12-77f11a8`) and
+ran `sh scripts/check.sh` there, logged at
+`target/stdout-backpressure/gate-check-sh-77f11a8.log`, **exit 0**:
+
+- Totals across all result blocks: **238 passed, 0 failed, 0 ignored** (includes 102
+  library tests, the process/fixture suites, and 3 doctests).
+- Includes `telemetry_signals` (1 passed, Collector decoded signals),
+  `release_tls` (2), `release_smoke` (1), `proxy_routing` (1), `rate_limit_process`
+  (1), `legacy_compatibility` (1), `multi_instance_process` (3), and `stdout_backpressure` (3).
+- Packaged artifact: `ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`, archive
+  sha256 `00b247384b97d2bc6bb236ed382782bc7d8ab6ca03c47a213514fc74eb033565`,
+  binary sha256 `9495b88dd903f8507ec3a06b525d172d91d948535a88bd88a2d497819f7778ef`,
+  OpenAPI sha256 `45677d0d0c0afda4687fada791ce492682ad546f2fbc612113890cffecbb6b5e`,
+  `source_tree_clean=true`, built in the pinned Bookworm builder
+  `docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`.
+
+Not run: hosted CI, native Linux/amd64 runtime, and the MSRV script (not part of
+this part's gate; `check.sh` does not include it). Only Linux/arm64 packaged execution
+through the existing gate is claimed.
+
+### Acceptance scenarios
+
+- Scenario 31 (collector outage/backpressure, bounded shutdown) gains stdout
+  evidence: request continuity and exit-budget under a withheld consumer
+  (`tests/stdout_backpressure.rs::withheld_stdout_consumer_keeps_requests_business_success_and_shutdown_bounded`).
+- Scenario 30 privacy and the all-signal test continue to pass unchanged.
+- Scenario 29, 36, 50 are unaffected; see `acceptance-map.md`.
+
+### Residual items and next stage
+
+- Diagnostic loss is the owner-approved policy above; a crash can lose records already
+  queued. A stalled consumer costs the process its total shutdown budget (bounded).
+- Harness: restart of a stopped `ferl-stage01-postgres` through `scripts/postgres.sh start`
+  fails its port check; needs a separate harness fix. Not changed here.
+- Part 13 (liveness admission) is next, starting from `main` after this merge.
+
+## Part 13 — Liveness isolated from business admission
+
+Status: **Complete** upon the no-ff merge into local `main` that contains this
+record (the merge hash is reported after creation, not embedded here). Earlier
+text below describes the verified state.
+
+Status (at verification): **Verified (awaiting merge)**. Branch `implementation/13-liveness-admission`;
+base `main` commit `91295ddddf79235b607f79444f68b9f6c805f90a` (the part 12 merge).
+Prerequisite confirmed before
+work: part 12 verified implementation `77f11a86c78fe06706460689e4772c2ac6a3fc9b`
+and evidence tip `01ebaf8c7cfb3914d72f57727650ba433a778ef4` are ancestors of
+`main` at that merge. Verified
+implementation commit: `f52af280284d22fa2d1ba37eee54d05632d39156`
+(`fix(part-13): isolate liveness from business admission`). Integration merge
+commit hash is reported after creation, not embedded here.
+
+### Approved contract amendment (owner, 2026-11-06, liveness only)
+
+- Business section 14.3 no longer permits a business-admission 503 on
+  `GET /api/health/live`. It states that liveness is isolated from bounded
+  business HTTP admission and keeps its normal 200 or method/query rejection.
+  Readiness keeps the overload allowance.
+- OpenAPI `getLiveness`: description now says liveness is isolated from bounded
+  HTTP admission; its response map is `200`, `400`, `500` (the `503` entry was
+  removed). `500` is retained as the common unexpected-failure response that
+  readiness also lists; `405` remains covered by the common method rule, as for
+  every other operation. `getReadiness`, shared components and operation IDs are
+  unchanged.
+- Operator docs (`docs/operations.md`, `docs/configuration.md`,
+  `docs/observability.md`) describe the isolation. The historical part 01 and
+  part 02 decisions remain as history.
+
+### Implemented behavior and files
+
+- `src/http/router.rs`: `/api/health/live` is merged outside the business
+  admission layer. Readiness, `/api`, `/api/{*path}`, public short-code and the
+  fallback remain behind `admit_requests` with the unchanged body limit. The
+  request-ID/no-store envelope still wraps every route, including liveness.
+  Liveness keeps its normal handler (method, query and envelope rules).
+- No `src/app.rs`, `src/shutdown.rs`, `src/db/`, configuration, dependency,
+  migration or listener change was needed. Business capacities, excess-work
+  rejection and force-cancel behavior are unchanged.
+- Changed files: `src/http/router.rs` (composition plus unit tests),
+  `tests/liveness_admission.rs` (new), `tests/openapi_release.rs` (response-map
+  test), `spec/openapi.yaml`, `spec/server-business-logic.md`,
+  `docs/{operations,configuration,observability}.md`, and this record plus
+  `acceptance-map.md`.
+
+### Controlled evidence (old versus fixed)
+
+Old composition: a detached worktree at `91295dd` was given the new tests with
+its original router composition. Commands:
+`cargo test --locked --lib http::router` and
+`cargo test --locked --test liveness_admission -- --test-threads=1`.
+
+- Unit: 3 failed (`liveness_stays_prompt_while_saturated_business_capacity_sheds_work`,
+  `liveness_does_not_join_admitted_business_waiters`,
+  `exact_liveness_rules_hold_and_aliases_stay_behind_business_admission`) with
+  liveness `503` instead of `200` or `400`; the pre-existing admission bounds
+  test passed.
+- Integration: 0 passed, 2 failed. Both failed at the liveness assertion with
+  `left: 503, right: 200` while the held request owned the only permit. The
+  held request was confirmed waiting in `pg_locks` first. The worktree was then
+  removed.
+
+Fixed (`f52af28`, primary checkout), focused commands with
+`FERL_TEST_DATABASE_URL=postgres://ferl:ferl@127.0.0.1:55432/ferl_test`,
+`FERL_TEST_POSTGRES_CONTAINER=ferl-stage01-postgres`,
+`FERL_TEST_POSTGRES_PORT=55432`:
+
+- `cargo fmt --all -- --check` clean after `cargo fmt --all`.
+- `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` clean.
+- `cargo test --locked --lib http::router`: 4 passed.
+- `cargo test --locked --test liveness_admission -- --test-threads=1`: 2 passed.
+- `cargo test --locked --test openapi_release health_response`: 1 passed.
+- `cargo test --locked --test foundation_http --test foundation_postgres`
+  (run together): 2 and 1 passed.
+- `cargo test --locked --test routing --test rate_limits --test foundation_process --test foundation_http --test stdout_backpressure --test liveness_admission -- --test-threads=1`:
+  routing 2, rate_limits 5, foundation_process 2, foundation_http 2,
+  stdout_backpressure 3 (part 12 regressions retained), liveness_admission 2 — all passed.
+- `sh scripts/check-openapi.sh`: 4 passed (before the response-map test was
+  added); after it, the clean-worktree run passed 5 (see below).
+
+### Closing gate (clean committed input)
+
+Detached worktree
+`/private/var/folders/rs/gbl8dx2d0072fmd6fdyr2qs40000gp/T/opencode/ferl-part13-f52af28`
+at `f52af28` (the primary checkout's untracked user docs were excluded):
+
+- `sh scripts/check-openapi.sh` → exit 0; `openapi_release` 5 passed, 0 failed.
+  Log: `target/part13-evidence/check-openapi-f52af28.log`.
+- `sh scripts/check.sh` → exit 0. 244 total passed, 0 failed, 0 ignored: 105
+  library, 0 binary, 136 integration cases across all integration binaries, 3
+  doctests. Includes fmt, `cargo check`, warning-denied clippy, PostgreSQL,
+  process, Collector, proxy, release smoke/TLS and packaging. Log:
+  `target/part13-evidence/check-f52af28.log`.
+- Clean-source packaging: `source_tree_clean=true`, verified archive
+  `ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`, binary SHA-256
+  `5f0ea659cfdd4e0b81b2c8f077a1a37aba4cd813fe00e0b1e41056ae2b51d1a3`,
+  OpenAPI SHA-256 `566e467b0e8fbc51e4492b276c8b44d2a03cfa1a0d854833b9d3380961a78860`.
+  The OpenAPI digest intentionally differs from part 12 (`45677d0d…`) because the
+  normative contract changed. Pinned builder:
+  `docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`.
+
+Copies of both logs are in `target/part13-evidence/` of the primary checkout.
+Only Linux/arm64 packaged execution was run; no hosted CI or x86_64 runtime is
+claimed.
+
+### Acceptance scenarios
+
+- 31: liveness observable while stdout/PostgreSQL states vary; process test
+  `tests/liveness_admission.rs::tcp_process_keeps_liveness_separate_from_held_database_work_and_exits_within_budget`
+  adds saturated-admission and withdrawal observations with bounded exit.
+- 36: unchanged drain/replacement evidence; the withdrawal leg is covered above.
+- 38: exact health isolation and aliases are covered by
+  `src/http/router.rs::tests::exact_liveness_rules_hold_and_aliases_stay_behind_business_admission`.
+- 51: `tests/openapi_release.rs::health_response_maps_isolate_liveness_from_admission_overload`.
+
+### Residual items
+
+- Untracked user documentation was not edited. `docs/cli-api-handoff.md`
+  (around its health table and the paragraph beginning "Admission overload can
+  instead return a structured `service_unavailable`") and the untracked
+  `readme.md` describe pre-amendment overload behavior for health routes. The
+  owner should decide whether those files change.
+- The Atlassian MCP containers visible in Podman are unrelated and were not
+  touched. The Stage 01 PostgreSQL container and volume were used read/write
+  only through the harness.
+- Part 13 is the last planned runtime-hardening part; no next implementation
+  stage is defined by these briefs.
+
+## Part 14 — Terminal serving errors before diagnostic shutdown
+
+Status: **Complete** upon the explicit no-ff merge into local `main` that contains
+this record (the merge hash is reported after creation, not embedded here). Earlier
+text below describes the verified state.
+
+Status (at verification): **Verified (awaiting merge)**. Branch
+`implementation/14-terminal-error-logging`; base `main` commit
+`9e688be117e1e4e6847cd9e22b9e8c7c68630da6` (spec handoff). Prerequisites were
+confirmed in Git before work: part 12 (`91295dd` merge, implementation `77f11a8`)
+and part 13 (`d1abbc6` merge, implementation `f52af28`) are ancestors of `main`,
+and `main` had no pending merge. The local identity is `Lubos Babjak
+<lubos@lubos.sk>`. Verified implementation commit:
+`dfe49d3927ef9136e6d937402cc79977f0932d70` (`fix(part-14): emit terminal serving
+errors before telemetry shutdown`). Evidence commit:
+`8b619d54a6ccb4eefa0572d6607e1e875e419ad1`. The integration merge hash is reported
+after creation, not embedded here.
+
+### Root cause and ordering decision
+
+`serve()` called `Telemetry::shutdown()` on every terminal path. That closed the
+stdout sink (`finish_stdout` sets `closing`), so the `server terminated with a
+sanitized failure` event that `serve_command()` emitted afterwards was discarded by
+`DiagnosticSink::submit()`. Decision: `serve()` no longer touches telemetry. It
+returns `ServeOutcome { result, deadline }`, where `deadline` is the absolute
+deadline already computed on that path (the same one used for pool close and the
+drain). `serve_command()` then emits the single sanitized terminal record while the
+subscriber and bounded sink still accept it, and only afterward calls
+`telemetry.shutdown(deadline)`. This covers every `ServerError` path (database
+configuration, analytics worker start, listener bind, and the unexpected/failed
+HTTP server exit), not just the two demonstrated branches. Signal-driven success
+still logs `server_shutdown_complete` before shutdown and exits 0; initialization
+and configuration rejection (exit 2 / telemetry init failure) are unchanged.
+
+No synchronous stdout/stderr fallback, reopened sink, disabled logging or new
+unbounded writer was added. Exit codes, the bootstrap one-time result stream,
+the bounded `DiagnosticSink`, the approved loss policy and liveness isolation are
+unchanged. No migration, dependency, public setting, business contract or
+OpenAPI change was needed. The absolute shutdown deadline is preserved: the
+terminal record and provider flush share the single `deadline`, and a stalled
+consumer is still abandoned at that deadline (part 12 policy).
+
+### Changed files
+
+- `src/main.rs`: `ServeOutcome`/`ServeOutcome::terminal`; `serve(config)` returns
+  the terminal result and deadline; `serve_command()` emits the error, then shuts
+  telemetry down. Early bind, configuration and analytics-start failures keep
+  their pool/worker cleanup before the same deadline.
+- `tests/foundation_process.rs`: two real-process regressions
+  (`occupied_listener_port_emits_sanitized_bind_failure_before_exit`,
+  `invalid_sqlx_connection_options_emit_sanitized_category_before_exit`) with a
+  bounded `run_terminal_failure` runner and `assert_terminal_diagnostic`, which
+  requires exit 1, a parsed ERROR record with the expected category and message,
+  and the absence of canaries/raw driver or bind text.
+- `docs/observability.md`: a short paragraph on terminal-diagnostic ordering.
+- `spec/implementation/{progress,acceptance-map}.md`: this record and evidence.
+- The existing exit-2 control, `bootstrap_requires_its_database_profile_and_invalid_startup_fails_safely`,
+  is retained unchanged.
+
+### Controlled old versus fixed results
+
+Old code (base `9e688be`, detached worktree, new `tests/foundation_process.rs`):
+`cargo test --locked --test foundation_process -- --test-threads=1`, log
+`target/part14-evidence/old-baseline-foundation-process.log`:
+
+- `occupied_listener_port_emits_sanitized_bind_failure_before_exit` FAILED:
+  `stdout lacks the listener_bind_failed terminal diagnostic; stdout: ` (empty).
+  Exit status 1 was observed before the diagnostic assertion.
+- `invalid_sqlx_connection_options_emit_sanitized_category_before_exit` FAILED:
+  `stdout lacks the database_configuration_invalid terminal diagnostic; stdout: `
+  (empty). Exit 1.
+- `bootstrap_requires_its_database_profile_and_invalid_startup_fails_safely`
+  (exit-2 control) passed; `executable_starts_without_database...` passed.
+  Result: 2 passed, 2 failed.
+
+Fixed (`dfe49d3`, primary checkout and clean worktree):
+`cargo test --locked --test foundation_process` — 4 passed, 0 failed. Both
+regressions pass, the exit-2 control and the normal SIGTERM shutdown test
+(`executable_starts...`) pass.
+
+Manual real-binary observations of the fixed `target/debug/ferl-server` (stdout
+captured to `target/part14-evidence/manual-*.log`; stderr empty):
+
+- Invalid SQLx option (`sslmode=not-a-mode` with a probe password): exit **1**;
+  stdout `{"timestamp":"…","level":"ERROR","fields":{"message":"server terminated with a sanitized failure","category":"database_configuration_invalid"}}`.
+- Occupied loopback port (a separate listener held open): exit **1**; stdout
+  `…"category":"listener_bind_failed"}}` with the same message; no raw
+  `Address already in use` text.
+
+### Commands and results
+
+- Harness: `sh scripts/postgres.sh start` and `sh scripts/postgres.sh ready`
+  passed against the owned `ferl-stage01-postgres` (PostgreSQL 17.6, port 55432).
+  The exported `FERL_TEST_DATABASE_URL`, `FERL_TEST_POSTGRES_CONTAINER` and
+  `FERL_TEST_POSTGRES_PORT` values match `scripts/check.sh`.
+- Focused, primary checkout: `cargo fmt --all -- --check` clean (after one
+  `cargo fmt --all` for the new test's line wrapping);
+  `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`
+  clean (after replacing one redundant closure with the function path).
+  `cargo test --locked --lib telemetry` — 6 passed.
+  `cargo test --locked --test stdout_backpressure --test liveness_admission --test bootstrap --test foundation_process --test foundation_http -- --test-threads=1` — 3, 2, 5, 4 and 2 passed.
+- Full gate, clean detached worktree at the committed implementation
+  (`/private/var/folders/rs/gbl8dx2d0072fmd6fdyr2qs40000gp/T/opencode/ferl-part14-dfe49d3`,
+  excluding the user's untracked docs): `sh scripts/check.sh` exit **0**, log
+  `target/part14-evidence/check-dfe49d3.log`. It ran fmt, locked check,
+  warning-denied Clippy, the proxy pull, the packaged Linux/arm64 build, and
+  `cargo test --locked --workspace --all-targets` plus `cargo test --locked --doc`.
+  Totals across all result blocks: **246 passed, 0 failed, 0 ignored** (105 library,
+  0 binary, 138 integration cases, 3 doctests), which is the 244 from part 13 plus
+  the two new regressions. Included: `telemetry_signals` (1, real Collector,
+  privacy/sampling/outage/drain), `stdout_backpressure` (3), `liveness_admission`
+  (2), `proxy_routing` (1), `release_smoke`/`release_tls` and
+  `multi_instance_process`.
+- Packaging from clean source: `source_tree_clean=true`, `source_revision=dfe49d3927ef9136e6d937402cc79977f0932d70`,
+  target `aarch64-unknown-linux-gnu`, 17 inventoried files, archive
+  `ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz` SHA-256
+  `700268c5953039d5e034f33812a2d258cbe1572f68ffad72c518e6e6b2b3b59b`, binary
+  SHA-256 `1f0abc0b466b1a45bbe58d663d127dd015bd4f94b5e1e86dcc2055c6e2c00e56`,
+  OpenAPI SHA-256 `566e467b0e8fbc51e4492b276c8b44d2a03cfa1a0d854833b9d3380961a78860`
+  (unchanged from part 13). Built in the pinned Bookworm builder
+  `docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`.
+- `git diff --check 9e688be HEAD` passed. Toolchain: rustc/cargo 1.99.1
+  (Homebrew), the same as parts 12 and 13.
+
+### Acceptance scenarios
+
+- **30:** `tests/foundation_process.rs` terminal-diagnostic regressions parse the
+  delivered JSON and scan for the DB password, `postgres://`, `sqlx`, `not-a-mode`,
+  raw bind errors and `os error`. The existing telemetry-privacy suite is retained.
+- **31:** the terminal cleanup ordering, bounded exit and drain behavior are covered
+  by the two regressions, `stdout_backpressure` (withheld-consumer SIGTERM exit
+  within budget), `liveness_admission` (withdrawal and bounded exit), and
+  `telemetry_signals` (Collector outage and stalled-exporter exit).
+
+### Residual items and blockers
+
+- No blocker. No required check was left unexecuted.
+- Only Linux/arm64 packaged execution was run. Hosted CI, Rust 1.94 and any
+  native x86_64 runtime were not run and are not claimed.
+- Diagnostics remain best-effort: the terminal record is eligible for the bounded
+  final drain with a healthy consumer. A stalled consumer, a full sink, or an
+  exhausted deadline can still lose it (part 12 policy); OTLP delivery of the
+  terminal log is not promised when the exporter is unavailable or over budget.
+- The untracked user docs (`readme.md`, `docs/cli-api-handoff.md`,
+  `docs/publication-cicd-agent-handoff.md`) were not edited or committed.
+- The Podman harness container `ferl-stage01-postgres` was started/verified with
+  `sh scripts/postgres.sh start/ready`; it was not reset and its data volume is
+  intact. Other unrelated containers were not touched.
+- No next runtime-hardening part is defined by these briefs (part 13 was the last
+  planned part); the owner should decide the next work.
 
 ## Recorded decisions
 

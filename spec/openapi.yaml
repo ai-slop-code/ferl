@@ -446,12 +446,11 @@ paths:
       tags: [Health]
       operationId: getLiveness
       summary: Check whether the HTTP process can respond
-      description: Requires no database or collector probe. Credentials, including invalid ones, are ignored. Bounded HTTP admission exhaustion may return a structured service_unavailable error.
+      description: Requires no database or collector probe. Credentials, including invalid ones, are ignored. Liveness is isolated from bounded HTTP admission and is not shed when business request capacity is exhausted.
       security: []
       responses:
         '200': { $ref: '#/components/responses/Healthy' }
         '400': { $ref: '#/components/responses/BadRequest' }
-        '503': { $ref: '#/components/responses/Unavailable' }
         '500': { $ref: '#/components/responses/InternalError' }
   /api/health/ready:
     get:

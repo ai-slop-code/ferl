@@ -1,6 +1,6 @@
 # ferl server: staged implementation instructions
 
-This directory is an execution plan for an AI Rust developer implementing the first ferl backend release. Implement the numbered parts in order. Each part defines a bounded increment, target files, implementation steps, and a verification gate.
+This directory is an execution plan for an AI Rust developer implementing the first ferl backend release and its bounded follow-up fixes. Implement the numbered parts in order. Each part defines a bounded increment, target files, implementation steps, and a verification gate.
 
 The repository contained only the business specification and OpenAPI document when these instructions were written. **These files describe future work; no server implementation or passing test results are implied.**
 
@@ -32,12 +32,30 @@ The business specification and OpenAPI are normative. This directory supplies im
 | [09 — Analytics reports](09-analytics-reports.md) | Raw visit pages, interval summaries and grouped breakdowns | 08 | Authorized reports match controlled persisted fixtures |
 | [10 — Observability and lifecycle](10-observability-and-lifecycle.md) | OTLP traces/metrics/logs, privacy verification, bounded drain and export | 09 | Signal capture, outage, redaction and shutdown checks pass |
 | [11 — Release verification](11-release-verification.md) | Independent-process correctness, OpenAPI conformance, packaging and operator docs | 10 | All 51 acceptance scenarios have executable evidence |
+| [12 — Stdout backpressure](12-stdout-backpressure.md) | Bounded nonblocking serving diagnostics and bounded writer shutdown | 11 | A blocked stdout consumer cannot stall requests or natural process exit; bootstrap output remains separate |
+| [13 — Liveness admission](13-liveness-admission.md) | Owner-approved liveness-only admission isolation and matching contract amendment | 12 | Liveness stays responsive under business saturation; readiness and business admission retain their existing behavior |
+| [14 — Terminal error logging](14-terminal-error-logging.md) | Emit sanitized terminal serving failures before telemetry/stdout closure | 13 | Bind and connection-option failures report their cause; existing bounded shutdown and backpressure regressions pass |
 
 The sequence is deliberately linear so a fresh agent can take one file at a time. Keep every completed increment buildable. Part 06 yields a usable link-management API; part 07 adds shortening/redirect behavior; part 09 completes the business endpoints; part 11 establishes first-release readiness. Intermediate increments are development milestones, not claims of a conforming release.
+
+Parts 12–13 are owner-approved runtime follow-ups to the historically completed
+parts 01–11. Assign each to a separate agent. Implement, verify, commit and merge
+part 12 before starting part 13 from the updated `main`; use each file's own
+`implementation/NN-<slug>` branch. The owner accepts existing architecture testing
+for these tasks. These assignments do not require new architecture coverage,
+hosted workflows, staging/restore exercises or a capacity redesign. Their status
+and approved decisions are recorded in [progress.md](progress.md).
+
+Part 14 follows the completed parts 12–13 and fixes terminal-error diagnostic
+ordering on its own branch. The owner's current production-readiness scope is
+code and existing local verification: backups, restore exercises and deployment
+acceptance are outside that scope and are not completion gates for this follow-up.
 
 ## Prompt to give the Rust developer agent
 
 For the full reusable execution prompt, use [developer-prompt.md](developer-prompt.md). The shorter assignment below also incorporates the mandatory Git workflow.
+
+The same file includes [separate part 12, 13 and 14 assignments](developer-prompt.md#runtime-hardening-assignments).
 
 ```text
 Implement part NN from spec/implementation/README.md.

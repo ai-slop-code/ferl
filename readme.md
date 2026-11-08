@@ -9,6 +9,20 @@ in PostgreSQL 17.
 This guide gets a ferl server running from the published container image.
 For building from source, see [Development](docs/development.md).
 
+## Features
+
+- Generated or custom short codes on your own domain.
+- Accounts and API keys with admin/user roles, account isolation, and key rotation.
+- Editable destinations, optional titles, tags, and enable/disable controls.
+- Link search, filtering, sorting, and cursor-based pagination.
+- Per-link visit records, counts, and breakdown reports.
+- Optional anonymous creation, disabled by default, with per-link management tokens.
+- Shared PostgreSQL state, creation rate limits, and permanent code reservations.
+- Structured logs, health endpoints, and optional OpenTelemetry export.
+
+The web interface and CLI client are separate projects. You can use the JSON API
+with `curl` or your own integrations today.
+
 ## Contents
 
 - [Requirements](#requirements)
@@ -175,7 +189,7 @@ ferl_once() {
 ferl_once --version
 ```
 
-The version command should print `ferl-server 0.1.0`, or the version of the
+The version command should print `ferl-server 0.1.1`, or the version of the
 image you pulled.
 
 ## 4. Migrate the database
@@ -262,6 +276,10 @@ A ready server returns:
 `/api/health/live` only confirms the process responds. The root path `/` is not a
 health endpoint.
 
+Liveness remains responsive when business-request admission is saturated.
+Readiness still uses that admission limit and may return a structured
+`service_unavailable` error under overload.
+
 Then create a link with your API key and follow its redirect:
 
 ```sh
@@ -333,6 +351,20 @@ Full procedures are in [Release and self-hosting](docs/release.md).
 If you cannot use the published image, build the server with the pinned Rust
 toolchain. [Development](docs/development.md) describes the toolchain, local
 PostgreSQL fixtures, and the verification commands.
+
+From the repository root, with Rustup, a native C/C++ toolchain, CMake, and
+pkg-config installed:
+
+```sh
+rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+cargo build --locked --release --bin ferl-server
+./target/release/ferl-server --version
+```
+
+The executable is `target/release/ferl-server`; migrations are embedded. Configure
+the process environment using [Configuration](docs/configuration.md), then run
+its separate `migrate`, `bootstrap-admin`, and `serve` commands as described in
+[Release and self-hosting](docs/release.md#first-startup).
 
 ## License
 

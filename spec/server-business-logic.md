@@ -558,6 +558,8 @@ OTLP over HTTP/protobuf is the selected initial transport. Support a configured 
 
 Exporters must have bounded queues, bounded timeouts/retries, and bounded shutdown flushes. Slow/unreachable collectors must not fail HTTP requests, block redirects, grow memory without bound, or create recursive log-export failures. Surface exporter trouble through rate-limited sanitized stdout diagnostics.
 
+Serving stdout diagnostics are bounded and nonblocking. A slow or stalled stdout consumer must not delay HTTP requests, redirects, readiness, or process exit. At most 256 complete diagnostic records, each at most 8 KiB, wait for the consumer; further records are discarded, and when the consumer resumes it receives a sanitized `diagnostic_records_dropped` count. The owner approved this bounded best-effort loss of diagnostic log records on 2026-11-06. It applies only to these serving stdout diagnostics. It does not apply to the one-time bootstrap credential result, HTTP responses, PostgreSQL state, or OTLP export.
+
 ### 14.2 Telemetry data boundaries
 
 Detailed visit data belongs only in PostgreSQL and authorized analytics responses. Application/HTTP/database instrumentation must use an explicit safe attribute policy:
@@ -572,9 +574,9 @@ Detailed visit data belongs only in PostgreSQL and authorized analytics response
 
 - `GET /api/health/live`: 200 while the HTTP process can respond; no database or collector dependency. Return a minimal status object without configuration details.
 - `GET /api/health/ready`: 200 when initialization/schema checks have completed, a bounded PostgreSQL probe succeeds, and the instance is accepting work; otherwise 503. A draining instance is unready. Collector health and analytics backlog do not determine readiness.
-- When bounded global HTTP admission is exhausted, either health route may return the structured 503 `service_unavailable` error instead of invoking its health handler. This capacity response does not add a database/collector dependency to liveness or change the exact `{ "status": "unavailable" }` body for a completed readiness check that fails its conditions.
+- Liveness is isolated from bounded business HTTP admission. It does not acquire or wait for in-flight or waiting capacity, so `GET /api/health/live` returns its normal 200 response, or its normal method/query rejection, while business requests are being shed. Bounded global HTTP admission still applies to business requests and readiness: when it is exhausted, `GET /api/health/ready` may return the structured 503 `service_unavailable` error instead of invoking its health handler. This capacity response does not add a database/collector dependency to readiness or change the exact `{ "status": "unavailable" }` body for a completed readiness check that fails its conditions.
 - Health endpoints require no credentials and do not create visits or consume creation allowance.
-- Graceful shutdown stops accepting new work, allows bounded completion of in-flight work, and attempts bounded analytics/telemetry flushes before closing resources.
+- Graceful shutdown stops accepting new work, allows bounded completion of in-flight work, and attempts bounded analytics/telemetry flushes before closing resources. Pending stdout diagnostics drain within the same total deadline; records still pending at its expiry are discarded, and a blocked stdout consumer cannot keep the process alive.
 
 ## 15. Acceptance scenarios
 

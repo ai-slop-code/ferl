@@ -439,6 +439,32 @@ fn documented_method_path_operation_ids_match_the_reviewed_inventory() {
     );
 }
 
+#[test]
+fn health_response_maps_isolate_liveness_from_admission_overload() {
+    let doc = document();
+    let statuses = |path: &str| -> BTreeSet<String> {
+        doc["paths"][path]["get"]["responses"]
+            .as_object()
+            .unwrap_or_else(|| panic!("GET {path} declares responses"))
+            .keys()
+            .cloned()
+            .collect()
+    };
+    let expected = |codes: &[&str]| -> BTreeSet<String> {
+        codes.iter().map(|code| (*code).to_owned()).collect()
+    };
+    assert_eq!(
+        statuses("/api/health/live"),
+        expected(&["200", "400", "500"]),
+        "liveness has no business-admission overload response"
+    );
+    assert_eq!(
+        statuses("/api/health/ready"),
+        expected(&["200", "400", "500", "503"]),
+        "readiness keeps its admission overload response"
+    );
+}
+
 #[tokio::test]
 async fn production_executable_routes_and_global_method_errors_match_openapi() {
     let database = account_support::migrated_database().await;

@@ -71,7 +71,7 @@ SHA-256 is
 `07d7641e88e852d6891b459c7dbd18f7d0a1db7f0b23850418d7b22718ab5d17`.
 Detailed tool versions, exact provenance, observed proxy peers, and unverified
 platform/hosted-CI scope are recorded in the [Part 11 handoff](progress.md#part-11-handoff--2026-10-29)
-and [execution results](../../docs/release-verification.md#observed-local-results).
+and [execution results](../../docs/release-verification.md#observed-local-results--2026-10-29).
 Hosted CI was not run; this is a local verification result only.
 
 ## Post-release hardening addendum — 2026-10-29
@@ -191,7 +191,7 @@ all-target cases (97 library, 0 binary, 130 integration cases across 52 binaries
 plus 3 separate doctests; proxy 1; release 8 Rust plus 8 Python controls; TLS 2.
 The actual Rust/Cargo/Rustdoc 1.94.0 MSRV command and clean-checkout packaged
 release smoke passed. Complete evidence and the artifact identity are in
-[`docs/release-verification.md`](../../docs/release-verification.md#final-verification-corrections-and-acceptance).
+[`docs/release-verification.md`](../../docs/release-verification.md#final-verification-corrections-and-acceptance--2026-10-29).
 
 The local correction gates passed; native CI acceptance is **Pending
 authorization**, as are staging and restore. These external statuses are not
@@ -375,6 +375,84 @@ output and asserts they remain within each configured total deadline.
 
 Part 10 is a scoped contribution, not the independent release-wide
 rollout/OpenAPI/packaging verification in Part 11.
+
+## Part 12 stdout-backpressure contribution — 2026-11-06
+
+Serving stdout diagnostics are bounded and nonblocking (see
+`progress.md`, Part 12). Executable evidence for this part:
+
+- **31:** `tests/stdout_backpressure.rs::withheld_stdout_consumer_keeps_requests_business_success_and_shutdown_bounded`
+  keeps stdout unread through SIGTERM. Liveness, readiness, a 201 link creation and
+  a 302 redirect complete over TCP, and the process exits within the 3 s total
+  budget plus tolerance.
+- **31 (overflow/recovery):** `tests/stdout_backpressure.rs::temporary_stdout_stall_is_bounded_and_then_delivers_complete_records`
+  observes a `diagnostic_records_dropped` count after release and delivery of a
+  post-stall request record.
+- **29/30 control:** `tests/stdout_backpressure.rs::healthy_stdout_consumer_control_retains_every_request_record`
+  keeps logging enabled, retains every request-completion record and the lifecycle record.
+- **Queue bounds:** `src/telemetry/logging.rs` unit tests
+  (`full_queue_discards_excess_records_without_blocking_producers`,
+  `oversized_record_is_discarded_and_later_records_still_flow`,
+  `failed_write_is_counted_and_reported_before_the_next_record`,
+  `stalled_consumer_is_abandoned_at_the_drain_deadline`,
+  `exporter_diagnostic_lines_enter_the_bounded_queue_without_waiting`).
+- **36/50:** unchanged; existing references remain valid.
+
+Evidence and the clean-source gate result (238 passed, 0 failed) are recorded in
+`progress.md`, Part 12.
+
+## Part 13 liveness-admission contribution
+
+Exact-route liveness is isolated from business in-flight/waiting admission
+(`src/http/router.rs`). Executable evidence:
+
+- **31:** `tests/liveness_admission.rs::tcp_process_keeps_liveness_separate_from_held_database_work_and_exits_within_budget`
+  holds a real account-authority lock so an admin business request waits in
+  PostgreSQL with one in-flight slot and zero waiting slots. Over separate TCP
+  connections, liveness returns 200 `{"status":"ok"}`, excess business and
+  readiness return 503 `service_unavailable`; after SIGTERM, liveness stays 200
+  during withdrawal and readiness stays 503 `service_unavailable`. The held
+  request then completes 201 and the process exits within its 10 s total budget.
+- **31/36 in-process:** `tests/liveness_admission.rs::in_process_liveness_stays_prompt_while_database_held_business_work_saturates_admission`
+  uses the production router with the same held lock; after release it recovers
+  (`/api/v1/me` 200, liveness 200).
+- **38:** `src/http/router.rs::tests::liveness_stays_prompt_while_saturated_business_capacity_sheds_work`
+  (saturated admission, exact body/headers, readiness and business 503 kept,
+  permit reuse), `::liveness_does_not_join_admitted_business_waiters` (one admitted
+  waiter; liveness neither joins nor consumes it; both permits return), and
+  `::exact_liveness_rules_hold_and_aliases_stay_behind_business_admission`
+  (400 query, 405 POST/HEAD with Allow, zero HEAD bytes, and trailing, extra,
+  encoded and case aliases stay 503 under saturation and 404 when unsaturated).
+- **51:** `tests/openapi_release.rs::health_response_maps_isolate_liveness_from_admission_overload`
+  pins `getLiveness` to 200/400/500 and `getReadiness` to keep 503.
+- **Part 12 retained:** `tests/stdout_backpressure.rs` (3 passed) in the closing gate.
+
+Pre-fix evidence (part 12 composition, same new tests): unit 3 failed with
+liveness 503; integration 2 failed at liveness with `503` versus `200`. Closing
+clean-source gate at `f52af28`: `sh scripts/check.sh` 244 passed, 0 failed,
+0 ignored; `sh scripts/check-openapi.sh` 5 passed. Details are in `progress.md`,
+Part 13.
+
+## Part 14 terminal-diagnostic contribution
+
+Terminal serving failures now deliver their sanitized diagnostic before telemetry
+and stdout shut down (`src/main.rs`, `serve`/`serve_command`; see `progress.md`,
+Part 14). Executable evidence:
+
+- **30:** `tests/foundation_process.rs::occupied_listener_port_emits_sanitized_bind_failure_before_exit`
+  and `::invalid_sqlx_connection_options_emit_sanitized_category_before_exit` run the
+  real `ferl-server` executable with canaries (probe password, raw driver/bind
+  text) and assert exit 1, a parsed ERROR record with `listener_bind_failed` or
+  `database_configuration_invalid`, and no leaked text. Pre-fix (base `9e688be`)
+  both failed with an empty stdout diagnostic; post-fix both pass.
+- **31:** the same two tests bound the terminal exit within 10 seconds of child
+  wall time; `tests/foundation_process.rs::bootstrap_requires_its_database_profile_and_invalid_startup_fails_safely`
+  keeps the exit-2 configuration control; `tests/stdout_backpressure.rs` and
+  `tests/liveness_admission.rs` (including SIGTERM exit with stdout withheld) and
+  `tests/telemetry_signals.rs` continue to pass unchanged.
+
+Clean-source gate at implementation `dfe49d3`: `sh scripts/check.sh` exit 0, 246
+passed, 0 failed, 0 ignored; details are in `progress.md`, Part 14.
 
 ## Historical release-audit placeholder
 
