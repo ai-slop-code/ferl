@@ -189,7 +189,7 @@ ferl_once() {
 ferl_once --version
 ```
 
-The version command should print `ferl-server 0.1.0`, or the version of the
+The version command should print `ferl-server 0.1.1`, or the version of the
 image you pulled.
 
 ## 4. Migrate the database

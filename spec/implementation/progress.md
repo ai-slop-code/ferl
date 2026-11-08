@@ -1,5 +1,57 @@
 # Implementation progress and agent handoff
 
+## Published-history integration and v0.1.1 preparation — 2026-11-08
+
+Status: **Verified (awaiting merge)** on `integration/local-hardening`.
+
+The owner authorized integrating the reviewed local work onto the existing
+GitHub `main`, preserving its published history, CI/container delivery, license
+and later fixture fixes. Published baseline:
+`1b9847defadf43cacff247c6c21acd022aecfcd9`. The original local history and pending
+documents are retained locally on `backup/local-main-before-remote-integration`.
+
+The imported changes have these commits in the published lineage:
+
+| Work | Original local integration | Published-lineage commit |
+|---|---|---|
+| Parts 12–13 specifications | `ea1691b` | `f2cefe5` |
+| Part 12 stdout backpressure | `91295dd` | `bdb53a3` |
+| Part 13 liveness admission | `d1abbc6` | `b8ed0f8` |
+| Part 14 specification | `9e688be` | `c28d892` |
+| Part 14 terminal diagnostics | `f744f05` | `833feed` |
+| Pending README/client/publication handoffs | `c6b1f7c` | `aa10c8e` (reconciled) |
+
+Earlier handoffs below retain their original local verification IDs as historical
+evidence; use the published-lineage commits above for current ancestry checks.
+The runtime source, migrations, dependency lockfile and normative contracts at
+`aa10c8e` match the reviewed local runtime. The published MIT package metadata,
+container/release workflows, scripts and fixture fixes are preserved. The image
+README retains its published instructions and incorporates the local feature and
+source-build guidance. CLI contract digests and liveness semantics are updated;
+the publication handoff is labeled as a historical planning snapshot.
+
+Fresh integration verification at clean commit
+`aa10c8ebe8402e8508a6f33e32d24d0ad0924fdf`, before the version bump:
+
+- `sh scripts/check.sh`, with a reused Cargo target cache and two build jobs:
+  passed **243 all-target cases plus 3 doctests**, 0 failed/ignored. Included
+  formatting, locked check/Clippy, PostgreSQL, processes, Collector, OpenAPI,
+  proxy, packaged release smoke and TLS. The Linux/arm64 package was built from
+  the clean committed snapshot using the existing pinned Bookworm builder.
+- `python3 scripts/test_release_verification.py`: **8 passed**.
+- Published-only files and the rewritten schema-v1 compatibility baseline were
+  checked against the remote baseline; its required ancestor remains reachable.
+
+The owner additionally authorized publishing **v0.1.1** through the existing
+version-tag workflow. The package and root lock entry are updated to `0.1.1`;
+the application/API schema versions and dependencies retain their existing values.
+Version validation passed: manifest/root-lock agreement at `0.1.1`, a locked
+`cargo test --test foundation_process` run (4 passed), and the freshly built
+executable's `--version` output `ferl-server 0.1.1`. Documentation validation
+checked 88 local links/anchors, and `git diff --check` passed. Final Git integration
+precedes the push. Successful image publication must be established by the release
+workflow, not inferred from the local pre-version-bump gate above.
+
 ## Terminal error logging follow-up — planned, 2026-11-08
 
 Part 14 is **Planned**; parts 12 and 13 are complete in Git and in the current
@@ -529,7 +581,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 11 Release verification | Complete | Verified implementation `95d053d70c47c7199cfbd45545fa8c08b8d945d1` and handoff-only branch tip `4226cd63298a7599e5866ae545845a590e32616f` from `implementation/11-release-verification`, based on `71d77b3f3838081add13d46cdefe0a91cdd70efd`, are integrated by the explicit local no-ff merge recorded below. The full local gate, OpenAPI, clean-source proxy/package gates, and all 51 scenario evidence mappings are recorded in the Part 11 handoff. |
 | 12 Stdout backpressure | Complete | Verified implementation `77f11a86c78fe06706460689e4772c2ac6a3fc9b` and evidence tip `01ebaf8c7cfb3914d72f57727650ba433a778ef4` from `implementation/12-stdout-backpressure`, base `ea1691b7bb5cc375956bcc6a7cdd3b17dd435f98`, integrated by the explicit no-ff merge into `main`; clean-source `sh scripts/check.sh` passed. See the Part 12 handoff below. |
 | 13 Liveness admission | Complete | Verified implementation `f52af28` and evidence tip `352b844` from `implementation/13-liveness-admission`, base `91295dd` (part 12 merge), integrated into `main` by the explicit no-ff merge recorded in the Part 13 handoff. Clean-source `sh scripts/check.sh` (244 passed, 0 failed, 0 ignored) and `sh scripts/check-openapi.sh` passed. See the Part 13 handoff below. |
-| 14 Terminal error logging | Complete | Verified implementation `dfe49d3927ef9136e6d937402cc79977f0932d70` and evidence tip `8b619d54a6ccb4eefa0572d6607e1e875e419ad1` from `implementation/14-terminal-error-logging`, base `9e688bb`, integrated into `main` by the explicit no-ff merge recorded in the Part 14 section (merge hash reported after creation). Clean-source `sh scripts/check.sh` passed with 246 tests, 0 failed, 0 ignored. |
+| 14 Terminal error logging | Complete | Verified implementation `dfe49d3927ef9136e6d937402cc79977f0932d70` and evidence tip `8b619d54a6ccb4eefa0572d6607e1e875e419ad1` from `implementation/14-terminal-error-logging`, base `9e688be`, integrated into `main` by the explicit no-ff merge recorded in the Part 14 section (merge hash reported after creation). Clean-source `sh scripts/check.sh` passed with 246 tests, 0 failed, 0 ignored. |
 
 ## Part 12 — Bounded stdout diagnostics under backpressure
 
@@ -813,7 +865,7 @@ text below describes the verified state.
 
 Status (at verification): **Verified (awaiting merge)**. Branch
 `implementation/14-terminal-error-logging`; base `main` commit
-`9e688bb117e1e4e6847cd9e22b9e8c7c68630da6` (spec handoff). Prerequisites were
+`9e688be117e1e4e6847cd9e22b9e8c7c68630da6` (spec handoff). Prerequisites were
 confirmed in Git before work: part 12 (`91295dd` merge, implementation `77f11a8`)
 and part 13 (`d1abbc6` merge, implementation `f52af28`) are ancestors of `main`,
 and `main` had no pending merge. The local identity is `Lubos Babjak

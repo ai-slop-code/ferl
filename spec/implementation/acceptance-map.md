@@ -71,7 +71,7 @@ SHA-256 is
 `07d7641e88e852d6891b459c7dbd18f7d0a1db7f0b23850418d7b22718ab5d17`.
 Detailed tool versions, exact provenance, observed proxy peers, and unverified
 platform/hosted-CI scope are recorded in the [Part 11 handoff](progress.md#part-11-handoff--2026-10-29)
-and [execution results](../../docs/release-verification.md#observed-local-results).
+and [execution results](../../docs/release-verification.md#observed-local-results--2026-10-29).
 Hosted CI was not run; this is a local verification result only.
 
 ## Post-release hardening addendum — 2026-10-29
@@ -191,7 +191,7 @@ all-target cases (97 library, 0 binary, 130 integration cases across 52 binaries
 plus 3 separate doctests; proxy 1; release 8 Rust plus 8 Python controls; TLS 2.
 The actual Rust/Cargo/Rustdoc 1.94.0 MSRV command and clean-checkout packaged
 release smoke passed. Complete evidence and the artifact identity are in
-[`docs/release-verification.md`](../../docs/release-verification.md#final-verification-corrections-and-acceptance).
+[`docs/release-verification.md`](../../docs/release-verification.md#final-verification-corrections-and-acceptance--2026-10-29).
 
 The local correction gates passed; native CI acceptance is **Pending
 authorization**, as are staging and restore. These external statuses are not
