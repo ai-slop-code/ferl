@@ -401,6 +401,38 @@ Serving stdout diagnostics are bounded and nonblocking (see
 Evidence and the clean-source gate result (238 passed, 0 failed) are recorded in
 `progress.md`, Part 12.
 
+## Part 13 liveness-admission contribution
+
+Exact-route liveness is isolated from business in-flight/waiting admission
+(`src/http/router.rs`). Executable evidence:
+
+- **31:** `tests/liveness_admission.rs::tcp_process_keeps_liveness_separate_from_held_database_work_and_exits_within_budget`
+  holds a real account-authority lock so an admin business request waits in
+  PostgreSQL with one in-flight slot and zero waiting slots. Over separate TCP
+  connections, liveness returns 200 `{"status":"ok"}`, excess business and
+  readiness return 503 `service_unavailable`; after SIGTERM, liveness stays 200
+  during withdrawal and readiness stays 503 `service_unavailable`. The held
+  request then completes 201 and the process exits within its 10 s total budget.
+- **31/36 in-process:** `tests/liveness_admission.rs::in_process_liveness_stays_prompt_while_database_held_business_work_saturates_admission`
+  uses the production router with the same held lock; after release it recovers
+  (`/api/v1/me` 200, liveness 200).
+- **38:** `src/http/router.rs::tests::liveness_stays_prompt_while_saturated_business_capacity_sheds_work`
+  (saturated admission, exact body/headers, readiness and business 503 kept,
+  permit reuse), `::liveness_does_not_join_admitted_business_waiters` (one admitted
+  waiter; liveness neither joins nor consumes it; both permits return), and
+  `::exact_liveness_rules_hold_and_aliases_stay_behind_business_admission`
+  (400 query, 405 POST/HEAD with Allow, zero HEAD bytes, and trailing, extra,
+  encoded and case aliases stay 503 under saturation and 404 when unsaturated).
+- **51:** `tests/openapi_release.rs::health_response_maps_isolate_liveness_from_admission_overload`
+  pins `getLiveness` to 200/400/500 and `getReadiness` to keep 503.
+- **Part 12 retained:** `tests/stdout_backpressure.rs` (3 passed) in the closing gate.
+
+Pre-fix evidence (part 12 composition, same new tests): unit 3 failed with
+liveness 503; integration 2 failed at liveness with `503` versus `200`. Closing
+clean-source gate at `f52af28`: `sh scripts/check.sh` 244 passed, 0 failed,
+0 ignored; `sh scripts/check-openapi.sh` 5 passed. Details are in `progress.md`,
+Part 13.
+
 ## Historical release-audit placeholder
 
 The original placeholder recorded “not executed” before the later Part 11,

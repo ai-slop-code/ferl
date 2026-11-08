@@ -487,7 +487,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 10 Observability and lifecycle | Complete | Verified implementation `1d84f0a` and handoff-only branch tip `3f21bb4` are integrated from `implementation/10-observability-and-lifecycle` by the explicit no-ff merge from base `6153b768`; see the Part 10 handoff below. |
 | 11 Release verification | Complete | Verified implementation `95d053d70c47c7199cfbd45545fa8c08b8d945d1` and handoff-only branch tip `4226cd63298a7599e5866ae545845a590e32616f` from `implementation/11-release-verification`, based on `71d77b3f3838081add13d46cdefe0a91cdd70efd`, are integrated by the explicit local no-ff merge recorded below. The full local gate, OpenAPI, clean-source proxy/package gates, and all 51 scenario evidence mappings are recorded in the Part 11 handoff. |
 | 12 Stdout backpressure | Complete | Verified implementation `77f11a86c78fe06706460689e4772c2ac6a3fc9b` and evidence tip `01ebaf8c7cfb3914d72f57727650ba433a778ef4` from `implementation/12-stdout-backpressure`, base `ea1691b7bb5cc375956bcc6a7cdd3b17dd435f98`, integrated by the explicit no-ff merge into `main`; clean-source `sh scripts/check.sh` passed. See the Part 12 handoff below. |
-| 13 Liveness admission | Planned | Requires part 12 integrated into `main`; owner approved liveness-only isolation and the corresponding narrow business/OpenAPI amendment. See the part 13 spec. |
+| 13 Liveness admission | Complete | Verified implementation `f52af28` and evidence tip `352b844` from `implementation/13-liveness-admission`, base `91295dd` (part 12 merge), integrated into `main` by the explicit no-ff merge recorded in the Part 13 handoff. Clean-source `sh scripts/check.sh` (244 passed, 0 failed, 0 ignored) and `sh scripts/check-openapi.sh` passed. See the Part 13 handoff below. |
 
 ## Part 12 — Bounded stdout diagnostics under backpressure
 
@@ -631,6 +631,137 @@ through the existing gate is claimed.
 - Harness: restart of a stopped `ferl-stage01-postgres` through `scripts/postgres.sh start`
   fails its port check; needs a separate harness fix. Not changed here.
 - Part 13 (liveness admission) is next, starting from `main` after this merge.
+
+## Part 13 — Liveness isolated from business admission
+
+Status: **Complete** upon the no-ff merge into local `main` that contains this
+record (the merge hash is reported after creation, not embedded here). Earlier
+text below describes the verified state.
+
+Status (at verification): **Verified (awaiting merge)**. Branch `implementation/13-liveness-admission`;
+base `main` commit `91295ddddf79235b607f79444f68b9f6c805f90a` (the part 12 merge).
+Prerequisite confirmed before
+work: part 12 verified implementation `77f11a86c78fe06706460689e4772c2ac6a3fc9b`
+and evidence tip `01ebaf8c7cfb3914d72f57727650ba433a778ef4` are ancestors of
+`main` at that merge. Verified
+implementation commit: `f52af280284d22fa2d1ba37eee54d05632d39156`
+(`fix(part-13): isolate liveness from business admission`). Integration merge
+commit hash is reported after creation, not embedded here.
+
+### Approved contract amendment (owner, 2026-11-06, liveness only)
+
+- Business section 14.3 no longer permits a business-admission 503 on
+  `GET /api/health/live`. It states that liveness is isolated from bounded
+  business HTTP admission and keeps its normal 200 or method/query rejection.
+  Readiness keeps the overload allowance.
+- OpenAPI `getLiveness`: description now says liveness is isolated from bounded
+  HTTP admission; its response map is `200`, `400`, `500` (the `503` entry was
+  removed). `500` is retained as the common unexpected-failure response that
+  readiness also lists; `405` remains covered by the common method rule, as for
+  every other operation. `getReadiness`, shared components and operation IDs are
+  unchanged.
+- Operator docs (`docs/operations.md`, `docs/configuration.md`,
+  `docs/observability.md`) describe the isolation. The historical part 01 and
+  part 02 decisions remain as history.
+
+### Implemented behavior and files
+
+- `src/http/router.rs`: `/api/health/live` is merged outside the business
+  admission layer. Readiness, `/api`, `/api/{*path}`, public short-code and the
+  fallback remain behind `admit_requests` with the unchanged body limit. The
+  request-ID/no-store envelope still wraps every route, including liveness.
+  Liveness keeps its normal handler (method, query and envelope rules).
+- No `src/app.rs`, `src/shutdown.rs`, `src/db/`, configuration, dependency,
+  migration or listener change was needed. Business capacities, excess-work
+  rejection and force-cancel behavior are unchanged.
+- Changed files: `src/http/router.rs` (composition plus unit tests),
+  `tests/liveness_admission.rs` (new), `tests/openapi_release.rs` (response-map
+  test), `spec/openapi.yaml`, `spec/server-business-logic.md`,
+  `docs/{operations,configuration,observability}.md`, and this record plus
+  `acceptance-map.md`.
+
+### Controlled evidence (old versus fixed)
+
+Old composition: a detached worktree at `91295dd` was given the new tests with
+its original router composition. Commands:
+`cargo test --locked --lib http::router` and
+`cargo test --locked --test liveness_admission -- --test-threads=1`.
+
+- Unit: 3 failed (`liveness_stays_prompt_while_saturated_business_capacity_sheds_work`,
+  `liveness_does_not_join_admitted_business_waiters`,
+  `exact_liveness_rules_hold_and_aliases_stay_behind_business_admission`) with
+  liveness `503` instead of `200` or `400`; the pre-existing admission bounds
+  test passed.
+- Integration: 0 passed, 2 failed. Both failed at the liveness assertion with
+  `left: 503, right: 200` while the held request owned the only permit. The
+  held request was confirmed waiting in `pg_locks` first. The worktree was then
+  removed.
+
+Fixed (`f52af28`, primary checkout), focused commands with
+`FERL_TEST_DATABASE_URL=postgres://ferl:ferl@127.0.0.1:55432/ferl_test`,
+`FERL_TEST_POSTGRES_CONTAINER=ferl-stage01-postgres`,
+`FERL_TEST_POSTGRES_PORT=55432`:
+
+- `cargo fmt --all -- --check` clean after `cargo fmt --all`.
+- `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` clean.
+- `cargo test --locked --lib http::router`: 4 passed.
+- `cargo test --locked --test liveness_admission -- --test-threads=1`: 2 passed.
+- `cargo test --locked --test openapi_release health_response`: 1 passed.
+- `cargo test --locked --test foundation_http --test foundation_postgres`
+  (run together): 2 and 1 passed.
+- `cargo test --locked --test routing --test rate_limits --test foundation_process --test foundation_http --test stdout_backpressure --test liveness_admission -- --test-threads=1`:
+  routing 2, rate_limits 5, foundation_process 2, foundation_http 2,
+  stdout_backpressure 3 (part 12 regressions retained), liveness_admission 2 — all passed.
+- `sh scripts/check-openapi.sh`: 4 passed (before the response-map test was
+  added); after it, the clean-worktree run passed 5 (see below).
+
+### Closing gate (clean committed input)
+
+Detached worktree
+`/private/var/folders/rs/gbl8dx2d0072fmd6fdyr2qs40000gp/T/opencode/ferl-part13-f52af28`
+at `f52af28` (the primary checkout's untracked user docs were excluded):
+
+- `sh scripts/check-openapi.sh` → exit 0; `openapi_release` 5 passed, 0 failed.
+  Log: `target/part13-evidence/check-openapi-f52af28.log`.
+- `sh scripts/check.sh` → exit 0. 244 total passed, 0 failed, 0 ignored: 105
+  library, 0 binary, 136 integration cases across all integration binaries, 3
+  doctests. Includes fmt, `cargo check`, warning-denied clippy, PostgreSQL,
+  process, Collector, proxy, release smoke/TLS and packaging. Log:
+  `target/part13-evidence/check-f52af28.log`.
+- Clean-source packaging: `source_tree_clean=true`, verified archive
+  `ferl-server-0.1.0-aarch64-unknown-linux-gnu.tar.gz`, binary SHA-256
+  `5f0ea659cfdd4e0b81b2c8f077a1a37aba4cd813fe00e0b1e41056ae2b51d1a3`,
+  OpenAPI SHA-256 `566e467b0e8fbc51e4492b276c8b44d2a03cfa1a0d854833b9d3380961a78860`.
+  The OpenAPI digest intentionally differs from part 12 (`45677d0d…`) because the
+  normative contract changed. Pinned builder:
+  `docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a852b3e5ea862a610a38b43ac92a33aa87256b75`.
+
+Copies of both logs are in `target/part13-evidence/` of the primary checkout.
+Only Linux/arm64 packaged execution was run; no hosted CI or x86_64 runtime is
+claimed.
+
+### Acceptance scenarios
+
+- 31: liveness observable while stdout/PostgreSQL states vary; process test
+  `tests/liveness_admission.rs::tcp_process_keeps_liveness_separate_from_held_database_work_and_exits_within_budget`
+  adds saturated-admission and withdrawal observations with bounded exit.
+- 36: unchanged drain/replacement evidence; the withdrawal leg is covered above.
+- 38: exact health isolation and aliases are covered by
+  `src/http/router.rs::tests::exact_liveness_rules_hold_and_aliases_stay_behind_business_admission`.
+- 51: `tests/openapi_release.rs::health_response_maps_isolate_liveness_from_admission_overload`.
+
+### Residual items
+
+- Untracked user documentation was not edited. `docs/cli-api-handoff.md`
+  (around its health table and the paragraph beginning "Admission overload can
+  instead return a structured `service_unavailable`") and the untracked
+  `readme.md` describe pre-amendment overload behavior for health routes. The
+  owner should decide whether those files change.
+- The Atlassian MCP containers visible in Podman are unrelated and were not
+  touched. The Stage 01 PostgreSQL container and volume were used read/write
+  only through the harness.
+- Part 13 is the last planned runtime-hardening part; no next implementation
+  stage is defined by these briefs.
 
 ## Recorded decisions
 

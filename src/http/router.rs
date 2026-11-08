@@ -19,8 +19,7 @@ use super::{request_id, response};
 
 pub fn router(state: AppState) -> Router {
     let admission = state.http_admission.clone();
-    Router::new()
-        .route("/api/health/live", any(liveness))
+    let business = Router::new()
         .route("/api/health/ready", any(readiness))
         .route("/api", any(account_api_dispatch))
         .route("/api/{*path}", any(account_api_dispatch))
@@ -33,7 +32,12 @@ pub fn router(state: AppState) -> Router {
         .fallback(path_dispatch)
         .with_state(state)
         .layer(DefaultBodyLimit::max(MAX_API_REQUEST_BODY_BYTES))
-        .layer(middleware::from_fn_with_state(admission, admit_requests))
+        .layer(middleware::from_fn_with_state(admission, admit_requests));
+    // Liveness is merged outside business admission so it never acquires or waits
+    // for in-flight/waiting permits. The shared envelope still wraps every route.
+    Router::new()
+        .route("/api/health/live", any(liveness))
+        .merge(business)
         .layer(middleware::from_fn(request_id::envelope))
 }
 
@@ -160,13 +164,14 @@ fn invalid_health_query(request_id: Uuid) -> axum::response::Response {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
     use axum::{
         body::Body,
         extract::State,
         http::{Method, Request, StatusCode},
         middleware,
+        response::Response,
         routing::get,
     };
     use http_body_util::BodyExt;
@@ -176,9 +181,13 @@ mod tests {
     };
     use tower::ServiceExt;
 
-    use crate::{app::HttpAdmission, http::request_id};
+    use crate::{
+        app::{AppState, HttpAdmission},
+        config::Config,
+        http::request_id,
+    };
 
-    use super::admit_requests;
+    use super::{admit_requests, router};
 
     struct HeldHandler {
         entered: mpsc::UnboundedSender<()>,
@@ -275,5 +284,178 @@ mod tests {
             .await
             .expect("queued handler starts before the deadline");
         assert!(second_started.is_some());
+    }
+
+    fn saturated_app_state(max_waiting: &str) -> AppState {
+        let config = Config::from_map(BTreeMap::from([
+            (
+                "FERL_DATABASE_URL".to_owned(),
+                "postgres://ferl_test@127.0.0.1:1/ferl_test".to_owned(),
+            ),
+            (
+                "FERL_PUBLIC_BASE_URL".to_owned(),
+                "https://short.example.test".to_owned(),
+            ),
+            (
+                "FERL_CURSOR_KEY".to_owned(),
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+            ),
+            ("FERL_DB_POOL_MAX".to_owned(), "1".to_owned()),
+            ("FERL_HTTP_MAX_IN_FLIGHT".to_owned(), "1".to_owned()),
+            ("FERL_HTTP_MAX_WAITING".to_owned(), max_waiting.to_owned()),
+        ]))
+        .expect("test configuration is valid");
+        AppState::from_config(&config).expect("lazy test pool is configured")
+    }
+
+    fn probe(method: Method, uri: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("x-request-id", "client-value")
+            .header("authorization", "Bearer deliberately-invalid")
+            .body(Body::empty())
+            .expect("test request is valid")
+    }
+
+    async fn send(app: &axum::Router, request: Request<Body>) -> Response {
+        timeout(Duration::from_secs(2), app.clone().oneshot(request))
+            .await
+            .expect("response arrives before the deadline")
+            .expect("router service is infallible")
+    }
+
+    async fn body_bytes(response: Response) -> Vec<u8> {
+        timeout(Duration::from_secs(2), response.into_body().collect())
+            .await
+            .expect("response body completes before the deadline")
+            .expect("response body is readable")
+            .to_bytes()
+            .to_vec()
+    }
+
+    async fn assert_admission_overload(response: Response) {
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let request_id = response.headers()["x-request-id"]
+            .to_str()
+            .expect("request ID is text")
+            .to_owned();
+        assert_ne!(request_id, "client-value");
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes(response).await)
+            .expect("admission overload body is JSON");
+        assert_eq!(body["error"]["code"], "service_unavailable");
+        assert_eq!(body["request_id"], request_id);
+    }
+
+    #[tokio::test]
+    async fn liveness_stays_prompt_while_saturated_business_capacity_sheds_work() {
+        let state = saturated_app_state("0");
+        let admission = state.http_admission.clone();
+        let app = router(state);
+        let admitted = admission
+            .try_admit()
+            .expect("holder occupies the only admitted slot");
+        let in_flight = admission.acquire_in_flight().await;
+        assert_eq!(admission.available_admissions(), 0);
+
+        let live = send(&app, probe(Method::GET, "/api/health/live")).await;
+        assert_eq!(live.status(), StatusCode::OK);
+        assert_eq!(live.headers()["cache-control"], "no-store");
+        assert_ne!(live.headers()["x-request-id"], "client-value");
+        assert_eq!(body_bytes(live).await, br#"{"status":"ok"}"#);
+
+        for uri in ["/api/v1/unknown", "/api/health/ready"] {
+            assert_admission_overload(send(&app, probe(Method::GET, uri)).await).await;
+        }
+        assert_eq!(admission.available_admissions(), 0);
+
+        drop(in_flight);
+        drop(admitted);
+        assert_eq!(admission.available_admissions(), 1);
+        let recovered = send(&app, probe(Method::GET, "/api/v1/unknown")).await;
+        assert_eq!(recovered.status(), StatusCode::NOT_FOUND);
+        assert_eq!(admission.available_admissions(), 1);
+    }
+
+    #[tokio::test]
+    async fn liveness_does_not_join_admitted_business_waiters() {
+        let state = saturated_app_state("1");
+        let admission = state.http_admission.clone();
+        let app = router(state);
+        let admitted = admission
+            .try_admit()
+            .expect("holder occupies the admitted slot");
+        let in_flight = admission.acquire_in_flight().await;
+        let waiter = tokio::spawn(app.clone().oneshot(probe(Method::GET, "/api/v1/unknown")));
+        wait_until_waiting_slot_is_taken(&admission).await;
+
+        let live = send(&app, probe(Method::GET, "/api/health/live")).await;
+        assert_eq!(live.status(), StatusCode::OK);
+        assert_eq!(body_bytes(live).await, br#"{"status":"ok"}"#);
+        assert_eq!(admission.available_admissions(), 0);
+        assert_admission_overload(send(&app, probe(Method::GET, "/api/v1/unknown")).await).await;
+
+        drop(in_flight);
+        let waited = timeout(Duration::from_secs(2), waiter)
+            .await
+            .expect("admitted waiter completes after its holder releases")
+            .expect("waiter task does not panic")
+            .expect("router service is infallible");
+        assert_eq!(waited.status(), StatusCode::NOT_FOUND);
+        drop(admitted);
+        assert_eq!(admission.available_admissions(), 2);
+        let recovered = send(&app, probe(Method::GET, "/api/v1/unknown")).await;
+        assert_eq!(recovered.status(), StatusCode::NOT_FOUND);
+        assert_eq!(admission.available_admissions(), 2);
+    }
+
+    #[tokio::test]
+    async fn exact_liveness_rules_hold_and_aliases_stay_behind_business_admission() {
+        const ALIASES: [&str; 5] = [
+            "/api/health/live/",
+            "/api/health/live/extra",
+            "/api/health%2Flive",
+            "/api/%68ealth/live",
+            "/api/health/live%2F",
+        ];
+        let state = saturated_app_state("0");
+        let admission = state.http_admission.clone();
+        let app = router(state);
+        let admitted = admission
+            .try_admit()
+            .expect("holder occupies the only admitted slot");
+        let in_flight = admission.acquire_in_flight().await;
+
+        let query = send(&app, probe(Method::GET, "/api/health/live?unexpected=1")).await;
+        assert_eq!(query.status(), StatusCode::BAD_REQUEST);
+        let query_id = query.headers()["x-request-id"]
+            .to_str()
+            .expect("request ID is text")
+            .to_owned();
+        let body: serde_json::Value =
+            serde_json::from_slice(&body_bytes(query).await).expect("query rejection body is JSON");
+        assert_eq!(body["error"]["code"], "invalid_request");
+        assert_eq!(body["request_id"], query_id);
+
+        let post = send(&app, probe(Method::POST, "/api/health/live")).await;
+        assert_eq!(post.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(post.headers()["allow"], "GET");
+        let head = send(&app, probe(Method::HEAD, "/api/health/live")).await;
+        assert_eq!(head.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(head.headers()["allow"], "GET");
+        assert!(body_bytes(head).await.is_empty());
+
+        for uri in ALIASES {
+            assert_admission_overload(send(&app, probe(Method::GET, uri)).await).await;
+        }
+
+        drop(in_flight);
+        drop(admitted);
+        for uri in ALIASES {
+            let response = send(&app, probe(Method::GET, uri)).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "alias {uri}");
+            assert_eq!(response.headers()["cache-control"], "no-store");
+        }
     }
 }

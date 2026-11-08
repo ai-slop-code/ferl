@@ -128,7 +128,7 @@ or trace-ID labels.
 
 | Name | Type / unit | Dimensions | Exact counting rule |
 | --- | --- | --- | --- |
-| `ferl.http.server.request.count` | Counter `{request}` | `route`, `method`, `status_class`, `outcome` | Every request entering the bounded HTTP middleware, including overload responses; response completion is counted once, and cancellation is counted as `cancelled`. |
+| `ferl.http.server.request.count` | Counter `{request}` | `route`, `method`, `status_class`, `outcome` | Every request entering the HTTP envelope, including business and readiness admission overload responses; liveness is counted here without entering business admission. Response completion is counted once, and cancellation is counted as `cancelled`. |
 | `ferl.http.server.request.duration` | Histogram `ms` | same as request count | Wall-clock time from middleware entry to response completion/cancellation. |
 | `ferl.http.server.active_requests` | UpDownCounter `{request}` | `route`, `method` | RAII count for requests in the outer HTTP pipeline, including bounded waiters. Drop releases the count on cancellation. |
 | `ferl.redirect.outcomes` | Counter `{operation}` | fixed `operation=redirect.follow`, `outcome` | A valid public short-code resolution result; `success` means the 302 is constructed, not that the client followed it. |

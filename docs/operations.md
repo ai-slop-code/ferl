@@ -123,7 +123,8 @@ shutdown, which stops acceptance and gives active requests the remaining part of
 `FERL_HTTP_DRAIN_TIMEOUT_SECS` (default 30). On deadline, ferl drops the Axum
 accept future and cancels remaining application handler futures through the
 admission token; their envelope emits sanitized `service_unavailable` when the
-transport still permits it and releases active-count guards. Already-started
+transport still permits it and releases active-count guards. Liveness is not
+admitted, so this token does not cancel it. Already-started
 connection response writes may remain until Tokio runtime teardown. Health routes
 may no longer be reachable after acceptance stops.
 
@@ -158,9 +159,12 @@ effort, not crash durability.
 
 Readiness requires successful initialization/schema verification, a bounded
 PostgreSQL probe, and accepting state. It is independent of Collector health and
-analytics queue depth. Liveness has no database or Collector dependency. A failed
-completed readiness probe returns exactly `{"status":"unavailable"}`; global
-admission overload remains the structured `service_unavailable` error.
+analytics queue depth. Liveness has no database or Collector dependency and is
+isolated from business HTTP admission: it neither acquires nor waits for
+in-flight or waiting capacity, so it stays available while business requests
+are shed. A failed completed readiness probe returns exactly
+`{"status":"unavailable"}`. When global admission is exhausted, readiness returns
+the structured `service_unavailable` error before its probe runs.
 
 Executable lifecycle evidence is in
 `tests/telemetry_signals.rs::production_otlp_privacy_sampling_outage_drain_and_replacement_are_verified`.

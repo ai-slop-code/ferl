@@ -17,7 +17,7 @@ values are never included in configuration debug output or logs.
 | `FERL_PUBLIC_BASE_URL` | Required | HTTP(S) origin only; no user info, path prefix, query, or fragment. A trailing `/` is accepted and removed. |
 | `FERL_LISTEN_ADDR` | `0.0.0.0:8080` | Rust socket address (`IP:port`). |
 | `FERL_HTTP_MAX_IN_FLIGHT` | `256` | Maximum concurrently serviced HTTP requests per instance, integer from 1 through 4,096. |
-| `FERL_HTTP_MAX_WAITING` | `256` | Maximum admitted requests waiting for an in-flight slot, integer from 0 through 4,096. Requests above the combined in-flight and waiting capacity fail fast with 503 `service_unavailable`. |
+| `FERL_HTTP_MAX_WAITING` | `256` | Maximum admitted requests waiting for an in-flight slot, integer from 0 through 4,096. Business and readiness requests above the combined in-flight and waiting capacity fail fast with 503 `service_unavailable`. `/api/health/live` is isolated from this admission and is not counted against it. |
 | `FERL_ANONYMOUS_CREATION` | `false` | Case-insensitive `true` or `false`. |
 | `FERL_ANONYMOUS_CREATE_LIMIT` | `5` | Positive integer, maximum 1,000,000 attempts per rolling 60 seconds. |
 | `FERL_ACCOUNT_CREATE_LIMIT` | `60` | Positive integer, maximum 1,000,000 attempts per account per rolling 60 seconds (admins included). |
