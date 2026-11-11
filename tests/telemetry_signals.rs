@@ -36,8 +36,6 @@ use uuid::Uuid;
 use account_support::{migrated_database, seed_account};
 use serving_process::{HttpResult, ServingProcess, send, send_with_headers};
 
-const POSTGRES_CONTAINER: &str = "ferl-stage01-postgres";
-
 #[derive(Clone)]
 struct ExportedSpan {
     resource: Value,
@@ -1224,9 +1222,16 @@ async fn run_telemetry_scenario(database: &database_support::IsolatedTestDatabas
     // irrelevant. Liveness stays up; completed readiness and DB-dependent work
     // use the exact OpenAPI health/error responses.
     let outage_process = ServingProcess::start_with(&database_url, &cursor_key, &common).await;
-    let stopped =
-        database_support::command_output("podman", &["stop", "--time", "5", POSTGRES_CONTAINER])
-            .await;
+    let stopped = database_support::command_output(
+        "podman",
+        &[
+            "stop",
+            "--time",
+            "5",
+            database_support::selected_container_name(),
+        ],
+    )
+    .await;
     assert!(
         stopped.status.success(),
         "only the owned PostgreSQL harness stops"
@@ -1256,7 +1261,11 @@ async fn run_telemetry_scenario(database: &database_support::IsolatedTestDatabas
         read_json(&dependent)["error"]["code"],
         "storage_unavailable"
     );
-    let started = database_support::command_output("podman", &["start", POSTGRES_CONTAINER]).await;
+    let started = database_support::command_output(
+        "podman",
+        &["start", database_support::selected_container_name()],
+    )
+    .await;
     assert!(
         started.status.success(),
         "the same owned PostgreSQL container restarts"

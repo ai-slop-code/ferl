@@ -12,12 +12,59 @@ use tokio::{process::Command, time::timeout};
 use url::Url;
 use uuid::Uuid;
 
-pub const CONTAINER_NAME: &str = "ferl-stage01-postgres";
 #[allow(dead_code)]
 const DATABASE_NAME: &str = "ferl_test";
-const POSTGRES_IMAGE_DIGEST: &str =
-    "sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94";
-const POSTGRES_VOLUME: &str = "ferl-stage01-postgres-data";
+
+/// Test-harness-only description of one owned PostgreSQL fixture. These values
+/// mirror `scripts/postgres-fixtures.sh`; production `Config` never reads them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PostgresFixture {
+    pub major: i32,
+    pub container: &'static str,
+    pub volume: &'static str,
+    pub mount: &'static str,
+    pub label: &'static str,
+    pub image: &'static str,
+    pub digest: &'static str,
+    pub default_port: u16,
+}
+
+pub const POSTGRES_17: PostgresFixture = PostgresFixture {
+    major: 17,
+    container: "ferl-stage01-postgres",
+    volume: "ferl-stage01-postgres-data",
+    mount: "/var/lib/postgresql/data",
+    label: "stage01",
+    image: "docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94",
+    digest: "sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94",
+    default_port: 55432,
+};
+
+pub const POSTGRES_18: PostgresFixture = PostgresFixture {
+    major: 18,
+    container: "ferl-stage01-postgres18",
+    volume: "ferl-stage01-postgres18-data",
+    mount: "/var/lib/postgresql",
+    label: "stage01-postgres18",
+    image: "docker.io/library/postgres:18.6-alpine3.23@sha256:f1031bf693d8d60b0a0380c51a3510607c7a93c7c1d18bf7af94a3a8dbeb40b8",
+    digest: "sha256:f1031bf693d8d60b0a0380c51a3510607c7a93c7c1d18bf7af94a3a8dbeb40b8",
+    default_port: 55433,
+};
+
+/// The fixture selected by `FERL_TEST_POSTGRES_MAJOR` (default 17). Invalid
+/// values fail before any container is inspected or started.
+pub fn selected_postgres() -> PostgresFixture {
+    match std::env::var("FERL_TEST_POSTGRES_MAJOR") {
+        Err(std::env::VarError::NotPresent) => POSTGRES_17,
+        Ok(value) if value == "17" => POSTGRES_17,
+        Ok(value) if value == "18" => POSTGRES_18,
+        _ => panic!("FERL_TEST_POSTGRES_MAJOR must be exactly 17 or 18"),
+    }
+}
+
+pub fn selected_container_name() -> &'static str {
+    selected_postgres().container
+}
 
 pub struct IsolatedTestDatabase {
     pool: PgPool,
@@ -94,16 +141,17 @@ impl IsolatedTestDatabase {
         .await
         .expect("process-local PostgreSQL fixture lock is acquired before deadline");
         let harness_lock = acquire_harness_lock().await;
+        let fixture = selected_postgres();
         let database_url = std::env::var("FERL_TEST_DATABASE_URL")
             .expect("FERL_TEST_DATABASE_URL is required; run scripts/postgres.sh start");
         let container_name = std::env::var("FERL_TEST_POSTGRES_CONTAINER")
             .expect("FERL_TEST_POSTGRES_CONTAINER must identify the harness container");
         assert_eq!(
-            container_name, CONTAINER_NAME,
-            "only the test container is allowed"
+            container_name, fixture.container,
+            "FERL_TEST_POSTGRES_CONTAINER must match the selected PostgreSQL major"
         );
         validate_database_url(&database_url);
-        assert_harness_container().await;
+        assert_harness_container(fixture).await;
 
         let admin_pool = PgPoolOptions::new()
             .max_connections(1)
@@ -118,6 +166,8 @@ impl IsolatedTestDatabase {
         .await
         .expect("initial PostgreSQL probe finishes before its deadline")
         .expect("PostgreSQL probe succeeds from the host process");
+        assert_connected_major(&admin_pool, fixture).await;
+        assert_data_directory_under_mount(&admin_pool, fixture).await;
 
         let schema = format!("ferl_stage01_{}", Uuid::new_v4().simple());
         // The identifier is generated locally and consists only of this fixed prefix and UUID hex.
@@ -243,25 +293,57 @@ pub fn validate_database_url(database_url: &str) {
     assert_eq!(parsed.port(), Some(configured_port));
 }
 
-async fn assert_harness_container() {
+async fn assert_connected_major(pool: &PgPool, fixture: PostgresFixture) {
+    let version = timeout(
+        Duration::from_secs(5),
+        sqlx::query_scalar::<_, i32>("SELECT current_setting('server_version_num')::integer")
+            .fetch_one(pool),
+    )
+    .await
+    .expect("server version probe finishes before its deadline")
+    .expect("server version is readable");
+    assert_eq!(
+        version / 10_000,
+        fixture.major,
+        "the connected PostgreSQL server major must match FERL_TEST_POSTGRES_MAJOR"
+    );
+}
+
+async fn assert_data_directory_under_mount(pool: &PgPool, fixture: PostgresFixture) {
+    let data_directory = timeout(
+        Duration::from_secs(5),
+        sqlx::query_scalar::<_, String>("SHOW data_directory").fetch_one(pool),
+    )
+    .await
+    .expect("data_directory probe finishes before its deadline")
+    .expect("data_directory is readable");
+    assert!(
+        data_directory == fixture.mount
+            || data_directory.starts_with(&format!("{}/", fixture.mount)),
+        "data_directory {data_directory} must be under the selected persistent mount {}",
+        fixture.mount
+    );
+}
+
+async fn assert_harness_container(fixture: PostgresFixture) {
     let output = command_output(
         "podman",
         &[
             "inspect",
             "--format",
             "{{ index .Config.Labels \"io.ferl.harness\" }}",
-            CONTAINER_NAME,
+            fixture.container,
         ],
     )
     .await;
     assert!(
         output.status.success(),
-        "expected the Stage 01 Podman container"
+        "expected the selected Podman PostgreSQL container"
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "stage01",
-        "refusing to restart a container not owned by the Stage 01 harness"
+        fixture.label,
+        "refusing to restart a container not owned by the selected harness"
     );
 
     let configuration = command_output(
@@ -270,7 +352,7 @@ async fn assert_harness_container() {
             "inspect",
             "--format",
             "{{.ImageDigest}}|{{range .Mounts}}{{.Name}}:{{.Destination}}{{end}}",
-            CONTAINER_NAME,
+            fixture.container,
         ],
     )
     .await;
@@ -280,11 +362,11 @@ async fn assert_harness_container() {
     );
     assert_eq!(
         String::from_utf8_lossy(&configuration.stdout).trim(),
-        format!("{POSTGRES_IMAGE_DIGEST}|{POSTGRES_VOLUME}:/var/lib/postgresql/data")
+        format!("{}|{}:{}", fixture.digest, fixture.volume, fixture.mount)
     );
 
     let port = std::env::var("FERL_TEST_POSTGRES_PORT").expect("test port is configured");
-    let published = command_output("podman", &["port", CONTAINER_NAME, "5432/tcp"]).await;
+    let published = command_output("podman", &["port", fixture.container, "5432/tcp"]).await;
     assert!(published.status.success(), "container exposes PostgreSQL");
     assert_eq!(
         String::from_utf8_lossy(&published.stdout).lines().last(),
@@ -301,7 +383,7 @@ pub async fn wait_until_postgres_is_ready() {
             let mut command = Command::new("podman");
             command.kill_on_drop(true).args([
                 "exec",
-                CONTAINER_NAME,
+                selected_container_name(),
                 "pg_isready",
                 "-q",
                 "-t",

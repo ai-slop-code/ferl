@@ -29,7 +29,7 @@ use tracing::{
 use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
 use account_support::{migrated_database, production_router, seed_account, seed_anonymous_link};
-use database_support::{CONTAINER_NAME, command_output, wait_until_postgres_is_ready};
+use database_support::{command_output, selected_container_name, wait_until_postgres_is_ready};
 
 struct Captured(Arc<Mutex<String>>);
 
@@ -334,10 +334,14 @@ async fn exercise_database_outages() -> String {
 
     // The test owns the shared harness lock through IsolatedTestDatabase. Use
     // direct Podman commands rather than recursively invoking the locking script.
-    let stopped = command_output("podman", &["stop", "--time", "10", CONTAINER_NAME]).await;
+    let stopped = command_output(
+        "podman",
+        &["stop", "--time", "10", selected_container_name()],
+    )
+    .await;
     let _ = release_tx.send(());
     let result = timeout(Duration::from_secs(12), task).await;
-    let restarted = command_output("podman", &["start", CONTAINER_NAME]).await;
+    let restarted = command_output("podman", &["start", selected_container_name()]).await;
     wait_until_postgres_is_ready().await;
     assert!(
         stopped.status.success(),

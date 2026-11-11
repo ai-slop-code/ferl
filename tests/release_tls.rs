@@ -1,3 +1,6 @@
+#[path = "support/database.rs"]
+#[allow(dead_code)]
+mod database_support;
 #[path = "support/podman_server.rs"]
 #[allow(dead_code)]
 mod podman_server;
@@ -29,7 +32,6 @@ use serving_process::send;
 const CURSOR_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const HARNESS_LABEL: &str = "io.ferl.hardening";
 const HARNESS_VALUE: &str = "post-release-tls";
-const POSTGRES_IMAGE: &str = "docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94";
 const COLLECTOR_IMAGE: &str = "docker.io/otel/opentelemetry-collector-contrib@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b";
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
 static FIXTURE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -596,7 +598,7 @@ async fn packaged_binary_verifies_postgres_tls_and_otlp_https() {
 }
 
 #[tokio::test]
-async fn owned_tls_fixture_cleanup_completes_after_cancellation_and_preserves_stage01() {
+async fn owned_tls_fixture_cleanup_completes_after_cancellation_and_preserves_selected_postgres() {
     let _fixture_guard = FIXTURE_TEST_LOCK.lock().await;
     let run_id = format!("cleanup-{}", Uuid::new_v4().simple());
     let container_name = format!("ferl-hardening-tls-cancel-{run_id}");
@@ -606,7 +608,7 @@ async fn owned_tls_fixture_cleanup_completes_after_cancellation_and_preserves_st
             "inspect",
             "--format",
             "{{.Id}}|{{.ImageDigest}}|{{range .Mounts}}{{.Name}}:{{.Destination}}{{end}}",
-            "ferl-stage01-postgres",
+            database_support::selected_container_name(),
         ],
         Duration::from_secs(10),
     )
@@ -624,7 +626,7 @@ async fn owned_tls_fixture_cleanup_completes_after_cancellation_and_preserves_st
             "inspect",
             "--format",
             "{{.Name}}|{{.Mountpoint}}",
-            "ferl-stage01-postgres-data",
+            database_support::selected_postgres().volume,
         ],
         Duration::from_secs(10),
     )
@@ -698,7 +700,7 @@ async fn owned_tls_fixture_cleanup_completes_after_cancellation_and_preserves_st
             "inspect",
             "--format",
             "{{.Id}}|{{.ImageDigest}}|{{range .Mounts}}{{.Name}}:{{.Destination}}{{end}}",
-            "ferl-stage01-postgres",
+            database_support::selected_container_name(),
         ],
         Duration::from_secs(10),
     )
@@ -715,7 +717,7 @@ async fn owned_tls_fixture_cleanup_completes_after_cancellation_and_preserves_st
             "inspect",
             "--format",
             "{{.Name}}|{{.Mountpoint}}",
-            "ferl-stage01-postgres-data",
+            database_support::selected_postgres().volume,
         ],
         Duration::from_secs(10),
     )
@@ -1023,7 +1025,10 @@ async fn start_tls_postgres(owned: &mut OwnedPodmanRun, name: &str, tls_dir: &Pa
             "--pids-limit",
             "128",
             "--tmpfs",
-            "/var/lib/postgresql/data:rw,nosuid,nodev,size=256m",
+            &format!(
+                "{}:rw,nosuid,nodev,size=256m",
+                database_support::selected_postgres().mount
+            ),
             "--volume",
             &tls_volume,
             "--env",
@@ -1034,8 +1039,7 @@ async fn start_tls_postgres(owned: &mut OwnedPodmanRun, name: &str, tls_dir: &Pa
             "POSTGRES_DB=ferl_test",
             "--entrypoint",
             "/bin/sh",
-            POSTGRES_IMAGE,
-            "-ec",
+            database_support::selected_postgres().image,
             script,
         ],
         Duration::from_secs(60),

@@ -95,11 +95,23 @@ async fn readiness_tracks_schema_and_recovers_after_postgres_restart() {
         StatusCode::OK
     );
 
-    let stopped =
-        command_output("podman", &["stop", "--time", "10", "ferl-stage01-postgres"]).await;
+    let stopped = command_output(
+        "podman",
+        &[
+            "stop",
+            "--time",
+            "10",
+            database_support::selected_container_name(),
+        ],
+    )
+    .await;
     let liveness = call(app.clone(), Method::GET, "/api/health/live").await;
     let during_outage = call(app.clone(), Method::GET, "/api/health/ready").await;
-    let started = command_output("podman", &["start", "ferl-stage01-postgres"]).await;
+    let started = command_output(
+        "podman",
+        &["start", database_support::selected_container_name()],
+    )
+    .await;
     wait_until_postgres_is_ready().await;
     tokio::time::timeout(
         Duration::from_secs(3),

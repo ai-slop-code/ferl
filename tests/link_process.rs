@@ -506,7 +506,7 @@ async fn independent_production_servers_share_link_state_allowance_and_restart_p
                     let mut command = Command::new("podman");
                     command
                         .kill_on_drop(true)
-                        .args(["stop", "--time", "10", database_support::CONTAINER_NAME]);
+                        .args(["stop", "--time", "10", database_support::selected_container_name()]);
                     command.output().await
                 })
                 .await;
@@ -516,7 +516,7 @@ async fn independent_production_servers_share_link_state_allowance_and_restart_p
                     let mut command = Command::new("podman");
                     command
                         .kill_on_drop(true)
-                        .args(["start", database_support::CONTAINER_NAME]);
+                        .args(["start", database_support::selected_container_name()]);
                     command.output().await
                 })
                 .await;

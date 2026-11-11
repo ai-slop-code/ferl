@@ -132,14 +132,23 @@ async fn bootstrap_result_is_one_time_private_and_survives_postgres_restart() {
 
     let stopped = command_output(
         "podman",
-        &["stop", "--time", "10", database_support::CONTAINER_NAME],
+        &[
+            "stop",
+            "--time",
+            "10",
+            database_support::selected_container_name(),
+        ],
     )
     .await;
     assert!(
         stopped.status.success(),
         "only the existing harness container is stopped"
     );
-    let started = command_output("podman", &["start", database_support::CONTAINER_NAME]).await;
+    let started = command_output(
+        "podman",
+        &["start", database_support::selected_container_name()],
+    )
+    .await;
     assert!(
         started.status.success(),
         "the harness container restarts with its named volume"

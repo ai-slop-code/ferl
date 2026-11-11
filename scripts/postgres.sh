@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$SCRIPT_DIR/postgres-fixtures.sh"
+
 if [ "${FERL_POSTGRES_LOCK_HELD:-0}" != 1 ]; then
     command -v python3 >/dev/null 2>&1 || {
         echo "python3 is required to coordinate PostgreSQL harness operations" >&2
@@ -25,22 +28,12 @@ PY
     exit $?
 fi
 
-NAME=ferl-stage01-postgres
-VOLUME=ferl-stage01-postgres-data
-IMAGE=docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
-PORT=${FERL_POSTGRES_PORT:-55432}
+NAME=$FERL_PG_NAME
+VOLUME=$FERL_PG_VOLUME
+MOUNT=$FERL_PG_MOUNT
+IMAGE=$FERL_PG_IMAGE
+PORT=$FERL_PG_PORT
 LABEL_KEY=io.ferl.harness
-
-case "$PORT" in
-    ''|*[!0-9]*)
-        echo "FERL_POSTGRES_PORT must be an integer from 1024 through 65535" >&2
-        exit 2
-        ;;
-esac
-if [ "$PORT" -lt 1024 ] || [ "$PORT" -gt 65535 ]; then
-    echo "FERL_POSTGRES_PORT must be an integer from 1024 through 65535" >&2
-    exit 2
-fi
 
 container_exists() {
     podman container exists "$NAME"
@@ -52,16 +45,16 @@ volume_exists() {
 
 assert_container_owned() {
     label=$(podman inspect --format "{{ index .Config.Labels \"$LABEL_KEY\" }}" "$NAME")
-    [ "$label" = stage01 ] || {
-        echo "refusing to operate on a container not owned by the Stage 01 harness" >&2
+    [ "$label" = "$FERL_PG_LABEL" ] || {
+        echo "refusing to operate on a container not owned by the $FERL_PG_LABEL harness" >&2
         exit 1
     }
 }
 
 assert_volume_owned() {
     label=$(podman volume inspect --format "{{ index .Labels \"$LABEL_KEY\" }}" "$VOLUME")
-    [ "$label" = stage01 ] || {
-        echo "refusing to operate on a volume not owned by the Stage 01 harness" >&2
+    [ "$label" = "$FERL_PG_LABEL" ] || {
+        echo "refusing to operate on a volume not owned by the $FERL_PG_LABEL harness" >&2
         exit 1
     }
 }
@@ -70,17 +63,17 @@ assert_container_configuration() {
     expected_digest=${IMAGE##*@}
     actual_digest=$(podman inspect --format '{{.ImageDigest}}' "$NAME")
     [ "$actual_digest" = "$expected_digest" ] || {
-        echo "refusing to reuse a Stage 01 container with an unexpected image digest" >&2
+        echo "refusing to reuse a $NAME container with an unexpected image digest" >&2
         exit 1
     }
     mount=$(podman inspect --format '{{range .Mounts}}{{.Name}}:{{.Destination}}{{end}}' "$NAME")
-    [ "$mount" = "$VOLUME:/var/lib/postgresql/data" ] || {
-        echo "refusing to reuse a Stage 01 container without its persistent volume" >&2
+    [ "$mount" = "$VOLUME:$MOUNT" ] || {
+        echo "refusing to reuse a $NAME container without its persistent volume" >&2
         exit 1
     }
     assert_volume_owned
-    published=$(podman port "$NAME" 5432/tcp | tail -n 1)
-    [ "$published" = "127.0.0.1:$PORT" ] || {
+    published=$(podman inspect --format '{{index .HostConfig.PortBindings "5432/tcp"}}' "$NAME")
+    [ "$published" = "[{127.0.0.1 $PORT}]" ] || {
         echo "harness container publishes $published, not 127.0.0.1:$PORT; choose its original port or clean up and recreate it" >&2
         exit 1
     }
@@ -90,7 +83,7 @@ wait_ready() {
     attempts=0
     while [ "$attempts" -lt 30 ]; do
         if podman exec "$NAME" pg_isready -q -t 1 -U ferl -d ferl_test; then
-            echo "PostgreSQL container is accepting connections; host connection is verified by the Rust integration test."
+            echo "PostgreSQL $FERL_TEST_POSTGRES_MAJOR container is accepting connections; host connection is verified by the Rust integration test."
             return 0
         fi
         attempts=$((attempts + 1))
@@ -122,16 +115,16 @@ case "${1:-}" in
             if volume_exists; then
                 assert_volume_owned
             else
-                podman volume create --label "$LABEL_KEY=stage01" "$VOLUME" >/dev/null
+                podman volume create --label "$LABEL_KEY=$FERL_PG_LABEL" "$VOLUME" >/dev/null
             fi
             if ! podman image exists "$IMAGE"; then
                 pull_image
             fi
             podman run --pull=never --detach \
                 --name "$NAME" \
-                --label "$LABEL_KEY=stage01" \
+                --label "$LABEL_KEY=$FERL_PG_LABEL" \
                 --publish "127.0.0.1:$PORT:5432" \
-                --volume "$VOLUME:/var/lib/postgresql/data" \
+                --volume "$VOLUME:$MOUNT" \
                 --env POSTGRES_USER=ferl \
                 --env POSTGRES_PASSWORD=ferl \
                 --env POSTGRES_DB=ferl_test \
@@ -140,7 +133,7 @@ case "${1:-}" in
         ;;
     ready)
         container_exists || {
-            echo "PostgreSQL harness container is not present; run 'sh scripts/postgres.sh start'" >&2
+            echo "PostgreSQL harness container $NAME is not present; run 'FERL_TEST_POSTGRES_MAJOR=$FERL_TEST_POSTGRES_MAJOR sh scripts/postgres.sh start'" >&2
             exit 1
         }
         assert_container_owned
@@ -155,7 +148,7 @@ case "${1:-}" in
                 podman stop "$NAME" >/dev/null
             fi
         fi
-        echo "PostgreSQL harness container stopped; persistent volume preserved."
+        echo "PostgreSQL $FERL_TEST_POSTGRES_MAJOR harness container stopped; persistent volume preserved."
         ;;
     cleanup)
         if container_exists; then
@@ -166,7 +159,7 @@ case "${1:-}" in
             assert_volume_owned
             podman volume rm "$VOLUME" >/dev/null
         fi
-        echo "Removed only Stage 01 harness-owned PostgreSQL resources."
+        echo "Removed only $FERL_PG_LABEL harness-owned PostgreSQL $FERL_TEST_POSTGRES_MAJOR resources."
         ;;
     *)
         echo "usage: $0 {pull|start|ready|stop|cleanup}" >&2

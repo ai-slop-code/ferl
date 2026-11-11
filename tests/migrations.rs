@@ -310,6 +310,73 @@ async fn schema_verifier_detects_nullability_and_minimal_reservation_drift() {
 }
 
 #[tokio::test]
+async fn schema_verifier_rejects_required_check_constraints_that_are_not_enforced() {
+    let database = IsolatedTestDatabase::connect_from_harness().await;
+    let config = MigrationConfig::from_map(BTreeMap::from([(
+        "FERL_DATABASE_URL".to_owned(),
+        database.schema_database_url().to_owned(),
+    )]))
+    .expect("migration-specific profile is valid");
+    migrate::run_migrations(&config)
+        .await
+        .expect("isolated schema migrates");
+    let major = sqlx::query_scalar::<_, i32>(
+        "SELECT current_setting('server_version_num')::integer / 10000",
+    )
+    .fetch_one(database.pool())
+    .await
+    .expect("server major is readable");
+
+    sqlx::query("ALTER TABLE links DROP CONSTRAINT links_visit_count_nonnegative_check")
+        .execute(database.pool())
+        .await
+        .expect("test replaces its owned required constraint");
+    if major >= 18 {
+        sqlx::query(
+            "ALTER TABLE links ADD CONSTRAINT links_visit_count_nonnegative_check \
+             CHECK (visit_count >= 0) NOT ENFORCED",
+        )
+        .execute(database.pool())
+        .await
+        .expect("PostgreSQL 18 records the non-enforced required constraint");
+        assert_eq!(
+            migrate::verify_compatibility(database.pool()).await,
+            Err(VerificationError::Incompatible(
+                SchemaIssue::MissingConstraint
+            )),
+            "a present but non-enforced required constraint is incompatible"
+        );
+    } else {
+        assert!(
+            sqlx::query(
+                "ALTER TABLE links ADD CONSTRAINT links_visit_count_nonnegative_check \
+                 CHECK (visit_count >= 0) NOT ENFORCED",
+            )
+            .execute(database.pool())
+            .await
+            .is_err(),
+            "PostgreSQL {major} has no NOT ENFORCED constraint state"
+        );
+    }
+
+    sqlx::query("ALTER TABLE links DROP CONSTRAINT IF EXISTS links_visit_count_nonnegative_check")
+        .execute(database.pool())
+        .await
+        .expect("test removes its drift control");
+    sqlx::query(
+        "ALTER TABLE links ADD CONSTRAINT links_visit_count_nonnegative_check \
+         CHECK (visit_count >= 0)",
+    )
+    .execute(database.pool())
+    .await
+    .expect("test restores the enforced required constraint");
+    migrate::verify_compatibility(database.pool())
+        .await
+        .expect("restored enforced schema verifies again");
+    database.close().await;
+}
+
+#[tokio::test]
 async fn populated_authentic_v1_upgrade_preserves_authoritative_rows_and_digests() {
     let database = IsolatedTestDatabase::connect_from_harness().await;
     database

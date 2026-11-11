@@ -582,11 +582,11 @@ async fn report_authority_history_and_maximum_breakdown_cursors_cross_tcp_instan
                 // This fixture already owns the interprocess harness lock. Restart
                 // only its verified named-volume container directly, then always
                 // attempt recovery before checking the stop outcome.
-                let stopped = podman(&["stop", "--time", "10", database_support::CONTAINER_NAME]).await;
-                let started = podman(&["start", database_support::CONTAINER_NAME]).await;
+                let stopped = podman(&["stop", "--time", "10", database_support::selected_container_name()]).await;
+                let started = podman(&["start", database_support::selected_container_name()]).await;
                 let ready = wait_postgres_ready().await;
                 if !ready {
-                    let retry = podman(&["start", database_support::CONTAINER_NAME]).await;
+                    let retry = podman(&["start", database_support::selected_container_name()]).await;
                     assert!(retry.is_some_and(|output| output.status.success()), "owned PostgreSQL recovery start succeeds");
                     assert!(wait_postgres_ready().await, "owned PostgreSQL becomes ready before cleanup deadline");
                 }
@@ -763,7 +763,7 @@ async fn wait_postgres_ready() -> bool {
     loop {
         let output = podman(&[
             "exec",
-            database_support::CONTAINER_NAME,
+            database_support::selected_container_name(),
             "pg_isready",
             "-q",
             "-t",

@@ -1191,26 +1191,11 @@ fn print_plan(label: &str, plan: &Value) {
             return;
         };
         if let Some(kind) = object.get("Node Type").and_then(Value::as_str) {
-            let rows = object
-                .get("Actual Rows")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let loops = object
-                .get("Actual Loops")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let hits = object
-                .get("Shared Hit Blocks")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let reads = object
-                .get("Shared Read Blocks")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let removed = object
-                .get("Rows Removed by Filter")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
+            let rows = observed_number(object, "Actual Rows");
+            let loops = observed_number(object, "Actual Loops");
+            let hits = observed_number(object, "Shared Hit Blocks");
+            let reads = observed_number(object, "Shared Read Blocks");
+            let removed = observed_number(object, "Rows Removed by Filter");
             let index = object
                 .get("Index Name")
                 .and_then(Value::as_str)
@@ -1223,19 +1208,20 @@ fn print_plan(label: &str, plan: &Value) {
                 .get("Sort Method")
                 .and_then(Value::as_str)
                 .unwrap_or("-");
-            let sort_space = object
-                .get("Sort Space Used")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let memory = object
-                .get("Peak Memory Usage")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            let hash_batches = object
-                .get("Hash Batches")
-                .and_then(Value::as_i64)
-                .unwrap_or_default();
-            nodes.push(format!("{kind}[strategy={strategy},rows={rows},loops={loops},removed={removed},hits={hits},reads={reads},index={index},sort={sort},sort_space_kb={sort_space},peak_memory_kb={memory},hash_batches={hash_batches}]"));
+            let sort_space = observed_number(object, "Sort Space Used");
+            let memory = observed_number(object, "Peak Memory Usage");
+            let hash_batches = observed_number(object, "Hash Batches");
+            nodes.push(format!(
+                "{kind}[strategy={strategy},rows={},loops={},removed={},hits={},reads={},index={index},sort={sort},sort_space_kb={},peak_memory_kb={},hash_batches={}]",
+                rows.as_deref().unwrap_or("-"),
+                loops.as_deref().unwrap_or("-"),
+                removed.as_deref().unwrap_or("-"),
+                hits.as_deref().unwrap_or("-"),
+                reads.as_deref().unwrap_or("-"),
+                sort_space.as_deref().unwrap_or("-"),
+                memory.as_deref().unwrap_or("-"),
+                hash_batches.as_deref().unwrap_or("-"),
+            ));
         }
         if let Some(plans) = object.get("Plans").and_then(Value::as_array) {
             for child in plans {
@@ -1248,8 +1234,23 @@ fn print_plan(label: &str, plan: &Value) {
     walk(&root["Plan"], &mut nodes);
     println!(
         "REPORT_PLAN {label}: planning_ms={} execution_ms={} {}",
-        root["Planning Time"].as_f64().unwrap_or_default(),
-        root["Execution Time"].as_f64().unwrap_or_default(),
+        root["Planning Time"]
+            .as_f64()
+            .expect("EXPLAIN reports a numeric planning time"),
+        root["Execution Time"]
+            .as_f64()
+            .expect("EXPLAIN reports a numeric execution time"),
         nodes.join(" -> ")
     );
+}
+
+/// PostgreSQL 18 reports integral EXPLAIN observations as JSON floats, and
+/// fractional averages remain fractional. Keep every numeric observation exact
+/// enough to inspect; a value that cannot be read is a failed observation.
+fn observed_number(object: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    let value = object.get(key)?;
+    let number = value
+        .as_f64()
+        .unwrap_or_else(|| panic!("EXPLAIN field {key} is not numeric: {value}"));
+    Some(number.to_string())
 }

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-PORT=${FERL_POSTGRES_PORT:-55432}
+. scripts/postgres-fixtures.sh
 sh scripts/postgres.sh start
 sh scripts/postgres.sh ready
 
@@ -19,10 +19,6 @@ sh scripts/collector.sh ready
 export FERL_TEST_OTEL_ENDPOINT="http://127.0.0.1:$FERL_COLLECTOR_PORT"
 export FERL_TEST_OTEL_CAPTURE_DIR="${FERL_COLLECTOR_CAPTURE_DIR:-$PWD/target/collector-captures/$FERL_COLLECTOR_RUN_ID}"
 export FERL_COLLECTOR_CAPTURE_DIR="$FERL_TEST_OTEL_CAPTURE_DIR"
-
-export FERL_TEST_DATABASE_URL="postgres://ferl:ferl@127.0.0.1:$PORT/ferl_test"
-export FERL_TEST_POSTGRES_CONTAINER=ferl-stage01-postgres
-export FERL_TEST_POSTGRES_PORT="$PORT"
 
 cargo fmt --all -- --check
 cargo check --locked --workspace --all-targets --all-features

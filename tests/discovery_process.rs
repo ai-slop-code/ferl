@@ -274,11 +274,11 @@ async fn discovery_cursors_and_fresh_state_cross_independent_servers_and_volume_
 
                 // The shared fixture lock is already owned by IsolatedTestDatabase;
                 // invoke Podman directly here, never a recursively locking script.
-                let stopped = podman(&["stop", "--time", "10", database_support::CONTAINER_NAME]).await;
-                let started = podman(&["start", database_support::CONTAINER_NAME]).await;
+                let stopped = podman(&["stop", "--time", "10", database_support::selected_container_name()]).await;
+                let started = podman(&["start", database_support::selected_container_name()]).await;
                 let ready = wait_postgres_ready().await;
                 if !ready {
-                    let recovered = podman(&["start", database_support::CONTAINER_NAME]).await;
+                    let recovered = podman(&["start", database_support::selected_container_name()]).await;
                     assert!(recovered.status.success(), "a second owned-harness start recovers PostgreSQL");
                     assert!(wait_postgres_ready().await, "owned PostgreSQL becomes ready before cleanup deadline");
                 }
@@ -343,7 +343,7 @@ async fn wait_postgres_ready() -> bool {
     loop {
         let output = podman(&[
             "exec",
-            database_support::CONTAINER_NAME,
+            database_support::selected_container_name(),
             "pg_isready",
             "-q",
             "-t",

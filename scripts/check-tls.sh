@@ -10,7 +10,10 @@ if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
 fi
 
 podman info >/dev/null
-POSTGRES_IMAGE=docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+. "$ROOT/scripts/postgres-fixtures.sh"
+sh scripts/postgres.sh start
+sh scripts/postgres.sh ready
+POSTGRES_IMAGE=$FERL_PG_IMAGE
 COLLECTOR_IMAGE=docker.io/otel/opentelemetry-collector-contrib@sha256:340c9ca6a36617084c6661bdc4f0fe92b7cda5a805d61673ec8db375fddc522b
 if ! podman image exists "$POSTGRES_IMAGE"; then
     podman pull "$POSTGRES_IMAGE"
