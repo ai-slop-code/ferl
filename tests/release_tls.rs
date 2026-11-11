@@ -1081,6 +1081,36 @@ async fn start_tls_postgres(owned: &mut OwnedPodmanRun, name: &str, tls_dir: &Pa
     })
     .await
     .expect("run-isolated PostgreSQL reaches readiness before the deadline");
+
+    let version = podman(
+        &[
+            "exec",
+            name,
+            "psql",
+            "-U",
+            "ferl",
+            "-d",
+            "ferl_test",
+            "-X",
+            "-tAc",
+            "SHOW server_version_num",
+        ],
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        version.status.success(),
+        "run-isolated PostgreSQL reports its server version"
+    );
+    let version_num = String::from_utf8_lossy(&version.stdout)
+        .trim()
+        .parse::<i32>()
+        .expect("PostgreSQL server_version_num is numeric");
+    assert_eq!(
+        version_num / 10_000,
+        database_support::selected_postgres().major,
+        "the packaged TLS fixture runs the selected PostgreSQL major"
+    );
 }
 
 async fn start_tls_collector(owned: &mut OwnedPodmanRun, name: &str, tls_dir: &Path) {
