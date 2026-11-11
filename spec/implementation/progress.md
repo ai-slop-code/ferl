@@ -1,5 +1,167 @@
 # Implementation progress and agent handoff
 
+## Part 15 — PostgreSQL 18 support
+
+Status: **Verified (awaiting merge)**. Branch `implementation/15-postgresql-18-support`,
+base `main` `d1d586546eb061a0edc6ce48638ae22fdab6a46f`, verified implementation
+commit `fc2cbbe` (the code, tests, and scripts that every gate below ran against).
+After it, only documentation and this record changed, plus one comment-only edit
+in `src/rate_limit/repository.rs` (`EXTRACT ... PostgreSQL 17 and 18`). That
+comment change was checked with `cargo fmt --all -- --check` and a locked
+all-target `cargo check` at the part tip. The explicit no-ff merge reports the
+final part tip (the commit containing this record) and changes this status to Complete.
+
+### Compatibility policy and runtime
+
+- `src/db/migrate.rs`: `MINIMUM_SUPPORTED_POSTGRES_MAJOR = 17` and
+  `MAXIMUM_SUPPORTED_POSTGRES_MAJOR = 18`; `is_supported_postgres_version_num`
+  accepts `[170000, 190000)`. The unit test covers `169999`, `170000`, `170006`,
+  `179999`, `180000`, `180004`, `189999`, `190000`, `190001`, `0`, `-1`, `i32::MIN`
+  and `i32::MAX`. Both call sites (migration and `verify_connection`) use it.
+- Schema version 2, both migration checksums, the advisory-lock key, deadlines,
+  and transactional DDL are unchanged. `migrations/` is byte-identical to the
+  baseline (`git diff d1d5865 -- migrations` is empty).
+- Compatibility correction (reproduced): on PostgreSQL 18, `pg_constraint` can
+  represent a required named constraint as present but `NOT ENFORCED`. The
+  verifier now reads `pg_constraint.conenforced` only when the server major is 18
+  or newer, after the version gate, and reports `schema_constraint_missing`.
+  The control `tests/migrations.rs::schema_verifier_rejects_required_check_constraints_that_are_not_enforced`
+  drops and re-adds `links_visit_count_nonnegative_check`: on 18 it must reject
+  the non-enforced state; on 17 it asserts PostgreSQL refuses the syntax.
+  Named-constraint and nullability checks are unchanged, because PostgreSQL 18's
+  extra `NOT NULL` catalog rows do not affect the named-pair count and
+  `information_schema.columns` nullability was verified on the real server.
+
+### Harness selection
+
+- `scripts/postgres-fixtures.sh` (new, sourced) is the single shell definition of
+  `FERL_TEST_POSTGRES_MAJOR` (`17` default, exactly `17` or `18`; empty or other
+  values exit 2). It exports `FERL_PG_*`, `FERL_TEST_DATABASE_URL`,
+  `FERL_TEST_POSTGRES_CONTAINER`, and `FERL_TEST_POSTGRES_PORT`. Default ports:
+  17 → 55432, 18 → 55433. `FERL_POSTGRES_PORT` remains the explicit override.
+- Images: 17 `docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85…eee94`
+  (unchanged); 18 `docker.io/library/postgres:18.6-alpine3.23@sha256:f1031bf693d8d60b0a0380c51a3510607c7a93c7c1d18bf7af94a3a8dbeb40b8`.
+  The 18 digest is the manifest-list digest, verified from the Docker Hub tag
+  metadata and the registry manifest (`docker-content-digest`), which lists
+  `linux/amd64` and `linux/arm64` entries.
+- `scripts/postgres.sh` operates only on the selected container, volume, mount,
+  and label (`stage01` for 17, `stage01-postgres18` for 18). The published-port
+  check now reads `HostConfig.PortBindings`, which also works for a stopped
+  fixture (`podman port` prints nothing for a stopped container; this was an
+  existing defect that blocked restarting the stopped 17 fixture).
+- Gate scripts (`check.sh`, `check-openapi.sh`, `check-proxy.sh`,
+  `check-release.sh`, `check-tls.sh`) source the same file. `check-tls.sh` now
+  starts and readies the persistent fixture that the cancellation regression
+  requires.
+- Rust: `tests/support/database.rs` defines `PostgresFixture` (`POSTGRES_17`,
+  `POSTGRES_18`) and `selected_postgres()`. `connect_from_harness` validates the
+  selected container name, label, digest, `volume:mount`, loopback port, the
+  connected `server_version_num` major, and that `data_directory` is under the
+  selected mount. Consumers that named `CONTAINER_NAME` or the literal Stage 01
+  container now call `selected_container_name()` / `selected_postgres()`.
+  `release_tls.rs` includes `database_support` for these values.
+
+### Retained Part 07 binary
+
+`tests/legacy_compatibility.rs::retained_part07_binary_compatibility_is_exact_for_the_selected_postgres_major`
+builds commit `9bcf7c0c…` unchanged and branches on the connected major:
+- 17: the original sequence (v1 binary migrates and serves; current binary
+  upgrades to v2; old binary reports `schema_version_newer_than_binary`; current
+  binary becomes ready).
+- 18: the unmodified old binary's `migrate` exits nonzero with
+  `postgres_version_unsupported`; `_sqlx_migrations` and `links` are absent after
+  that refusal; its serving process stays live (`/api/health/live` 200) and
+  unready (`/api/health/ready` 503) and logs the category; the current binary then
+  migrates the same fresh schema and serves ready.
+
+### Plan evidence correction
+
+On PostgreSQL 18, EXPLAIN JSON emits integral observations as floats (for
+example `"Actual Rows": 51.0`; a fractional average would be `2.00`-style). The
+existing test-only printers read them with `as_i64()` and silently printed `0`.
+The printers in `src/links/list_repository.rs` and `src/analytics/reports/tests.rs`
+now read every numeric observation with `as_f64()` and panic on a non-numeric
+value. Observed on 18 after the fix: `Limit rows=51/51`, and the same on 17.
+The existing index-name assertions passed on both majors unchanged; no index
+assertion was relaxed and no planner feature was disabled.
+
+### Packaged TLS and CI
+
+- `tests/release_tls.rs` uses the selected image and `database_support::selected_postgres().mount`
+  for the tmpfs (`/var/lib/postgresql` on 18). It asserts the packaged PostgreSQL
+  server's major equals the selection. Caught and fixed during development:
+  I had dropped the `-ec` argument from the TLS fixture command, which made the
+  script run as a filename; the failing diagnostic was removed before commit.
+- `.github/workflows/verify.yml`: `release-gate` is a matrix over `17` and `18`
+  with `FERL_TEST_POSTGRES_MAJOR` set per job; both postgres images are pulled.
+  `candidate-image` runs `check-image.sh` for 17 and 18. `check-image.sh` now
+  writes `check-summary-postgresql-<major>.json` (and records the observed server
+  version and image), so the two summaries do not overwrite each other.
+  `release.yml` publishes only after `verify`, so publication depends on both majors.
+
+### Verification commands and observed results
+
+Environment: macOS arm64 host, Podman 6.1.4 machine (`podman-machine-default`,
+started from the stopped state), Rust 1.99.1, `ferl-stage01-postgres` (17.6) and
+`ferl-stage01-postgres18` (18.6, `sha256:f1031bf…`, `server_version_num` 180006)
+running. The 18 registry pull needed a per-registry CA (below).
+
+| Command | 17 | 18 |
+| --- | --- | --- |
+| `FERL_TEST_POSTGRES_MAJOR=N sh scripts/check.sh` (fmt, locked check, warning-denied Clippy, all-target tests, doctests, packaged suites) | **exit 0**; 247 passed, 0 failed, 0 ignored across 57 result blocks (56 all-target binaries + 1 doctest block) | **exit 0**; same counts |
+| `FERL_TEST_POSTGRES_MAJOR=N sh scripts/check-openapi.sh` | 5 passed | 5 passed |
+| `FERL_TEST_POSTGRES_MAJOR=N sh scripts/check-proxy.sh` | 1 passed | 1 passed |
+| `FERL_TEST_POSTGRES_MAJOR=N sh scripts/check-release.sh` | openapi 5, proxy 1, release smoke 1, TLS 2 passed (plus the Python verifier controls) | same |
+| `FERL_TEST_POSTGRES_MAJOR=N sh scripts/check-tls.sh` | 2 passed (positive verify-full, negative CA/hostname, cancellation regression) | 2 passed |
+| `FERL_TEST_POSTGRES_MAJOR=N cargo test --test migrations` | (in check.sh) | 11 passed incl. the new NOT ENFORCED control |
+| `FERL_TEST_POSTGRES_MAJOR=N cargo test --test legacy_compatibility` | 1 passed (original v1→v2 path) | 1 passed (fail-closed + current-binary ready path) |
+| `FERL_TEST_POSTGRES_MAJOR=N cargo test --lib` plan tests | 2 passed; `rows=51/51` | 2 passed; `rows=51/51` |
+| `scripts/check-image.sh` | **not executed**: needs an `linux/amd64` candidate; this host is arm64 and the owner has ruled out local amd64 testing | same |
+
+Focused controls (run on the 18 fixture unless stated):
+- Selector: `FERL_TEST_POSTGRES_MAJOR=19`, `17.6`, and empty all exit 2 before
+  any container operation; the Rust test helper panics with the same message.
+- Identity: `FERL_TEST_POSTGRES_MAJOR=18 FERL_POSTGRES_PORT=55432 … ready` and the
+  17 fixture with port 55433 both fail with the published-port mismatch and exit 1.
+- Persistence (18): a marker row in a probe schema survived `stop`/`start`, and
+  survived removing the container (`podman rm`, volume kept) and recreating it from
+  the same `ferl-stage01-postgres18-data` volume; `data_directory` was
+  `/var/lib/postgresql/18/docker`. The probe schema was dropped afterwards.
+- Isolation: the 17 container ID was unchanged across the 18 operations, and the 17
+  volume was never touched. `scripts/postgres.sh cleanup` was not run.
+- `git diff d1d5865 -- migrations` is empty; `cargo fmt --all -- --check` and
+  warning-denied Clippy pass at `fc2cbbe`.
+
+Raw evidence (ignored `target/`): `target/part15-evidence/` (`check-17.log`,
+`check-18.log`, `check-{openapi,proxy,release}-{17,18}.log`,
+`check-tls-{17,18}.log`, `focused-summary.txt`).
+
+### Not verified
+
+- Candidate-image acceptance (`scripts/check-image.sh`) for either major is
+  **not executed** on this host, by owner direction. The workflow and script are
+  updated and must be run on a linux/amd64 host (the `candidate-image` job).
+- No mutation control was run to prove that the `NOT ENFORCED` check is what
+  rejects the state (the test passes; the removed-check mutation was not tried).
+- Hosted CI and native linux/amd64 runtime remain unverified, as in Part 11.
+
+### Host environment changes (disclosed)
+
+The Podman VM could not reach `registry-1.docker.io` because the corporate proxy
+re-signs TLS with a CA the VM does not trust. To pull the pinned 18 image I wrote
+the intermediate and root proxy CA to `~core/.config/containers/certs.d/{docker.io,registry-1.docker.io}/ca.crt`
+inside the VM. This is per-registry trust; no VM-wide store was changed. It can be
+removed with `podman machine ssh 'rm -r ~/.config/containers/certs.d/docker.io ~/.config/containers/certs.d/registry-1.docker.io'`.
+
+### Documentation
+
+`readme.md`, `docs/database.md` (supported versions, schema versus cluster upgrade,
+`#postgresql-major-upgrades`), `docs/development.md` (selector table, lifecycle,
+gate commands), `docs/release.md`, `docs/operations.md`, `docs/cicd.md`,
+`docs/creation-allowance.md`, `src/rate_limit/repository.rs` comment, and
+`spec/implementation/README.md`. Historical release reports and
+`docs/publication-cicd-agent-handoff.md` are unchanged; new evidence is recorded here.
+
 ## Published-history integration and v0.1.1 preparation — 2026-11-08
 
 Status: **Complete** for local integration of `integration/local-hardening` into
@@ -585,6 +747,7 @@ Status lifecycle: Planned → In progress → Verified (awaiting merge) → Comp
 | 12 Stdout backpressure | Complete | Verified implementation `77f11a86c78fe06706460689e4772c2ac6a3fc9b` and evidence tip `01ebaf8c7cfb3914d72f57727650ba433a778ef4` from `implementation/12-stdout-backpressure`, base `ea1691b7bb5cc375956bcc6a7cdd3b17dd435f98`, integrated by the explicit no-ff merge into `main`; clean-source `sh scripts/check.sh` passed. See the Part 12 handoff below. |
 | 13 Liveness admission | Complete | Verified implementation `f52af28` and evidence tip `352b844` from `implementation/13-liveness-admission`, base `91295dd` (part 12 merge), integrated into `main` by the explicit no-ff merge recorded in the Part 13 handoff. Clean-source `sh scripts/check.sh` (244 passed, 0 failed, 0 ignored) and `sh scripts/check-openapi.sh` passed. See the Part 13 handoff below. |
 | 14 Terminal error logging | Complete | Verified implementation `dfe49d3927ef9136e6d937402cc79977f0932d70` and evidence tip `8b619d54a6ccb4eefa0572d6607e1e875e419ad1` from `implementation/14-terminal-error-logging`, base `9e688be`, integrated into `main` by the explicit no-ff merge recorded in the Part 14 section (merge hash reported after creation). Clean-source `sh scripts/check.sh` passed with 246 tests, 0 failed, 0 ignored. |
+| 15 PostgreSQL 18 support | Verified (awaiting merge) | Verified implementation `fc2cbbe` on `implementation/15-postgresql-18-support`, base `d1d5865`. `FERL_TEST_POSTGRES_MAJOR=17` and `=18 sh scripts/check.sh` each exited 0 (247 passed, 0 failed, 0 ignored). Focused openapi/proxy/release and packaged TLS gates passed on both majors. Candidate-image check on linux/amd64 not executed locally. See the Part 15 handoff. |
 
 ## Part 12 — Bounded stdout diagnostics under backpressure
 

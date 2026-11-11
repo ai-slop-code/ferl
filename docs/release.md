@@ -132,9 +132,14 @@ artifact-distribution process when one is established.
 bounds, precedence, and command-specific scope); examples below only highlight
 fleet-critical values.
 
-Provision PostgreSQL 17.x, create a database/role and (if used) a schema, then
+Provision PostgreSQL 17.x or 18.x, create a database/role and (if used) a schema, then
 point **every** ferl instance at the same PostgreSQL primary/read-write endpoint
-and schema. The supported ferl schema is v2. Create secrets out of band; never
+and schema. The supported ferl schema is v2. The supported PostgreSQL major is
+the connected server's version. A ferl schema migration is not a PostgreSQL
+major upgrade: move a cluster from 17 to 18 with the operator's PostgreSQL
+upgrade procedure, then run `migrate` and recheck readiness. A 17-only binary is
+not a rollback target after the database has moved to 18. See
+[database operations](database.md#postgresql-major-upgrades). Create secrets out of band; never
 put them in this document, shell history, telemetry, or a shared example file.
 
 ```sh

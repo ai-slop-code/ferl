@@ -4,7 +4,7 @@
 
 ferl is a URL-shortening backend. It exposes a JSON API for accounts, links,
 and visit analytics, and it serves short links as HTTP redirects. State lives
-in PostgreSQL 17.
+in PostgreSQL 17.x or 18.x.
 
 This guide gets a ferl server running from the published container image.
 For building from source, see [Development](docs/development.md).
@@ -42,8 +42,10 @@ with `curl` or your own integrations today.
 
 - A **Linux x86_64** host with **Podman** (or another Docker-compatible runtime
   configured for `linux/amd64`).
-- **PostgreSQL 17.x** reachable from the host, with TLS enabled and SCRAM
-  authentication. ferl does not need any PostgreSQL extensions.
+- **PostgreSQL 17.x or 18.x** reachable from the host, with TLS enabled and SCRAM
+  authentication. ferl does not need any PostgreSQL extensions. The supported
+  version is the connected server's version; `psql --version` alone does not
+  establish it.
 - A CA certificate that trusts the PostgreSQL server, saved as a PEM file.
 - A public hostname and a reverse proxy that terminates HTTPS. The examples
   below run ferl on `127.0.0.1:8080` for a proxy on the same host.
@@ -64,11 +66,16 @@ psql \
   -X -W -v ON_ERROR_STOP=1
 ```
 
-Confirm the server is PostgreSQL 17:
+Confirm the server is PostgreSQL 17 or 18. Use a PostgreSQL 18 client
+(`psql`, `pg_dump`, `pg_restore`) for PostgreSQL 18 setup and backup commands:
 
 ```sql
 SHOW server_version;
 ```
+
+The ferl binary supports PostgreSQL 17.x and 18.x. An existing PostgreSQL 17
+cluster is not converted by installing a new ferl binary; see
+[docs/database.md](docs/database.md#postgresql-major-upgrades).
 
 Create a dedicated role and database for ferl. The role owns the database and
 runs both migrations and the server:
