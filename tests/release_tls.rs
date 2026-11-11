@@ -1040,6 +1040,7 @@ async fn start_tls_postgres(owned: &mut OwnedPodmanRun, name: &str, tls_dir: &Pa
             "--entrypoint",
             "/bin/sh",
             database_support::selected_postgres().image,
+            "-ec",
             script,
         ],
         Duration::from_secs(60),
