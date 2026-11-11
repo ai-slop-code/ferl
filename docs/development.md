@@ -51,27 +51,47 @@ It does not restart or remove the retained `ferl-stage01-postgres-data` volume.
 
 ## PostgreSQL with Podman
 
-This harness owns only the container `ferl-stage01-postgres` and volume
-`ferl-stage01-postgres-data`. It uses the pinned image
-`docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94`
-and publishes loopback port 55432 by default. The named volume is persistent
-across stop/start and restart tests. Use a different free port with
-`FERL_POSTGRES_PORT`.
+The harness selects one PostgreSQL major per run with the test-only variable
+`FERL_TEST_POSTGRES_MAJOR` (`17` or `18`, default `17`). It is not production
+configuration and is not read by `Config`. Each major owns separate resources;
+switching selections never repurposes or deletes the other volume.
+
+| Selection | Container | Volume | Data mount | Default loopback port | Image pin |
+| --- | --- | --- | --- | ---: | --- |
+| `17` | `ferl-stage01-postgres` | `ferl-stage01-postgres-data` | `/var/lib/postgresql/data` | 55432 | `postgres:17.6-alpine3.22` |
+| `18` | `ferl-stage01-postgres18` | `ferl-stage01-postgres18-data` | `/var/lib/postgresql` | 55433 | `postgres:18.6-alpine3.23` |
+
+Both pins are by manifest-list digest (17: `sha256:ef257d…eee94`; 18:
+`sha256:f1031bf…b40b8`, verified on Docker Hub and the registry manifest). The
+shared definitions live in `scripts/postgres-fixtures.sh`; `FERL_POSTGRES_PORT`
+overrides the default port. The 18 data directory is
+`/var/lib/postgresql/18/docker`, under the mounted volume.
+
+The full gate for each major, run sequentially:
+
+```sh
+FERL_TEST_POSTGRES_MAJOR=17 sh scripts/check.sh
+FERL_TEST_POSTGRES_MAJOR=18 sh scripts/check.sh
+```
+
+The owned lifecycle for one major, with the same commands for either selection:
 
 ```sh
 podman info
 podman machine list
 # If the existing default machine is stopped:
 podman machine start
-sh scripts/postgres.sh pull
-sh scripts/postgres.sh start
-sh scripts/postgres.sh ready
-FERL_TEST_DATABASE_URL=postgres://ferl:ferl@127.0.0.1:55432/ferl_test \
-FERL_TEST_POSTGRES_CONTAINER=ferl-stage01-postgres \
-FERL_TEST_POSTGRES_PORT=55432 \
-cargo test --test foundation_postgres -- --nocapture
-sh scripts/postgres.sh stop
+FERL_TEST_POSTGRES_MAJOR=18 sh scripts/postgres.sh pull
+FERL_TEST_POSTGRES_MAJOR=18 sh scripts/postgres.sh start
+FERL_TEST_POSTGRES_MAJOR=18 sh scripts/postgres.sh ready
+FERL_TEST_POSTGRES_MAJOR=18 cargo test --test foundation_postgres -- --nocapture
+FERL_TEST_POSTGRES_MAJOR=18 sh scripts/postgres.sh stop
 ```
+
+The test process asserts that the selected container, digest, mount, label and
+loopback port match the selection, and that the connected server's
+`server_version_num` has the selected major. An invalid selector, an empty
+selector, or a port/identity mismatch fails before any container is changed.
 
 The image pull is pinned by digest and uses normal TLS verification. If your
 network intercepts registry TLS, add the trusted CA to the Podman trust store
@@ -84,7 +104,7 @@ deadline. The integration test then proves a successful connection from the
 host Rust process, checks readiness through the real PostgreSQL pool, and
 stops/restarts only the label-verified harness container to verify recovery
 while preserving its volume. `stop` preserves data. The explicitly destructive
-`cleanup` command removes only the container and volume after verifying their harness labels.
+`cleanup` command removes only the selected container and volume after verifying their harness labels.
 Do not point test variables at a development or production database: the test
 restarts the harness-owned PostgreSQL container.
 

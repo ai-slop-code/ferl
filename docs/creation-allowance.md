@@ -122,7 +122,7 @@ materializes the charge history. For sorted active timestamps, Retry-After is:
 max(1, ceil(t[n - L] + 60 seconds - sample))
 ```
 
-PostgreSQL 17 EXTRACT yields exact NUMERIC interval seconds, not floating point;
+PostgreSQL 17 and 18 EXTRACT yields exact NUMERIC interval seconds, not floating point;
 conversion to a checked 1–60 integer follows CEIL. Seven active charges with a
 reduced limit of three require the **fifth oldest** expiration. Tests cover that
 case, equal times, exact 60-second age, ±1 microsecond, fractional rounding,

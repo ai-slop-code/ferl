@@ -107,7 +107,7 @@ pub(super) async fn allowance(
     let offset = count
         .checked_sub(i64::from(limit))
         .ok_or(CreationFailure::Internal)?;
-    // EXTRACT returns NUMERIC on PostgreSQL 17: exact interval microseconds,
+    // EXTRACT returns NUMERIC on PostgreSQL 17 and 18: exact interval microseconds,
     // rounded upwards only once. OFFSET n-L handles reduced startup limits.
     let seconds: i64 = sqlx::query_scalar(
         "SELECT greatest(1, ceil(extract(epoch FROM \

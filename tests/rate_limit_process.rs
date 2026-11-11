@@ -212,7 +212,7 @@ async fn independent_processes_share_allowance_and_restarts_preserve_durable_cha
     // script. Podman restart preserves the named volume and harness ownership.
     let restarted = database_support::command_output(
         "podman",
-        &["restart", "--time", "10", database_support::CONTAINER_NAME],
+        &["restart", "--time", "10", database_support::selected_container_name()],
     )
     .await;
     database_support::wait_until_postgres_is_ready().await;

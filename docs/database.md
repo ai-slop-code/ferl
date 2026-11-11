@@ -2,8 +2,10 @@
 
 ## Supported versions and schema identity
 
-The supported database is PostgreSQL **17.x** (the integration gate uses the
-pinned PostgreSQL 17.6 image). The current ferl schema range is exactly version
+The supported database is PostgreSQL **17.x or 18.x**; the same binary serves
+either major. The integration gates run pinned PostgreSQL 17.6 and 18.6 images.
+The supported version is the connected server's `server_version_num`, not the
+client's version. The current ferl schema range is exactly version
 **2**. The binary becomes ready only when the configured database and current
 `search_path` contain the complete version-1 base schema, version-2 discovery
 indexes, and SQLx migration history with both required checksums. A newer/unknown
@@ -14,8 +16,30 @@ does not rewrite or repair an incompatible history. Deploy the binary that owns
 the required schema version or restore the schema through the normal database
 recovery process; never delete or edit `_sqlx_migrations` to force readiness.
 Both commands fail closed with category `postgres_version_unsupported` on a
-PostgreSQL major version outside 17; migration checks the server version before
-any DDL, and serving leaves readiness false.
+PostgreSQL major version outside 17 or 18; migration checks the server version before
+any DDL, and serving leaves readiness false. Schema-version 2 is unchanged by
+PostgreSQL 18 support: a PostgreSQL major is not a ferl schema version.
+
+PostgreSQL 18 changes that the verifier accounts for: `NOT NULL` constraints
+are also catalog rows (not counted as required named constraints; nullability
+is checked through `information_schema.columns`), and `pg_constraint.conenforced`
+is read only on servers 18 and newer. A required named constraint that is
+present but `NOT ENFORCED` is reported as `schema_constraint_missing`.
+
+## PostgreSQL major upgrades
+
+A ferl schema migration and a PostgreSQL major upgrade are different
+operations. `ferl-server migrate` changes ferl's schema objects and history
+inside an existing cluster. It does not convert a PostgreSQL 17 data directory
+to PostgreSQL 18, and an image or binary swap does not upgrade a cluster.
+
+Before moving a cluster to PostgreSQL 18, install a ferl binary that supports
+both majors, follow the operator's PostgreSQL major-upgrade procedure (see
+[PostgreSQL cluster upgrade documentation](https://www.postgresql.org/docs/18/upgrading.html)),
+then run `ferl-server migrate` and check readiness against the upgraded
+server. A 17-only ferl binary is not a rollback target once the database is
+on PostgreSQL 18. Verify backups with PostgreSQL 18 client tools
+(`pg_dump`/`pg_restore`) for a PostgreSQL 18 database.
 
 The configured connection URL determines `search_path`. SQLx's default
 `_sqlx_migrations` table, migration DDL, the serving pool, and the verifier all

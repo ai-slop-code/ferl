@@ -4,9 +4,11 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 METADATA=${1:?usage: check-image.sh <image-metadata.json>}
-METADATA=$(CDPATH= cd -- "$(dirname -- "$METADATA")" && pwd)/$(basename -- "$METADATA")
+METADATA=$(CDPATH= cd -- "$(dirname "$METADATA")" && pwd)/$(basename -- "$METADATA")
 OUT_DIR=$(dirname -- "$METADATA")
-PG_IMAGE=docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+. "$SCRIPT_DIR/postgres-fixtures.sh"
+PG_IMAGE=$FERL_PG_IMAGE
+SUMMARY="check-summary-postgresql-$FERL_TEST_POSTGRES_MAJOR.json"
 
 field() {
     python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$METADATA" "$1"
@@ -163,9 +165,10 @@ for _ in $(seq 1 90); do
     sleep 1
 done
 [ "$READY" = 1 ] || fail "PostgreSQL fixture did not become ready"
-[ "$(podman exec "$DB_NAME" psql -h 127.0.0.1 -U ferl -d ferl -X -tAc 'SHOW server_version_num' | cut -c1-2)" = "17" ] || fail "fixture is not PostgreSQL 17"
+[ "$(podman exec "$DB_NAME" psql -h 127.0.0.1 -U ferl -d ferl -X -tAc 'SHOW server_version_num' | cut -c1-2)" = "$FERL_TEST_POSTGRES_MAJOR" ] || fail "fixture is not PostgreSQL $FERL_TEST_POSTGRES_MAJOR"
 [ "$(podman exec "$DB_NAME" psql -h 127.0.0.1 -U ferl -d ferl -X -tAc 'SHOW ssl')" = "on" ] || fail "fixture TLS is off"
-pass "postgresql-17-tls-fixture"
+DB_SERVER_VERSION=$(podman exec "$DB_NAME" psql -h 127.0.0.1 -U ferl -d ferl -X -tAc 'SHOW server_version')
+pass "postgresql-$FERL_TEST_POSTGRES_MAJOR-tls-fixture"
 
 CURSOR_KEY=$(python3 -c 'import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode())')
 write_env() {
@@ -291,12 +294,12 @@ pass "restart-persistence-without-reseed"
 podman stop --time 60 "$APP_RESTART" >/dev/null
 podman rm -f "$APP" "$APP_RESTART" >/dev/null 2>&1 || true
 
-python3 - "$METADATA" "$OUT_DIR/check-summary.json" "$CHECKS" <<'PY'
+python3 - "$METADATA" "$OUT_DIR/$SUMMARY" "$CHECKS" "$FERL_TEST_POSTGRES_MAJOR" "$DB_SERVER_VERSION" "$PG_IMAGE" <<'PY'
 import json
 from pathlib import Path
 import sys
 
-metadata_path, summary_path, checks = sys.argv[1:]
+metadata_path, summary_path, checks, major, server_version, pg_image = sys.argv[1:]
 metadata = json.loads(Path(metadata_path).read_text())
 summary = {
     "result": "passed",
@@ -305,8 +308,11 @@ summary = {
     "source_revision": metadata["source_revision"],
     "version": metadata["version"],
     "platform": metadata["platform"],
+    "postgresql_major": int(major),
+    "postgresql_server_version": server_version,
+    "postgresql_image": pg_image,
     "checks": checks.split(),
 }
 Path(summary_path).write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 PY
-echo "candidate image acceptance passed: $OUT_DIR/check-summary.json"
+echo "candidate image acceptance passed for PostgreSQL $FERL_TEST_POSTGRES_MAJOR: $OUT_DIR/$SUMMARY"

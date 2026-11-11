@@ -38,7 +38,7 @@ Activate in this order, and do not skip steps:
 4. Record the run URLs, the source revision, and the candidate artifact name.
    Only a fully successful run counts as acceptance.
 5. Only after step 4 is accepted and the README has been validated against a
-   fresh external PostgreSQL 17 database, set `FERL_RELEASE_ENABLED=true`.
+   fresh external PostgreSQL 17 or 18 database, set `FERL_RELEASE_ENABLED=true`.
 6. Push the first version tag (see [Release](#release)).
 
 ## Events and permissions

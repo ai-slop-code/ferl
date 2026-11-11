@@ -15,7 +15,9 @@ pub const IMAGE: &str = "docker.io/library/rust@sha256:32f7944ed00949c44d3944a0a
 #[cfg(target_arch = "x86_64")]
 pub const IMAGE: &str = "docker.io/library/rust@sha256:8bf7188ae46ad73b801c8d405eedc13ce63a7852b562885743a56890723549a8";
 pub const NGINX_IMAGE: &str = "docker.io/library/nginx:1.30.6-alpine@sha256:47928bf67eb62a1863cb08d9ecb52d3e704304ba614eaee17884204677702951";
-pub const POSTGRES_CONTAINER: &str = "ferl-stage01-postgres";
+pub fn postgres_container() -> &'static str {
+    super::database_support::selected_container_name()
+}
 
 pub struct ContainerServer {
     pub name: String,
@@ -175,7 +177,7 @@ pub async fn create_network(run_id: &str) -> String {
             "--alias",
             "ferl-postgres",
             &network,
-            POSTGRES_CONTAINER,
+            postgres_container(),
         ],
         Duration::from_secs(30),
     )
@@ -208,7 +210,7 @@ pub async fn remove_network(network: &str) -> Output {
     );
     let disconnected = command_output(
         "podman",
-        &["network", "disconnect", network, POSTGRES_CONTAINER],
+        &["network", "disconnect", network, postgres_container()],
         Duration::from_secs(20),
     )
     .await;

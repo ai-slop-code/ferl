@@ -19,7 +19,8 @@ use crate::{app::ReadinessState, config::MigrationConfig};
 pub const MIGRATION_LOCK_KEY: i64 = 0x4645_524c_4d49_4752;
 pub const LATEST_SCHEMA_VERSION: i64 = 2;
 pub const MINIMUM_SUPPORTED_SCHEMA_VERSION: i64 = 1;
-pub const SUPPORTED_POSTGRES_MAJOR: i32 = 17;
+pub const MINIMUM_SUPPORTED_POSTGRES_MAJOR: i32 = 17;
+pub const MAXIMUM_SUPPORTED_POSTGRES_MAJOR: i32 = 18;
 const EMBEDDED_MIGRATOR: Migrator = sqlx::migrate!();
 
 /// Process-local readiness state. Compatibility itself is always established by
@@ -267,10 +268,11 @@ async fn ensure_supported_postgres_version(
     }
 }
 
-/// PostgreSQL 17 minor releases share one supported schema compatibility line.
+/// PostgreSQL 17 and 18 minor releases share the ferl schema compatibility line.
+/// Future majors are rejected until they are explicitly admitted here.
 pub const fn is_supported_postgres_version_num(version: i32) -> bool {
-    version >= SUPPORTED_POSTGRES_MAJOR * 10_000
-        && version < (SUPPORTED_POSTGRES_MAJOR + 1) * 10_000
+    version >= MINIMUM_SUPPORTED_POSTGRES_MAJOR * 10_000
+        && version < (MAXIMUM_SUPPORTED_POSTGRES_MAJOR + 1) * 10_000
 }
 
 fn map_migrator_error(error: sqlx::migrate::MigrateError) -> MigrationFailure {
@@ -617,6 +619,27 @@ async fn verify_connection(connection: &mut PgConnection) -> Result<(), Verifica
             SchemaIssue::MissingConstraint,
         ));
     }
+    if server_version >= 180_000 {
+        // `conenforced` exists only in PostgreSQL 18+; this query is selected after
+        // the version gate so PostgreSQL 17 never parses it.
+        let unenforced_constraints = sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM pg_catalog.pg_constraint c \
+             JOIN pg_catalog.pg_class r ON r.oid = c.conrelid \
+             JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace \
+             WHERE n.nspname = $1 AND (r.relname || ':' || c.conname) = ANY($2) \
+               AND NOT c.conenforced",
+        )
+        .bind(&schema_name)
+        .bind(constraint_names.as_slice())
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(classify_verification_query)?;
+        if unenforced_constraints != 0 {
+            return Err(VerificationError::Incompatible(
+                SchemaIssue::MissingConstraint,
+            ));
+        }
+    }
 
     let index_pairs = [
         ("accounts", "accounts_api_key_digest_unique"),
@@ -848,11 +871,20 @@ mod tests {
     use super::{SchemaReadiness, is_supported_postgres_version_num};
 
     #[test]
-    fn only_postgres_17_minor_releases_are_supported() {
+    fn only_postgres_17_and_18_minor_releases_are_supported() {
         assert!(is_supported_postgres_version_num(170000));
         assert!(is_supported_postgres_version_num(170006));
+        assert!(is_supported_postgres_version_num(179999));
+        assert!(is_supported_postgres_version_num(180000));
+        assert!(is_supported_postgres_version_num(180004));
+        assert!(is_supported_postgres_version_num(189999));
         assert!(!is_supported_postgres_version_num(169999));
-        assert!(!is_supported_postgres_version_num(180000));
+        assert!(!is_supported_postgres_version_num(190000));
+        assert!(!is_supported_postgres_version_num(190001));
+        assert!(!is_supported_postgres_version_num(0));
+        assert!(!is_supported_postgres_version_num(-1));
+        assert!(!is_supported_postgres_version_num(i32::MIN));
+        assert!(!is_supported_postgres_version_num(i32::MAX));
     }
 
     #[test]

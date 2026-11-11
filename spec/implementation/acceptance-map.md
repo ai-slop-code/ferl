@@ -199,6 +199,19 @@ passes; local Git integration status is tracked in `progress.md`. Parts 01–11
 and the recorded maintenance milestones remain historically complete; this
 addendum corrects evidence scope and does not reopen feature implementation.
 
+## Part 15 PostgreSQL 18 compatibility — 2026-11-11
+
+Part 15 adds no new business scenario and changes no business or OpenAPI behavior.
+It shows that the existing scenarios run on PostgreSQL 17.x and 18.x. The
+evidence per major is recorded in the [Part 15 handoff](progress.md#part-15--postgresql-18-support).
+
+- **5, 34, 36, 20:** `tests/migrations.rs::{migration_cli_migrates_fresh_isolated_schema_and_is_idempotent,concurrent_migration_processes_create_one_consistent_history,populated_authentic_v1_upgrade_preserves_authoritative_rows_and_digests}` and the new `schema_verifier_rejects_required_check_constraints_that_are_not_enforced` pass on 18 and 17. `tests/legacy_compatibility.rs::retained_part07_binary_compatibility_is_exact_for_the_selected_postgres_major` runs the 17 upgrade path and the 18 fail-closed path with the unmodified Part 07 binary.
+- **1, 14, 15, 27, 31:** the full gate `check.sh` on each major passed, including the process, readiness, outage, and recovery suites on the selected fixture.
+- **29–31, 51:** `scripts/check-tls.sh` and `scripts/check-release.sh` passed on each major. The packaged TLS PostgreSQL server's major is asserted equal to the selection.
+- **19, 37–40, 51:** `scripts/check-proxy.sh` and `scripts/check-openapi.sh` pass on each major.
+- **Plan/report coverage (47, 49, 23):** `links::list_repository` and `analytics::reports` plan tests pass on both majors, with exact numeric row observations.
+- **Not executed:** candidate-image acceptance (`scripts/check-image.sh`) on linux/amd64 for either major. This is a stated local platform limitation.
+
 ## Additional derived checks
 
 ### Part 05 cross-scenario contributions

@@ -516,38 +516,26 @@ mod tests {
                     .and_then(serde_json::Value::as_str)
                     .map(|name| format!("[{name}]"))
                     .unwrap_or_default();
-                let actual = node
-                    .get("Actual Rows")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or_default();
-                let planned = node
-                    .get("Plan Rows")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or_default();
-                let loops = node
-                    .get("Actual Loops")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or_default();
-                let hits = node
-                    .get("Shared Hit Blocks")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or_default();
-                let reads = node
-                    .get("Shared Read Blocks")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or_default();
+                let actual = observed_number(node, "Actual Rows");
+                let planned = observed_number(node, "Plan Rows");
+                let loops = observed_number(node, "Actual Loops");
+                let hits = observed_number(node, "Shared Hit Blocks");
+                let reads = observed_number(node, "Shared Read Blocks");
                 let sort = node
                     .get("Sort Method")
                     .and_then(serde_json::Value::as_str)
                     .map(|method| format!(" sort={method}"))
                     .unwrap_or_default();
-                let removed = node
-                    .get("Rows Removed by Filter")
-                    .and_then(serde_json::Value::as_i64)
+                let removed = observed_number(node, "Rows Removed by Filter")
                     .map(|count| format!(" removed={count}"))
                     .unwrap_or_default();
                 output.push(format!(
-                    "{kind}{index} rows={actual}/{planned} loops={loops} hit={hits} read={reads}{sort}{removed}"
+                    "{kind}{index} rows={}/{} loops={} hit={} read={}{sort}{removed}",
+                    actual.as_deref().unwrap_or("-"),
+                    planned.as_deref().unwrap_or("-"),
+                    loops.as_deref().unwrap_or("-"),
+                    hits.as_deref().unwrap_or("-"),
+                    reads.as_deref().unwrap_or("-"),
                 ));
             }
             if let Some(children) = node.get("Plans").and_then(serde_json::Value::as_array) {
@@ -565,10 +553,22 @@ mod tests {
             .and_then(|plans| plans.first())
             .and_then(|root| root.get("Execution Time"))
             .and_then(serde_json::Value::as_f64)
-            .unwrap_or_default();
+            .expect("EXPLAIN reports a numeric execution time");
         eprintln!(
             "DISCOVERY_EXPLAIN {label}: execution_ms={execution_ms:.3} {}",
             summary.join(" -> ")
         );
+    }
+
+    /// PostgreSQL 18 emits integral EXPLAIN observations as JSON floats (for
+    /// example `51.0`), and fractional averages remain fractional. Read every
+    /// numeric observation without truncating it to zero; a non-numeric value
+    /// is a failed observation rather than an empty one.
+    fn observed_number(node: &serde_json::Value, key: &str) -> Option<String> {
+        let value = node.get(key)?;
+        let number = value
+            .as_f64()
+            .unwrap_or_else(|| panic!("EXPLAIN field {key} is not numeric: {value}"));
+        Some(number.to_string())
     }
 }

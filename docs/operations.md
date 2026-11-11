@@ -73,7 +73,8 @@ Run the mandatory PostgreSQL + Collector + production-process verification with:
 sh scripts/check.sh
 ```
 
-The gate starts the existing locked PostgreSQL 17.6 fixture and a fresh Collector,
+The gate starts the existing locked PostgreSQL fixture selected by
+`FERL_TEST_POSTGRES_MAJOR` (17.6 by default; 18.6 with `18`) and a fresh Collector,
 waits for useful readiness, exports `FERL_TEST_OTEL_ENDPOINT` and the isolated
 capture path, runs all Rust gates including `tests/telemetry_signals.rs`, and
 removes only its own labeled Collector container on exit. It leaves the fresh,
@@ -85,7 +86,7 @@ router as export evidence.
 
 Run `sh scripts/check-tls.sh` from a clean committed checkout to exercise TLS
 with the packaged production executable. It creates a unique disposable Podman
-network, PostgreSQL 17.6 and Collector containers, short-lived root/intermediate/
+network, the selected PostgreSQL 17.6 or 18.6 and Collector containers, short-lived root/intermediate/
 server certificates, and a private run directory under ignored `target/`. The
 PostgreSQL URL uses SQLx `sslmode=verify-full` plus an explicit fixture CA; the
 test rejects an untrusted CA and a hostname mismatch. The TLS-enabled Collector
