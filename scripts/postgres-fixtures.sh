@@ -4,7 +4,7 @@
 # Each major owns a separate container, volume, mount, ownership label, image
 # pin, and loopback port, so switching selections never repurposes the other.
 
-FERL_TEST_POSTGRES_MAJOR=${FERL_TEST_POSTGRES_MAJOR:-17}
+FERL_TEST_POSTGRES_MAJOR=${FERL_TEST_POSTGRES_MAJOR-17}
 case "$FERL_TEST_POSTGRES_MAJOR" in
     17)
         FERL_PG_NAME=ferl-stage01-postgres
